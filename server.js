@@ -4,6 +4,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { Resend } = require('resend');
 const { scheduleAll, validateGameEdit, SEASON_WEEKS, dayName, teamName } = require('./lib/scheduler');
 
 const app = express();
@@ -20,6 +21,27 @@ const ADMIN_PASSWORD =  process.env.ADMIN_PASSWORD || 'changeme';
 const SESSION_SECRET =  process.env.SESSION_SECRET || 'eastlake-dev-secret';
 const SESSION_COOKIE = 'el_sess';
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days in seconds
+
+// ── Email config ──────────────────────────────────────────────────────────────
+const RESEND_API_KEY  = process.env.RESEND_API_KEY  || '';
+const EMAIL_FROM      = process.env.EMAIL_FROM      || 'schedule@tedriolo.com';
+const EMAIL_REPLY_TO  = process.env.EMAIL_REPLY_TO  || '';
+const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
+
+async function sendEmail({ to, subject, text }) {
+  if (!resend) return { ok: false, reason: 'No RESEND_API_KEY configured' };
+  const toArr = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean);
+  if (!toArr.length) return { ok: false, reason: 'No recipients' };
+  try {
+    const payload = { from: EMAIL_FROM, to: toArr, subject, text };
+    if (EMAIL_REPLY_TO) payload.reply_to = EMAIL_REPLY_TO;
+    await resend.emails.send(payload);
+    return { ok: true };
+  } catch (err) {
+    console.error('Email send error:', err.message);
+    return { ok: false, reason: err.message };
+  }
+}
 
 // ── Cookie & session helpers ──────────────────────────────────────────────────
 function getCookie(req, name) {
@@ -522,6 +544,37 @@ app.put('/api/game/:id', requireAdmin, (req, res) => {
   allChanges.push(changeRecord);
   try { fs.writeFileSync(CHANGES_FILE, JSON.stringify(allChanges, null, 2)); } catch {}
 
+  // Auto-email both coaches
+  if (changedFields.length) {
+    const emails = [changeRecord.home_team?.email, changeRecord.away_team?.email].filter(Boolean);
+    if (emails.length) {
+      const divName = changeRecord.division_name || changeRecord.division_id;
+      const subject = `Schedule Update: Game #${gameId} — ${divName}`;
+      const lines = [
+        `Hi coaches,`,
+        ``,
+        `A game has been updated by the league admin:`,
+        ``,
+        `Game #${gameId} — ${divName}`,
+        `${changeRecord.home_team?.name || 'Home'} (H) vs ${changeRecord.away_team?.name || 'Away'} (A)`,
+        ``,
+        `Changes made:`,
+        ...changedFields.map(f => `  ${f.field}: ${f.from} → ${f.to}`),
+        ``,
+        `Updated game details:`,
+        `  Date: ${updatedGame.day} ${updatedGame.date}`,
+        `  Time: ${updatedGame.time}`,
+        `  Field: ${updatedGame.field_name}`,
+        `  Address: ${updatedGame.field_address}`,
+        ``,
+        `Please update your calendars.`,
+        ``,
+        `— Eastlake League`,
+      ];
+      sendEmail({ to: emails, subject, text: lines.join('\n') }); // fire and forget
+    }
+  }
+
   res.json({ ok: true, game: updatedGame, violations, change: changeRecord });
 });
 
@@ -572,6 +625,31 @@ app.patch('/api/division/:id', requireAdmin, (req, res) => {
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(seasonData, null, 2)); }
   catch (err) { return res.status(500).json({ error: `Could not write season.json: ${err.message}` }); }
   res.json({ ok: true, division: div });
+});
+
+// ── Change request email (coach-initiated) ────────────────────────────────────
+
+app.post('/api/change-request', requireAuth, (req, res) => {
+  const s = getSession(req);
+  const { game_id, reason, details, preferred_date, preferred_time, preferred_field } = req.body;
+  if (!game_id || !reason) return res.status(400).json({ error: 'game_id and reason required' });
+
+  const subject = `Change Request: Game #${game_id} — from ${s.name}`;
+  const lines = [
+    `A coach has submitted a schedule change request.`,
+    ``,
+    `From: ${s.name} (${s.email})`,
+    `Game #: ${game_id}`,
+    `Reason: ${reason}`,
+  ];
+  if (details)          lines.push(`Details: ${details}`);
+  if (preferred_date)   lines.push(`Preferred date: ${preferred_date}`);
+  if (preferred_time)   lines.push(`Preferred time: ${preferred_time}`);
+  if (preferred_field)  lines.push(`Preferred field: ${preferred_field}`);
+  lines.push('', '— Eastlake Scheduler');
+
+  sendEmail({ to: EMAIL_REPLY_TO || ADMIN_EMAIL, subject, text: lines.join('\n') });
+  res.json({ ok: true });
 });
 
 // ── Field CRUD (admin) ────────────────────────────────────────────────────────
