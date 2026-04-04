@@ -3,6 +3,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { scheduleAll, validateGameEdit, SEASON_WEEKS, dayName, teamName } = require('./lib/scheduler');
 
 const app = express();
@@ -13,240 +14,410 @@ const SCHEDULE_FILE = path.join(__dirname, 'schedule.json');
 const SEASON_FILE   = path.join(__dirname, 'season.json');
 const CHANGES_FILE  = path.join(__dirname, 'changes.json');
 
-// Public viewer — no auth required
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'viewer.html'));
-});
+// ── Auth config (set via environment — never hardcode secrets here) ───────────
+const ADMIN_EMAIL    = (process.env.ADMIN_EMAIL    || '').toLowerCase().trim();
+const ADMIN_PASSWORD =  process.env.ADMIN_PASSWORD || 'changeme';
+const SESSION_SECRET =  process.env.SESSION_SECRET || 'eastlake-dev-secret';
+const SESSION_COOKIE = 'el_sess';
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days in seconds
 
-// Admin tool — auth required
-app.get('/admin', (req, res) => {
-  if (!isAuthed(req)) return res.redirect(BASE_PATH + '/login?next=admin');
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
-});
-app.get('/admin/', (req, res) => {
-  res.redirect((BASE_PATH || '') + '/admin');
-});
-
-app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.json());
-
-// ── Simple password auth ──────────────────────────────────────────────────────
-const APP_PASSWORD = process.env.APP_PASSWORD || 'eastlake2026';
-const AUTH_COOKIE  = 'el_auth';
-
+// ── Cookie & session helpers ──────────────────────────────────────────────────
 function getCookie(req, name) {
   return (req.headers.cookie || '').split(';')
     .map(c => c.trim()).find(c => c.startsWith(name + '='))
     ?.slice(name.length + 1) || null;
 }
 
-function isAuthed(req) {
-  return getCookie(req, AUTH_COOKIE) === APP_PASSWORD;
+function signSession(payload) {
+  const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
+  return data + '.' + sig;
 }
 
-app.get('/login', (req, res) => {
-  const error = req.url.includes('error=1');
-  res.setHeader('Content-Type', 'text/html');
-  res.send(`<!DOCTYPE html>
+function parseSession(token) {
+  if (!token) return null;
+  const dot = token.lastIndexOf('.');
+  if (dot < 0) return null;
+  const data = token.slice(0, dot);
+  const sig  = token.slice(dot + 1);
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
+  if (sig !== expected) return null;
+  try {
+    const p = JSON.parse(Buffer.from(data, 'base64url').toString());
+    if (p.exp < Date.now()) return null;
+    return p;
+  } catch { return null; }
+}
+
+function getSession(req) {
+  return parseSession(getCookie(req, SESSION_COOKIE));
+}
+
+function setSession(res, payload) {
+  const token = signSession({ ...payload, exp: Date.now() + SESSION_MAX_AGE * 1000 });
+  res.setHeader('Set-Cookie',
+    `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${SESSION_MAX_AGE}; SameSite=Lax`);
+}
+
+function clearSession(res) {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0`);
+}
+
+function requireAuth(req, res, next) {
+  if (getSession(req)) return next();
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not authenticated' });
+  res.redirect(BASE_PATH + '/login');
+}
+
+function requireAdmin(req, res, next) {
+  const s = getSession(req);
+  if (s?.role === 'admin') return next();
+  if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Admin access required' });
+  res.redirect(BASE_PATH + '/login');
+}
+
+// Look up a coach or director by email in season.json
+function findByEmail(email) {
+  try {
+    const data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
+    const team = (data.teams || []).find(t => (t.email || '').toLowerCase().trim() === email);
+    if (team) return { role: 'coach', name: team.coach || team.label || 'Coach', team_id: team.id, phone: team.phone || '' };
+    const dir = (data.directors || []).find(d => (d.email || '').toLowerCase().trim() === email);
+    if (dir) return { role: 'coach', name: dir.name || 'Director', phone: dir.phone || '' };
+  } catch {}
+  return null;
+}
+
+// ── Login page HTML ───────────────────────────────────────────────────────────
+function loginPage(next) {
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Eastlake Scheduler — Login</title>
+  <title>Sign In — Eastlake League Scheduler</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #f4f6f8; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-    .card { background: #fff; border-radius: 12px; padding: 40px 36px; width: 340px; box-shadow: 0 4px 24px rgba(0,0,0,.10); }
-    h1 { font-size: 1.1rem; font-weight: 700; color: #1a1a2e; margin-bottom: 6px; }
-    p  { font-size: 13px; color: #64748b; margin-bottom: 24px; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f0f4f8; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+    .brand { font-size: 13px; color: #94a3b8; margin-bottom: 20px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+    .card { background: #fff; border-radius: 16px; padding: 36px 32px; width: 100%; max-width: 380px; box-shadow: 0 4px 28px rgba(0,0,0,.10); }
+    h1 { font-size: 1.2rem; font-weight: 700; color: #1a1a2e; margin-bottom: 6px; }
+    .sub { font-size: 13px; color: #64748b; margin-bottom: 26px; line-height: 1.5; }
     label { display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 6px; }
-    input { width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; margin-bottom: 16px; }
-    button { width: 100%; padding: 10px; background: #2d6cf0; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; }
-    .err { color: #dc2626; font-size: 13px; margin-bottom: 14px; }
+    input { width: 100%; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 16px; margin-bottom: 14px; transition: border-color .15s; }
+    input:focus { outline: none; border-color: #2d6cf0; box-shadow: 0 0 0 3px rgba(45,108,240,.12); }
+    .btn { width: 100%; padding: 13px; background: #2d6cf0; color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background .15s; }
+    .btn:hover:not(:disabled) { background: #1d5ce0; }
+    .btn:disabled { background: #94a3b8; cursor: default; }
+    .error { color: #dc2626; font-size: 13px; margin-bottom: 14px; display: none; padding: 10px 12px; background: #fef2f2; border-radius: 6px; border: 1px solid #fecaca; }
+    .error.show { display: block; }
+    .pw-section { display: none; }
+    .pw-section.show { display: block; }
+    .back-btn { background: none; border: none; color: #64748b; font-size: 13px; cursor: pointer; padding: 0; margin-bottom: 18px; display: inline-flex; align-items: center; gap: 4px; }
+    .back-btn:hover { color: #1a1a2e; }
+    .email-chip { font-size: 14px; color: #1a1a2e; font-weight: 500; background: #f1f5f9; border-radius: 8px; padding: 10px 14px; margin-bottom: 20px; word-break: break-all; }
   </style>
 </head>
 <body>
+  <div class="brand">Eastlake League Scheduler</div>
   <div class="card">
-    <h1>Eastlake League Scheduler</h1>
-    <p>Enter the password to continue.</p>
-    ${error ? '<p class="err">Incorrect password. Try again.</p>' : ''}
-    <form method="POST" action="${BASE_PATH}/login${req.query.next ? '?next=' + req.query.next : ''}">
-      <label for="pw">Password</label>
-      <input id="pw" name="password" type="password" autofocus autocomplete="current-password">
-      <button type="submit">Sign In</button>
-    </form>
+    <h1 id="card-title">Welcome back</h1>
+    <p class="sub" id="card-sub">Enter your email address to access the schedule.</p>
+    <div id="error" class="error"></div>
+
+    <div id="email-section">
+      <label for="email-input">Email address</label>
+      <input type="email" id="email-input" autocomplete="email" autofocus placeholder="yourname@example.com">
+      <button class="btn" id="continue-btn">Continue</button>
+    </div>
+
+    <div id="pw-section" class="pw-section">
+      <button class="back-btn" id="back-btn">← Change email</button>
+      <div class="email-chip" id="email-chip"></div>
+      <label for="pw-input">Password</label>
+      <input type="password" id="pw-input" autocomplete="current-password" placeholder="Enter your password">
+      <button class="btn" id="signin-btn">Sign In</button>
+    </div>
   </div>
+
+  <script>
+    const BASE = ${JSON.stringify(BASE_PATH)};
+    const NEXT = ${JSON.stringify(next || '')};
+
+    const emailInput   = document.getElementById('email-input');
+    const pwInput      = document.getElementById('pw-input');
+    const emailSection = document.getElementById('email-section');
+    const pwSection    = document.getElementById('pw-section');
+    const continueBtn  = document.getElementById('continue-btn');
+    const signinBtn    = document.getElementById('signin-btn');
+    const errorEl      = document.getElementById('error');
+
+    function showError(msg) { errorEl.textContent = msg; errorEl.classList.add('show'); }
+    function clearError()   { errorEl.classList.remove('show'); }
+
+    async function checkEmail() {
+      const email = emailInput.value.trim();
+      if (!email) { showError('Please enter your email address.'); return; }
+      clearError();
+      continueBtn.disabled = true;
+      continueBtn.textContent = 'Checking…';
+      try {
+        const res  = await fetch(BASE + '/api/auth/check-email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+        const data = await res.json();
+        if (!data.found) {
+          showError('Email not recognized. Please check and try again.');
+          continueBtn.disabled = false;
+          continueBtn.textContent = 'Continue';
+          return;
+        }
+        if (data.isAdmin) {
+          document.getElementById('email-chip').textContent = email;
+          emailSection.style.display = 'none';
+          pwSection.classList.add('show');
+          document.getElementById('card-title').textContent = 'Admin sign in';
+          document.getElementById('card-sub').textContent = 'Enter your password to continue.';
+          pwInput.focus();
+        } else {
+          continueBtn.textContent = 'Signing in…';
+          const lr   = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+          const ld   = await lr.json();
+          if (ld.ok) { window.location = ld.redirect || BASE + '/'; }
+          else { showError(ld.error || 'Login failed. Try again.'); continueBtn.disabled = false; continueBtn.textContent = 'Continue'; }
+        }
+      } catch { showError('Something went wrong. Please try again.'); continueBtn.disabled = false; continueBtn.textContent = 'Continue'; }
+    }
+
+    async function signIn() {
+      const email = emailInput.value.trim();
+      const pw    = pwInput.value;
+      if (!pw) { showError('Please enter your password.'); return; }
+      clearError();
+      signinBtn.disabled = true;
+      signinBtn.textContent = 'Signing in…';
+      try {
+        const res  = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pw, next: NEXT }) });
+        const data = await res.json();
+        if (data.ok) { window.location = data.redirect || BASE + '/'; }
+        else { showError(data.error || 'Incorrect password.'); signinBtn.disabled = false; signinBtn.textContent = 'Sign In'; pwInput.focus(); pwInput.select(); }
+      } catch { showError('Something went wrong. Please try again.'); signinBtn.disabled = false; signinBtn.textContent = 'Sign In'; }
+    }
+
+    continueBtn.addEventListener('click', checkEmail);
+    emailInput.addEventListener('keydown', e => { if (e.key === 'Enter') checkEmail(); });
+    signinBtn.addEventListener('click', signIn);
+    pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') signIn(); });
+    document.getElementById('back-btn').addEventListener('click', () => {
+      pwSection.classList.remove('show');
+      emailSection.style.display = '';
+      document.getElementById('card-title').textContent = 'Welcome back';
+      document.getElementById('card-sub').textContent = 'Enter your email address to access the schedule.';
+      clearError();
+      pwInput.value = '';
+      continueBtn.disabled = false;
+      continueBtn.textContent = 'Continue';
+      emailInput.focus();
+    });
+  </script>
 </body>
-</html>`);
+</html>`;
+}
+
+// ── Page routes ───────────────────────────────────────────────────────────────
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'viewer.html')));
+
+app.get('/admin', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+app.get('/admin/', (req, res) => res.redirect((BASE_PATH || '') + '/admin'));
+
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
+
+app.get('/login', (req, res) => {
+  res.setHeader('Content-Type', 'text/html');
+  res.send(loginPage(req.query.next || ''));
 });
 
-app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
-  if (req.body.password === APP_PASSWORD) {
-    const maxAge = 7 * 24 * 60 * 60; // 7 days in seconds
-    res.setHeader('Set-Cookie', `${AUTH_COOKIE}=${APP_PASSWORD}; HttpOnly; Path=/; Max-Age=${maxAge}`);
-    const next = req.query.next === 'admin' ? '/admin' : '/';
-    return res.redirect(BASE_PATH + next);
+app.get('/logout', (req, res) => {
+  clearSession(res);
+  res.redirect(BASE_PATH + '/');
+});
+
+// ── Auth API (all public — return limited info) ───────────────────────────────
+
+// Step 1: check if email is in the system
+app.post('/api/auth/check-email', (req, res) => {
+  const email = (req.body.email || '').toLowerCase().trim();
+  if (!email) return res.status(400).json({ error: 'Email required' });
+  if (ADMIN_EMAIL && email === ADMIN_EMAIL) return res.json({ found: true, isAdmin: true });
+  const match = findByEmail(email);
+  if (match) return res.json({ found: true, isAdmin: false });
+  res.json({ found: false });
+});
+
+// Step 2: log in (admin needs password, coaches just need email)
+app.post('/api/auth/login', (req, res) => {
+  const email    = (req.body.email    || '').toLowerCase().trim();
+  const password =  req.body.password || '';
+  const next     =  req.body.next     || req.query.next || '';
+  if (!email) return res.status(400).json({ error: 'Email required' });
+
+  if (ADMIN_EMAIL && email === ADMIN_EMAIL) {
+    if (password !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Incorrect password' });
+    setSession(res, { email, role: 'admin', name: 'Admin' });
+    return res.json({ ok: true, redirect: BASE_PATH + (next === 'admin' ? '/admin' : '/') });
   }
-  res.redirect(BASE_PATH + '/login?error=1');
+
+  const match = findByEmail(email);
+  if (!match) return res.status(401).json({ error: 'Email not recognized' });
+  setSession(res, { email, role: match.role, name: match.name, phone: match.phone || '', team_id: match.team_id || null });
+  return res.json({ ok: true, redirect: BASE_PATH + '/' });
 });
 
-// GET /api/public/schedule — no auth, same data as /api/schedule
+// Return current session info (null if not logged in)
+app.get('/api/auth/me', (req, res) => {
+  const s = getSession(req);
+  if (!s) return res.json(null);
+  res.json({
+    email:      s.email,
+    name:       s.name,
+    role:       s.role,
+    phone:      s.phone || '',
+    team_id:    s.team_id || null,
+    request_to: ADMIN_EMAIL,  // only exposed to authenticated users
+  });
+});
+
+// ── Public data APIs ──────────────────────────────────────────────────────────
+
 app.get('/api/public/schedule', (req, res) => {
-  if (!fs.existsSync(SCHEDULE_FILE)) {
-    return res.json({ games: [], failures: [], generated_at: null, total_games: 0 });
-  }
-  try {
-    res.json(JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  if (!fs.existsSync(SCHEDULE_FILE)) return res.json({ games: [], failures: [], generated_at: null, total_games: 0 });
+  try { res.json(JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8'))); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/public/season — no auth, strips coach/phone/email from teams
+// Strip all contact info for public viewers
 app.get('/api/public/season', (req, res) => {
   try {
     const data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
-    const stripped = {
+    res.json({
       ...data,
-      teams: (data.teams || []).map(t => {
-        const { coach, phone, email, ...rest } = t;
-        return rest;
-      }),
-    };
-    res.json(stripped);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+      directors: undefined,
+      teams: (data.teams || []).map(({ coach, phone, email, ...rest }) => rest),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Auth guard — protects all routes except /login and /api/public/
-app.use((req, res, next) => {
-  if (req.path === '/login') return next();
-  if (req.path.startsWith('/api/public/')) return next();
-  if (isAuthed(req)) return next();
-  res.redirect(BASE_PATH + '/login');
+// ── Authenticated data APIs (coaches + admin) ─────────────────────────────────
+
+app.get('/api/schedule', requireAuth, (req, res) => {
+  if (!fs.existsSync(SCHEDULE_FILE)) return res.json({ games: [], failures: [], generated_at: null, total_games: 0 });
+  try { res.json(JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8'))); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/run — run the scheduler and save results
-app.post('/api/run', (req, res) => {
-  let seasonData;
-  try {
-    seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not read season.json: ${err.message}` });
-  }
+app.get('/api/season', requireAuth, (req, res) => {
+  try { res.json(JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'))); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
 
-  let result;
-  try {
-    result = scheduleAll(seasonData);
-  } catch (err) {
-    return res.status(500).json({ error: `Scheduler error: ${err.message}` });
-  }
-
-  // Strip internal tracking fields before saving
-  for (const g of result.games) delete g._fieldKey;
-
-  // Always save even if partial (so we can show what worked)
-  try {
-    fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(result, null, 2));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` });
-  }
-
+app.get('/api/season/slots', requireAuth, (req, res) => {
+  const result = SEASON_WEEKS.map(wk => {
+    const dates = [];
+    for (const d of wk.weekdays) dates.push({ date: d, type: 'weekday', day: dayName(d) });
+    if (wk.saturday) dates.push({ date: wk.saturday, type: 'saturday', day: 'Saturday' });
+    return { week: wk.week, dates };
+  });
   res.json(result);
 });
 
-// GET /api/schedule — return current schedule.json
-app.get('/api/schedule', (req, res) => {
-  if (!fs.existsSync(SCHEDULE_FILE)) {
-    return res.json({ games: [], failures: [], generated_at: null, total_games: 0 });
+app.get('/api/export/csv', requireAuth, (req, res) => {
+  if (!fs.existsSync(SCHEDULE_FILE)) return res.status(404).json({ error: 'No schedule generated yet' });
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` }); }
+
+  const seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
+  const divisionMap = {};
+  for (const d of (seasonData.divisions || [])) divisionMap[d.id] = d.name;
+
+  const rows = [['Game #', 'Division', 'Week', 'Date', 'Day', 'Time', 'Home Team', 'Away Team', 'Field', 'Address', 'Rematch']];
+  const sorted = [...(data.games || [])].sort((a, b) => a.date.localeCompare(b.date) || a.division_id.localeCompare(b.division_id));
+  for (const g of sorted) {
+    rows.push([g.game_id, divisionMap[g.division_id] || g.division_id, g.week, g.date, g.day, g.time,
+      g.home_team_name, g.away_team_name, g.field_name, g.field_address, g.is_rematch ? 'Yes' : 'No']);
   }
-  try {
-    const data = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8'));
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: `Could not read schedule.json: ${err.message}` });
-  }
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="schedule.csv"');
+  res.send(csv);
 });
 
-// GET /api/season — return season data (teams, divisions, etc.)
-app.get('/api/season', (req, res) => {
-  try {
-    const data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: `Could not read season.json: ${err.message}` });
-  }
-});
+// ── Admin-only APIs ───────────────────────────────────────────────────────────
 
-// GET /api/season/download — download the raw season.json file
-app.get('/api/season/download', (req, res) => {
-  if (!fs.existsSync(SEASON_FILE)) {
-    return res.status(404).json({ error: 'season.json not found' });
-  }
+app.get('/api/season/download', requireAdmin, (req, res) => {
+  if (!fs.existsSync(SEASON_FILE)) return res.status(404).json({ error: 'season.json not found' });
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Content-Disposition', 'attachment; filename="season.json"');
   res.sendFile(SEASON_FILE);
 });
 
-// POST /api/upload-season — validate and replace season.json
-app.post('/api/upload-season', (req, res) => {
+app.get('/api/changes', requireAdmin, (req, res) => {
+  if (!fs.existsSync(CHANGES_FILE)) return res.json([]);
+  try { res.json(JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8'))); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/changes', requireAdmin, (req, res) => {
+  try { fs.writeFileSync(CHANGES_FILE, '[]'); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/run', requireAdmin, (req, res) => {
+  let seasonData;
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
+
+  let result;
+  try { result = scheduleAll(seasonData); }
+  catch (err) { return res.status(500).json({ error: `Scheduler error: ${err.message}` }); }
+
+  for (const g of result.games) delete g._fieldKey;
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(result, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
+  res.json(result);
+});
+
+app.post('/api/upload-season', requireAdmin, (req, res) => {
   const data = req.body;
-
-  // Basic structure validation
   const missing = ['season', 'clubs', 'divisions', 'fields', 'teams'].filter(k => !data[k]);
-  if (missing.length) {
-    return res.status(400).json({ error: `Missing required keys: ${missing.join(', ')}` });
-  }
-  if (!Array.isArray(data.divisions) || data.divisions.length === 0) {
-    return res.status(400).json({ error: 'divisions must be a non-empty array' });
-  }
-  if (!Array.isArray(data.teams) || data.teams.length === 0) {
-    return res.status(400).json({ error: 'teams must be a non-empty array' });
-  }
+  if (missing.length) return res.status(400).json({ error: `Missing required keys: ${missing.join(', ')}` });
+  if (!Array.isArray(data.divisions) || data.divisions.length === 0) return res.status(400).json({ error: 'divisions must be a non-empty array' });
+  if (!Array.isArray(data.teams) || data.teams.length === 0) return res.status(400).json({ error: 'teams must be a non-empty array' });
 
-  // Check every team references a valid division
   const divisionIds = new Set(data.divisions.map(d => d.id));
   const badTeams = data.teams.filter(t => t.division_id && !divisionIds.has(t.division_id));
-  if (badTeams.length) {
-    return res.status(400).json({
-      error: `${badTeams.length} team(s) reference unknown division IDs: ` +
-        [...new Set(badTeams.map(t => t.division_id))].join(', '),
-    });
-  }
+  if (badTeams.length) return res.status(400).json({
+    error: `${badTeams.length} team(s) reference unknown division IDs: ` + [...new Set(badTeams.map(t => t.division_id))].join(', '),
+  });
 
-  // Back up the current file before overwriting
   if (fs.existsSync(SEASON_FILE)) {
     const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
     fs.copyFileSync(SEASON_FILE, backup);
   }
-
-  // Delete any existing generated schedule (it's stale now)
   if (fs.existsSync(SCHEDULE_FILE)) fs.unlinkSync(SCHEDULE_FILE);
 
-  try {
-    fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not save season.json: ${err.message}` });
-  }
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not save season.json: ${err.message}` }); }
 
-  // Return a summary
   const confirmedTeams = data.teams.filter(t => t.confirmed !== false);
   const perDivision = {};
-  confirmedTeams.forEach(t => {
-    perDivision[t.division_id] = (perDivision[t.division_id] || 0) + 1;
-  });
+  confirmedTeams.forEach(t => { perDivision[t.division_id] = (perDivision[t.division_id] || 0) + 1; });
 
   res.json({
     ok: true,
     summary: {
       divisions: data.divisions.length,
       teams: confirmedTeams.length,
-      per_division: data.divisions.map(d => ({
-        id: d.id,
-        name: d.name,
-        teams: perDivision[d.id] || 0,
-      })),
+      per_division: data.divisions.map(d => ({ id: d.id, name: d.name, teams: perDivision[d.id] || 0 })),
       season_start: data.season?.start,
       season_end: data.season?.end,
       target_games: data.season?.target_games,
@@ -254,94 +425,22 @@ app.post('/api/upload-season', (req, res) => {
   });
 });
 
-// GET /api/export/csv — export schedule as CSV
-app.get('/api/export/csv', (req, res) => {
-  if (!fs.existsSync(SCHEDULE_FILE)) {
-    return res.status(404).json({ error: 'No schedule generated yet' });
-  }
-
-  let data;
-  try {
-    data = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8'));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` });
-  }
-
-  const seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
-  const divisionMap = {};
-  for (const d of (seasonData.divisions || [])) divisionMap[d.id] = d.name;
-
-  const rows = [['Game #', 'Division', 'Week', 'Date', 'Day', 'Time', 'Home Team', 'Away Team', 'Field', 'Address', 'Rematch']];
-
-  const sorted = [...(data.games || [])].sort((a, b) =>
-    a.date.localeCompare(b.date) || a.division_id.localeCompare(b.division_id)
-  );
-
-  for (const g of sorted) {
-    rows.push([
-      g.game_id,
-      divisionMap[g.division_id] || g.division_id,
-      g.week,
-      g.date,
-      g.day,
-      g.time,
-      g.home_team_name,
-      g.away_team_name,
-      g.field_name,
-      g.field_address,
-      g.is_rematch ? 'Yes' : 'No',
-    ]);
-  }
-
-  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', 'attachment; filename="schedule.csv"');
-  res.send(csv);
-});
-
-// GET /api/season/slots — return SEASON_WEEKS as enriched date list
-app.get('/api/season/slots', (req, res) => {
-  const result = SEASON_WEEKS.map(wk => {
-    const dates = [];
-    for (const d of wk.weekdays) {
-      dates.push({ date: d, type: 'weekday', day: dayName(d) });
-    }
-    if (wk.saturday) {
-      dates.push({ date: wk.saturday, type: 'saturday', day: 'Saturday' });
-    }
-    return { week: wk.week, dates };
-  });
-  res.json(result);
-});
-
-// PUT /api/game/:id — edit a game
-app.put('/api/game/:id', (req, res) => {
+app.put('/api/game/:id', requireAdmin, (req, res) => {
   const gameId = parseInt(req.params.id, 10);
   const { date, time, field_id, home_team_id, away_team_id, force } = req.body;
 
   let schedData;
-  try {
-    schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8'));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` });
-  }
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` }); }
 
   let seasonData;
-  try {
-    seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not read season.json: ${err.message}` });
-  }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
 
   const gameIdx = schedData.games.findIndex(g => g.game_id === gameId);
-  if (gameIdx === -1) {
-    return res.status(404).json({ error: `Game ${gameId} not found` });
-  }
+  if (gameIdx === -1) return res.status(404).json({ error: `Game ${gameId} not found` });
 
   const existingGame = schedData.games[gameIdx];
-
-  // Snapshot before state for change log
   const beforeSnap = {
     date: existingGame.date, day: existingGame.day, time: existingGame.time,
     field_id: existingGame.field_id, field_name: existingGame.field_name,
@@ -350,60 +449,27 @@ app.put('/api/game/:id', (req, res) => {
     week: existingGame.week,
   };
 
-  // Build edit candidate
-  const editedGame = {
-    id: gameId,
-    date,
-    time,
-    field_id,
-    home_team_id,
-    away_team_id,
-    division_id: existingGame.division_id,
-    week: existingGame.week, // used for context; recalculated below
-  };
-
-  // Attach teams to season object for validateGameEdit lookup
+  const editedGame = { id: gameId, date, time, field_id, home_team_id, away_team_id, division_id: existingGame.division_id, week: existingGame.week };
   const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [] };
-
   const violations = validateGameEdit(editedGame, schedData.games, seasonForValidation);
+  if (violations.length && !force) return res.status(409).json({ violations });
 
-  if (violations.length && !force) {
-    return res.status(409).json({ violations });
-  }
-
-  // Determine week from SEASON_WEEKS
   let newWeek = existingGame.week;
   for (const wk of SEASON_WEEKS) {
-    if (wk.weekdays.includes(date) || wk.saturday === date) {
-      newWeek = wk.week;
-      break;
-    }
+    if (wk.weekdays.includes(date) || wk.saturday === date) { newWeek = wk.week; break; }
   }
 
-  // Resolve field name/address
   const fieldObj = (seasonData.fields || []).find(f => f.id === field_id);
-  const fieldName = fieldObj ? (fieldObj.name || field_id) : field_id;
-  const fieldAddress = fieldObj ? (fieldObj.address || '') : '';
-
-  // Resolve team names
   const homeTeam = (seasonData.teams || []).find(t => t.id === home_team_id);
   const awayTeam = (seasonData.teams || []).find(t => t.id === away_team_id);
-  const homeTeamName = homeTeam ? teamName(homeTeam) : String(home_team_id);
-  const awayTeamName = awayTeam ? teamName(awayTeam) : String(away_team_id);
 
-  // Update the game in place
   const updatedGame = {
     ...existingGame,
-    date,
-    day: dayName(date),
-    time,
-    field_id,
-    field_name: fieldName,
-    field_address: fieldAddress,
-    home_team_id,
-    home_team_name: homeTeamName,
-    away_team_id,
-    away_team_name: awayTeamName,
+    date, day: dayName(date), time, field_id,
+    field_name:    fieldObj ? (fieldObj.name || field_id) : field_id,
+    field_address: fieldObj ? (fieldObj.address || '') : '',
+    home_team_id,  home_team_name: homeTeam ? teamName(homeTeam) : String(home_team_id),
+    away_team_id,  away_team_name: awayTeam ? teamName(awayTeam) : String(away_team_id),
     week: newWeek,
   };
 
@@ -411,24 +477,15 @@ app.put('/api/game/:id', (req, res) => {
   schedData.total_games = schedData.games.length;
   schedData.generated_at = new Date().toISOString();
 
-  try {
-    fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` });
-  }
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
 
-  // ── Build and append change record ──────────────────────────────────────
   const changedFields = [];
-  if (beforeSnap.date !== updatedGame.date)
-    changedFields.push({ field: 'date', from: beforeSnap.date, to: updatedGame.date });
-  if (beforeSnap.time !== updatedGame.time)
-    changedFields.push({ field: 'time', from: beforeSnap.time, to: updatedGame.time });
-  if (beforeSnap.field_id !== updatedGame.field_id)
-    changedFields.push({ field: 'field', from: beforeSnap.field_name, to: updatedGame.field_name });
-  if (beforeSnap.home_team_id !== updatedGame.home_team_id)
-    changedFields.push({ field: 'home_team', from: beforeSnap.home_team_name, to: updatedGame.home_team_name });
-  if (beforeSnap.away_team_id !== updatedGame.away_team_id)
-    changedFields.push({ field: 'away_team', from: beforeSnap.away_team_name, to: updatedGame.away_team_name });
+  if (beforeSnap.date !== updatedGame.date)          changedFields.push({ field: 'date',      from: beforeSnap.date,           to: updatedGame.date });
+  if (beforeSnap.time !== updatedGame.time)          changedFields.push({ field: 'time',      from: beforeSnap.time,           to: updatedGame.time });
+  if (beforeSnap.field_id !== updatedGame.field_id)  changedFields.push({ field: 'field',     from: beforeSnap.field_name,     to: updatedGame.field_name });
+  if (beforeSnap.home_team_id !== updatedGame.home_team_id) changedFields.push({ field: 'home_team', from: beforeSnap.home_team_name, to: updatedGame.home_team_name });
+  if (beforeSnap.away_team_id !== updatedGame.away_team_id) changedFields.push({ field: 'away_team', from: beforeSnap.away_team_name, to: updatedGame.away_team_name });
 
   function teamContact(t) {
     if (!t) return null;
@@ -453,114 +510,63 @@ app.put('/api/game/:id', (req, res) => {
   };
 
   let allChanges = [];
-  try {
-    if (fs.existsSync(CHANGES_FILE)) allChanges = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8'));
-  } catch {}
+  try { if (fs.existsSync(CHANGES_FILE)) allChanges = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
   allChanges.push(changeRecord);
   try { fs.writeFileSync(CHANGES_FILE, JSON.stringify(allChanges, null, 2)); } catch {}
 
   res.json({ ok: true, game: updatedGame, violations, change: changeRecord });
 });
 
-// PATCH /api/team/:id — update editable fields on a team
-app.patch('/api/team/:id', (req, res) => {
+app.patch('/api/team/:id', requireAdmin, (req, res) => {
   const rawId = req.params.id;
-  // Team IDs may be int or string
   const teamId = isNaN(parseInt(rawId, 10)) ? rawId : parseInt(rawId, 10);
 
   let seasonData;
-  try {
-    seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not read season.json: ${err.message}` });
-  }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
 
   const teamIdx = seasonData.teams.findIndex(t => t.id === teamId);
-  if (teamIdx === -1) {
-    return res.status(404).json({ error: `Team ${teamId} not found` });
-  }
+  if (teamIdx === -1) return res.status(404).json({ error: `Team ${teamId} not found` });
 
   const team = { ...seasonData.teams[teamIdx] };
   const allowed = ['label', 'name', 'coach', 'phone', 'email', 'home_field_id', 'home_field_saturday_id', 'confirmed', 'blackout_dates'];
-
   for (const field of allowed) {
     if (!(field in req.body)) continue;
     const val = req.body[field];
-    if (field === 'home_field_saturday_id' && (val === '' || val === null)) {
-      delete team.home_field_saturday_id;
-    } else {
-      team[field] = val;
-    }
+    if (field === 'home_field_saturday_id' && (val === '' || val === null)) delete team.home_field_saturday_id;
+    else team[field] = val;
   }
-
   seasonData.teams[teamIdx] = team;
 
-  // Back up before writing
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
   fs.copyFileSync(SEASON_FILE, backup);
-
-  try {
-    fs.writeFileSync(SEASON_FILE, JSON.stringify(seasonData, null, 2));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not write season.json: ${err.message}` });
-  }
-
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(seasonData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not write season.json: ${err.message}` }); }
   res.json({ ok: true, team });
 });
 
-// PATCH /api/division/:id — update editable fields on a division
-app.patch('/api/division/:id', (req, res) => {
+app.patch('/api/division/:id', requireAdmin, (req, res) => {
   const divId = req.params.id;
-
   let seasonData;
-  try {
-    seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not read season.json: ${err.message}` });
-  }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
 
   const divIdx = seasonData.divisions.findIndex(d => d.id === divId);
   if (divIdx === -1) return res.status(404).json({ error: `Division ${divId} not found` });
 
-  const allowed = ['target_games'];
   const div = { ...seasonData.divisions[divIdx] };
-  for (const field of allowed) {
-    if (field in req.body) div[field] = req.body[field];
-  }
+  const allowed = ['target_games'];
+  for (const field of allowed) { if (field in req.body) div[field] = req.body[field]; }
   seasonData.divisions[divIdx] = div;
 
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
   fs.copyFileSync(SEASON_FILE, backup);
-  try {
-    fs.writeFileSync(SEASON_FILE, JSON.stringify(seasonData, null, 2));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not write season.json: ${err.message}` });
-  }
-
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(seasonData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not write season.json: ${err.message}` }); }
   res.json({ ok: true, division: div });
 });
 
-// GET /api/changes — return full change log
-app.get('/api/changes', (req, res) => {
-  if (!fs.existsSync(CHANGES_FILE)) return res.json([]);
-  try {
-    res.json(JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// DELETE /api/changes — clear the change log
-app.delete('/api/changes', (req, res) => {
-  try {
-    fs.writeFileSync(CHANGES_FILE, '[]');
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── CSV parser (handles quoted fields) ───────────────────────────────────────
+// ── CSV parser ────────────────────────────────────────────────────────────────
 function parseCSV(text) {
   const rows = [];
   const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
@@ -570,8 +576,7 @@ function parseCSV(text) {
     let i = 0;
     while (i < line.length) {
       if (line[i] === '"') {
-        let val = '';
-        i++;
+        let val = ''; i++;
         while (i < line.length) {
           if (line[i] === '"' && line[i + 1] === '"') { val += '"'; i += 2; }
           else if (line[i] === '"') { i++; break; }
@@ -591,41 +596,30 @@ function parseCSV(text) {
   return rows;
 }
 
-// POST /api/import-schedule — restore a schedule from a previously exported CSV
-app.post('/api/import-schedule', express.text({ type: '*/*', limit: '10mb' }), (req, res) => {
+app.post('/api/import-schedule', requireAdmin, express.text({ type: '*/*', limit: '10mb' }), (req, res) => {
   const csv = req.body;
   if (!csv || !csv.trim()) return res.status(400).json({ error: 'No CSV data received.' });
 
   const rows = parseCSV(csv);
   if (rows.length < 2) return res.status(400).json({ error: 'CSV appears empty or has no data rows.' });
 
-  // Map header names to column indexes
   const headers = rows[0].map(h => h.trim().toLowerCase());
   const col = name => headers.indexOf(name);
   const C = {
-    gameId:   col('game #'),
-    division: col('division'),
-    week:     col('week'),
-    date:     col('date'),
-    day:      col('day'),
-    time:     col('time'),
-    home:     col('home team'),
-    away:     col('away team'),
-    field:    col('field'),
-    address:  col('address'),
-    rematch:  col('rematch'),
+    gameId:   col('game #'), division: col('division'), week: col('week'),
+    date:     col('date'),   day:      col('day'),       time: col('time'),
+    home:     col('home team'), away: col('away team'), field: col('field'),
+    address:  col('address'), rematch: col('rematch'),
   };
 
   if (C.date < 0 || C.home < 0 || C.away < 0) {
-    return res.status(400).json({ error: 'CSV is missing required columns (Date, Home Team, Away Team). Make sure this is a schedule exported by this tool.' });
+    return res.status(400).json({ error: 'CSV is missing required columns (Date, Home Team, Away Team).' });
   }
 
-  // Load season for ID lookups
   let seasonData;
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
-  catch (e) { return res.status(500).json({ error: 'Could not read season.json.' }); }
+  catch { return res.status(500).json({ error: 'Could not read season.json.' }); }
 
-  // Build lookup maps
   const divByName = {};
   for (const d of (seasonData.divisions || [])) {
     const key = (d.name || d.label || d.id).toLowerCase();
@@ -641,8 +635,8 @@ app.post('/api/import-schedule', express.text({ type: '*/*', limit: '10mb' }), (
 
   const fieldByName = {};
   for (const f of (seasonData.fields || [])) {
-    if (f.name)           fieldByName[f.name.toLowerCase()] = f;
-    if (f.weekend_venue)  fieldByName[f.weekend_venue.toLowerCase()] = f;
+    if (f.name)          fieldByName[f.name.toLowerCase()] = f;
+    if (f.weekend_venue) fieldByName[f.weekend_venue.toLowerCase()] = f;
   }
 
   const games = [];
@@ -651,33 +645,28 @@ app.post('/api/import-schedule', express.text({ type: '*/*', limit: '10mb' }), (
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     const date = C.date >= 0 ? r[C.date]?.trim() : '';
-    if (!date) continue; // skip blank rows
+    if (!date) continue;
 
     const divRaw = C.division >= 0 ? r[C.division]?.trim() : '';
     const div    = divByName[divRaw.toLowerCase()];
     const divId  = div ? div.id : divRaw;
-
-    const homeRaw = C.home >= 0 ? r[C.home]?.trim() : '';
-    const awayRaw = C.away >= 0 ? r[C.away]?.trim() : '';
+    const homeRaw  = C.home  >= 0 ? r[C.home]?.trim()  : '';
+    const awayRaw  = C.away  >= 0 ? r[C.away]?.trim()  : '';
     const fieldRaw = C.field >= 0 ? r[C.field]?.trim() : '';
 
     const divTeams = teamsByDiv[divId] || [];
     const findTeam = name => {
       const nl = name.toLowerCase();
-      return divTeams.find(t =>
-        (t.label || '').toLowerCase() === nl ||
-        (t.name || '').toLowerCase() === nl ||
-        (t.team_name || '').toLowerCase() === nl
-      );
+      return divTeams.find(t => (t.label || '').toLowerCase() === nl || (t.name || '').toLowerCase() === nl || (t.team_name || '').toLowerCase() === nl);
     };
 
     const homeTeam = findTeam(homeRaw);
     const awayTeam = findTeam(awayRaw);
     const field    = fieldByName[fieldRaw.toLowerCase()];
 
-    if (!homeTeam) warnings.push(`Row ${i + 1}: Home team "${homeRaw}" not matched in division "${divId}" — ID left as name.`);
-    if (!awayTeam) warnings.push(`Row ${i + 1}: Away team "${awayRaw}" not matched in division "${divId}" — ID left as name.`);
-    if (!field)    warnings.push(`Row ${i + 1}: Field "${fieldRaw}" not matched — field_id left as name.`);
+    if (!homeTeam) warnings.push(`Row ${i + 1}: Home team "${homeRaw}" not matched in division "${divId}".`);
+    if (!awayTeam) warnings.push(`Row ${i + 1}: Away team "${awayRaw}" not matched in division "${divId}".`);
+    if (!field)    warnings.push(`Row ${i + 1}: Field "${fieldRaw}" not matched.`);
 
     games.push({
       game_id:        C.gameId >= 0 ? (parseInt(r[C.gameId], 10) || i) : i,
@@ -699,27 +688,14 @@ app.post('/api/import-schedule', express.text({ type: '*/*', limit: '10mb' }), (
 
   if (!games.length) return res.status(400).json({ error: 'No valid game rows found in CSV.' });
 
-  // Backup current schedule before overwriting
   if (fs.existsSync(SCHEDULE_FILE)) {
     const backup = SCHEDULE_FILE.replace('.json', `.backup-${Date.now()}.json`);
     try { fs.copyFileSync(SCHEDULE_FILE, backup); } catch {}
   }
 
-  const result = {
-    success: true,
-    games,
-    total_games: games.length,
-    generated_at: new Date().toISOString(),
-    source: 'csv_import',
-    warnings: [],
-    failures: [],
-  };
-
-  try {
-    fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(result, null, 2));
-  } catch (err) {
-    return res.status(500).json({ error: `Could not save schedule: ${err.message}` });
-  }
+  const result = { success: true, games, total_games: games.length, generated_at: new Date().toISOString(), source: 'csv_import', warnings: [], failures: [] };
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(result, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not save schedule: ${err.message}` }); }
 
   res.json({ ok: true, total_games: games.length, warnings });
 });

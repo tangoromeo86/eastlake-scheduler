@@ -1,35 +1,46 @@
 'use strict';
 
 let scheduleData = null;
-let seasonData = null;
+let seasonData   = null;
+let session      = null;
 let activeDivision = null;
-let activeView = 'games';
-let seasonSlots = null;
+let activeView   = 'games';
+let seasonSlots  = null;
+let gamesById    = {};   // game_id → game object, for change request lookup
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function init() {
+  // Check auth state first
+  try { session = await fetchJSON('api/auth/me'); } catch {}
+
+  // Use authenticated endpoints when logged in (includes contact info)
   try {
     const [sched, seas] = await Promise.all([
-      fetchJSON('api/public/schedule'),
-      fetchJSON('api/public/season'),
+      fetchJSON(session ? 'api/schedule' : 'api/public/schedule'),
+      fetchJSON(session ? 'api/season'   : 'api/public/season'),
     ]);
-    seasonData = seas;
+    seasonData   = seas;
     scheduleData = sched;
-
-    renderSeasonBar(seas);
-
-    if ((sched.games || []).length) {
-      buildDivTabs(sched.games);
-      populateFieldSelect();
-      document.getElementById('div-tabs-outer').classList.remove('hidden');
-      document.getElementById('vbar').classList.remove('hidden');
-    } else {
-      document.getElementById('loading-state').textContent = 'No schedule has been generated yet. Check back later.';
-      document.getElementById('loading-state').classList.remove('hidden');
-      return;
-    }
   } catch (e) {
     document.getElementById('loading-state').textContent = 'Could not load schedule: ' + e.message;
+    return;
+  }
+
+  // Index games by ID for quick lookup
+  (scheduleData.games || []).forEach(g => { gamesById[g.game_id] = g; });
+
+  updateHeader();
+  renderSeasonBar(seasonData);
+
+  if ((scheduleData.games || []).length) {
+    buildDivTabs(scheduleData.games);
+    populateFieldSelect();
+    document.getElementById('div-tabs-outer').classList.remove('hidden');
+    document.getElementById('vbar').classList.remove('hidden');
+  } else {
+    const ls = document.getElementById('loading-state');
+    ls.textContent = 'No schedule has been generated yet. Check back later.';
+    ls.classList.remove('hidden');
     return;
   }
   document.getElementById('loading-state').classList.add('hidden');
@@ -37,8 +48,26 @@ async function init() {
 
 async function fetchJSON(url) {
   const res = await fetch(url);
+  if (res.status === 401 || res.status === 403) {
+    session = null;
+    return fetchJSON(url.replace(/^api\//, 'api/public/'));
+  }
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.json();
+}
+
+// ── Header ────────────────────────────────────────────────────────────────────
+function updateHeader() {
+  const el = document.getElementById('header-right');
+  if (!el) return;
+  if (session) {
+    el.innerHTML =
+      `<span class="header-name">${esc(session.name)}</span>` +
+      (session.role === 'admin' ? '<a href="admin" class="header-link">Admin ›</a>' : '') +
+      `<a href="logout" class="header-link">Sign out</a>`;
+  } else {
+    el.innerHTML = `<a href="login" class="header-link">Sign in</a>`;
+  }
 }
 
 // ── Season bar ────────────────────────────────────────────────────────────────
@@ -50,6 +79,7 @@ function renderSeasonBar(seas) {
   if (s.start) parts.push(formatDate(s.start) + ' – ' + formatDate(s.end || s.start));
   parts.push((seas.divisions || []).length + ' divisions');
   parts.push(teams.length + ' teams');
+  if (session) parts.push('Signed in as ' + session.name);
   const bar = document.getElementById('season-bar');
   bar.innerHTML = parts.map(p => `<span>${esc(p)}</span>`).join('<span style="color:#334155">·</span>');
   bar.classList.remove('hidden');
@@ -60,8 +90,8 @@ function buildDivTabs(games) {
   const order = (seasonData?.divisions || []).map(d => d.id);
   const names = Object.fromEntries((seasonData?.divisions || []).map(d => [d.id, d.name || d.label || d.id]));
   const present = order.filter(id => games.some(g => g.division_id === id));
-  const extra = [...new Set(games.map(g => g.division_id))].filter(id => !order.includes(id));
-  const divs = [...present, ...extra];
+  const extra   = [...new Set(games.map(g => g.division_id))].filter(id => !order.includes(id));
+  const divs    = [...present, ...extra];
 
   const nav = document.getElementById('division-tabs');
   nav.innerHTML = '';
@@ -78,9 +108,7 @@ function buildDivTabs(games) {
 
 function selectDivision(divId) {
   activeDivision = divId;
-  document.querySelectorAll('.div-tab').forEach(b =>
-    b.classList.toggle('active', b.dataset.divId === divId)
-  );
+  document.querySelectorAll('.div-tab').forEach(b => b.classList.toggle('active', b.dataset.divId === divId));
   populateTeamFilter();
   populateCalTeamSelect();
   renderCurrentView();
@@ -102,25 +130,17 @@ function syncFilterVisibility() {
   const cs = document.getElementById('cal-team-select');
   const fs = document.getElementById('field-select');
   if (activeView === 'games') {
-    tf.classList.remove('hidden');
-    gc.classList.remove('hidden');
-    cs.classList.add('hidden');
-    fs.classList.add('hidden');
+    tf.classList.remove('hidden'); gc.classList.remove('hidden');
+    cs.classList.add('hidden');    fs.classList.add('hidden');
   } else if (activeView === 'calendar') {
-    tf.classList.add('hidden');
-    gc.classList.add('hidden');
-    cs.classList.remove('hidden');
-    fs.classList.add('hidden');
+    tf.classList.add('hidden');  gc.classList.add('hidden');
+    cs.classList.remove('hidden'); fs.classList.add('hidden');
   } else if (activeView === 'fields') {
-    tf.classList.add('hidden');
-    gc.classList.add('hidden');
-    cs.classList.add('hidden');
-    fs.classList.remove('hidden');
+    tf.classList.add('hidden');  gc.classList.add('hidden');
+    cs.classList.add('hidden');  fs.classList.remove('hidden');
   } else {
-    tf.classList.add('hidden');
-    gc.classList.add('hidden');
-    cs.classList.add('hidden');
-    fs.classList.add('hidden');
+    tf.classList.add('hidden');  gc.classList.add('hidden');
+    cs.classList.add('hidden');  fs.classList.add('hidden');
   }
 }
 
@@ -153,17 +173,13 @@ function teamLabel(t) { return t.name || t.label || t.team_name || 'Team ' + t.i
 function populateTeamFilter() {
   const divGames = (scheduleData?.games || []).filter(g => g.division_id === activeDivision);
   const teams = new Map();
-  divGames.forEach(g => {
-    teams.set(g.home_team_id, g.home_team_name);
-    teams.set(g.away_team_id, g.away_team_name);
-  });
+  divGames.forEach(g => { teams.set(g.home_team_id, g.home_team_name); teams.set(g.away_team_id, g.away_team_name); });
   const sorted = [...teams.entries()].sort((a, b) => (a[1]||'').localeCompare(b[1]||''));
   const sel = document.getElementById('team-filter');
   sel.innerHTML = '<option value="">All teams</option>';
   sorted.forEach(([id, name]) => {
     const opt = document.createElement('option');
-    opt.value = id;
-    opt.textContent = name;
+    opt.value = id; opt.textContent = name;
     sel.appendChild(opt);
   });
   syncFilterVisibility();
@@ -171,8 +187,7 @@ function populateTeamFilter() {
 
 document.getElementById('team-filter').addEventListener('change', () => {
   if (!scheduleData || activeView !== 'games') return;
-  const divGames = (scheduleData.games || []).filter(g => g.division_id === activeDivision);
-  renderGames(divGames);
+  renderGames((scheduleData.games || []).filter(g => g.division_id === activeDivision));
 });
 
 // ── GAMES VIEW ────────────────────────────────────────────────────────────────
@@ -196,6 +211,20 @@ function renderGames(divGames) {
   }
   noMsg.classList.add('hidden');
 
+  const reqTh = session ? '<th></th>' : '';
+  // Patch table header to include request column if not already
+  const thead = document.querySelector('#view-games .games-table-wrap thead tr');
+  if (thead) {
+    const hasReqTh = thead.querySelector('.req-th');
+    if (session && !hasReqTh) {
+      const th = document.createElement('th');
+      th.className = 'req-th';
+      thead.appendChild(th);
+    } else if (!session && hasReqTh) {
+      hasReqTh.remove();
+    }
+  }
+
   // Table (desktop)
   document.getElementById('games-tbody').innerHTML = sorted.map(g => `
     <tr class="${g.is_rematch ? 'g-rematch' : ''}">
@@ -208,6 +237,7 @@ function renderGames(divGames) {
       <td class="g-away">${esc(g.away_team_name)}</td>
       <td>${esc(g.field_name)}</td>
       <td class="g-addr">${esc(g.field_address)}</td>
+      ${session ? `<td><button class="req-btn" data-gid="${g.game_id}">Request Change</button></td>` : ''}
     </tr>
   `).join('');
 
@@ -224,8 +254,16 @@ function renderGames(divGames) {
         <span class="away">${esc(g.away_team_name)}</span>
       </div>
       <div class="game-card-field">📍 ${esc(g.field_name)}${g.field_address ? ' — ' + esc(g.field_address) : ''}</div>
+      ${session ? `<div class="game-card-req"><button class="req-btn" data-gid="${g.game_id}">Request Change</button></div>` : ''}
     </div>
   `).join('');
+
+  // Attach request change button listeners
+  if (session) {
+    document.querySelectorAll('.req-btn[data-gid]').forEach(btn => {
+      btn.addEventListener('click', () => openChangeRequest(parseInt(btn.dataset.gid, 10)));
+    });
+  }
 }
 
 // ── TEAMS VIEW ────────────────────────────────────────────────────────────────
@@ -249,11 +287,23 @@ function renderTeamsView(divGames, divTeams) {
         <td style="color:#94a3b8;font-size:11px">${esc(g.field_name)}</td>
       </tr>`;
     }).join('');
+
+    // Contact info block — only shown when authenticated
+    let contactHtml = '';
+    if (session && (team.coach || team.email || team.phone)) {
+      const parts = [];
+      if (team.coach) parts.push(`<span style="font-weight:600">${esc(team.coach)}</span>`);
+      if (team.email) parts.push(`<a href="mailto:${esc(team.email)}" style="color:#2d6cf0">${esc(team.email)}</a>`);
+      if (team.phone) parts.push(`<a href="tel:${esc(team.phone)}" style="color:#64748b">${esc(team.phone)}</a>`);
+      contactHtml = `<div style="padding:8px 14px;font-size:12px;background:#f0f9ff;border-top:1px solid #e2e8f0;display:flex;flex-wrap:wrap;gap:10px">${parts.join('<span style="color:#cbd5e1">·</span>')}</div>`;
+    }
+
     return `<div class="tcard">
       <div class="tcard-header">
         <span class="tcard-name">${esc(teamLabel(team))}</span>
         <span class="tcard-meta">${myGames.length} games · ${homeCount}H ${awayCount}A</span>
       </div>
+      ${contactHtml}
       <table>
         <thead><tr><th>Wk</th><th>Date</th><th>Day</th><th>Time</th><th></th><th>Opponent</th><th>Field</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -265,13 +315,9 @@ function renderTeamsView(divGames, divTeams) {
 
 // ── MATRIX VIEW ───────────────────────────────────────────────────────────────
 function renderMatrixView(divGames, divTeams) {
-  if (!divTeams.length) {
-    document.getElementById('matrix-wrapper').innerHTML = '<p class="empty-state">No teams found.</p>';
-    return;
-  }
+  if (!divTeams.length) { document.getElementById('matrix-wrapper').innerHTML = '<p class="empty-state">No teams found.</p>'; return; }
   const pairKey = (a, b) => Math.min(a,b) + '_' + Math.max(a,b);
-  const counts = {};
-  const homeAway = {};
+  const counts = {}; const homeAway = {};
   divGames.forEach(g => {
     const k = pairKey(g.home_team_id, g.away_team_id);
     counts[k] = (counts[k] || 0) + 1;
@@ -280,8 +326,7 @@ function renderMatrixView(divGames, divTeams) {
   });
   const maxCount = Math.max(1, ...Object.values(counts));
   const header = '<tr><th class="matrix-corner"></th>' +
-    divTeams.map(t => `<th class="matrix-col-head" title="${esc(teamLabel(t))}">${esc(teamLabel(t))}</th>`).join('') +
-    '</tr>';
+    divTeams.map(t => `<th class="matrix-col-head" title="${esc(teamLabel(t))}">${esc(teamLabel(t))}</th>`).join('') + '</tr>';
   const rows = divTeams.map(row => {
     const cells = divTeams.map(col => {
       if (row.id === col.id) return '<td class="matrix-self">—</td>';
@@ -292,9 +337,7 @@ function renderMatrixView(divGames, divTeams) {
       const asAway = homeAway[col.id + '_' + row.id] || 0;
       const intensity = Math.round((total / maxCount) * 4);
       return `<td class="matrix-cell matrix-i${intensity}" title="${total} game(s): ${asHome}H ${asAway}A">
-        <span class="matrix-count">${total}</span>
-        <span class="matrix-ha">${asHome}H${asAway}A</span>
-      </td>`;
+        <span class="matrix-count">${total}</span><span class="matrix-ha">${asHome}H${asAway}A</span></td>`;
     }).join('');
     return '<tr><th class="matrix-row-head" title="' + esc(teamLabel(row)) + '">' + esc(teamLabel(row)) + '</th>' + cells + '</tr>';
   }).join('');
@@ -305,10 +348,7 @@ function renderMatrixView(divGames, divTeams) {
 
 // ── STATS VIEW ────────────────────────────────────────────────────────────────
 function renderStatsView(divGames, divTeams) {
-  if (!divTeams.length) {
-    document.getElementById('stats-wrapper').innerHTML = '<p class="empty-state">No teams found.</p>';
-    return;
-  }
+  if (!divTeams.length) { document.getElementById('stats-wrapper').innerHTML = '<p class="empty-state">No teams found.</p>'; return; }
   const weeks = [...new Set(divGames.map(g => g.week))].sort((a, b) => a - b);
   const header = '<tr><th>Team</th><th>Total</th><th>Home</th><th>Away</th><th>Wkday</th><th>Sat</th>' +
     weeks.map(w => `<th>W${w}</th>`).join('') + '</tr>';
@@ -347,8 +387,7 @@ function populateCalTeamSelect() {
   sel.innerHTML = '';
   teams.forEach(t => {
     const opt = document.createElement('option');
-    opt.value = t.id;
-    opt.textContent = teamLabel(t);
+    opt.value = t.id; opt.textContent = teamLabel(t);
     sel.appendChild(opt);
   });
   if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
@@ -356,8 +395,7 @@ function populateCalTeamSelect() {
 
 document.getElementById('cal-team-select').addEventListener('change', () => {
   if (activeView === 'calendar' && scheduleData && activeDivision) {
-    const divGames = (scheduleData.games || []).filter(g => g.division_id === activeDivision);
-    renderCalendarView(divGames, getDivTeams(activeDivision));
+    renderCalendarView((scheduleData.games || []).filter(g => g.division_id === activeDivision), getDivTeams(activeDivision));
   }
 });
 
@@ -426,61 +464,40 @@ function renderCalMonth(year, month, label, byDate, teamId, blackouts) {
 // ── FIELDS VIEW ───────────────────────────────────────────────────────────────
 function populateFieldSelect() {
   const allGames = scheduleData?.games || [];
-  // Collect unique field names preserving first-seen order by name sort
-  const fieldMap = new Map(); // field_name → { field_id, field_name, field_address }
+  const fieldMap = new Map();
   for (const g of allGames) {
-    if (!fieldMap.has(g.field_name)) {
-      fieldMap.set(g.field_name, { field_id: g.field_id, field_name: g.field_name, field_address: g.field_address });
-    }
+    if (!fieldMap.has(g.field_name)) fieldMap.set(g.field_name, { field_id: g.field_id, field_name: g.field_name, field_address: g.field_address });
   }
   const sorted = [...fieldMap.values()].sort((a, b) => a.field_name.localeCompare(b.field_name));
-
   const sel = document.getElementById('field-select');
   const prev = sel.value;
   sel.innerHTML = '<option value="">All fields</option>';
   sorted.forEach(f => {
     const opt = document.createElement('option');
-    opt.value = f.field_name;
-    opt.textContent = f.field_name;
+    opt.value = f.field_name; opt.textContent = f.field_name;
     sel.appendChild(opt);
   });
   if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
 
-document.getElementById('field-select').addEventListener('change', () => {
-  if (activeView === 'fields') renderFieldsView();
-});
+document.getElementById('field-select').addEventListener('change', () => { if (activeView === 'fields') renderFieldsView(); });
 
 function renderFieldsView() {
   const wrapper = document.getElementById('fields-wrapper');
-  const allGames = [...(scheduleData?.games || [])].sort((a, b) =>
-    a.date.localeCompare(b.date) || a.time.localeCompare(b.time)
-  );
+  const allGames = [...(scheduleData?.games || [])].sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
   const filterField = document.getElementById('field-select').value;
   const games = filterField ? allGames.filter(g => g.field_name === filterField) : allGames;
-
   if (!games.length) { wrapper.innerHTML = '<p class="empty-state">No games found.</p>'; return; }
 
-  // Utilization summary
-  const uniqueDates = new Set(games.map(g => g.date));
+  const uniqueDates  = new Set(games.map(g => g.date));
   const uniqueFields = new Set(games.map(g => g.field_name));
-  const utilHtml = `<p class="field-utilization">
-    <strong>${games.length}</strong> games across
-    <strong>${uniqueDates.size}</strong> dates at
-    <strong>${uniqueFields.size}</strong> field${uniqueFields.size !== 1 ? 's' : ''}
-  </p>`;
+  const utilHtml = `<p class="field-utilization"><strong>${games.length}</strong> games across <strong>${uniqueDates.size}</strong> dates at <strong>${uniqueFields.size}</strong> field${uniqueFields.size !== 1 ? 's' : ''}</p>`;
 
-  // Group by date
   const byDate = new Map();
-  for (const g of games) {
-    if (!byDate.has(g.date)) byDate.set(g.date, []);
-    byDate.get(g.date).push(g);
-  }
+  for (const g of games) { if (!byDate.has(g.date)) byDate.set(g.date, []); byDate.get(g.date).push(g); }
 
-  // Div name lookup
   const divNames = Object.fromEntries((seasonData?.divisions || []).map(d => [d.id, d.name || d.label || d.id]));
-
-  const showFieldCol = !filterField; // only show field column in "all fields" view
+  const showFieldCol = !filterField;
 
   const groups = [...byDate.entries()].map(([date, dateGames]) => {
     const isSat = dateGames[0].day === 'Saturday';
@@ -500,17 +517,307 @@ function renderFieldsView() {
         <span class="field-date-count">${dateGames.length} game${dateGames.length !== 1 ? 's' : ''}</span>
       </div>
       <table class="field-games-table">
-        <thead><tr>
-          <th>Time</th>
-          ${showFieldCol ? '<th>Field</th>' : ''}
-          <th>Division</th><th>Home</th><th></th><th>Away</th>
-        </tr></thead>
+        <thead><tr><th>Time</th>${showFieldCol ? '<th>Field</th>' : ''}<th>Division</th><th>Home</th><th></th><th>Away</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
   }).join('');
 
   wrapper.innerHTML = utilHtml + groups;
+}
+
+// ── CHANGE REQUEST MODAL ──────────────────────────────────────────────────────
+const ISSUE_OPTS = [
+  { value: 'date',  icon: '📅', label: "We can't play on this date" },
+  { value: 'time',  icon: '🕐', label: 'We need a different time' },
+  { value: 'field', icon: '📍', label: 'There\'s a field or location problem' },
+  { value: 'other', icon: '💬', label: 'Something else' },
+];
+
+let crState = null;  // change request state
+
+function openChangeRequest(gameId) {
+  const game = gamesById[gameId];
+  if (!game || !session) return;
+
+  crState = {
+    game,
+    step: 1,
+    issue: null,
+    details: {},
+    notes: '',
+    name:  session.name  || '',
+    email: session.email || '',
+    phone: session.phone || '',
+  };
+
+  document.getElementById('change-request-modal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  renderModalStep();
+}
+
+function closeModal() {
+  document.getElementById('change-request-modal').classList.add('hidden');
+  document.body.style.overflow = '';
+  crState = null;
+}
+
+document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+document.getElementById('change-request-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+function setModalStep(n) {
+  crState.step = n;
+  document.getElementById('modal-step-label').textContent = `Step ${n} of 6`;
+  renderModalStep();
+}
+
+function renderModalStep() {
+  const body = document.getElementById('modal-body');
+  switch (crState.step) {
+    case 1: body.innerHTML = renderStep1(); break;
+    case 2: body.innerHTML = renderStep2(); wireStep2(); break;
+    case 3: body.innerHTML = renderStep3(); break;
+    case 4: body.innerHTML = renderStep4(); break;
+    case 5: body.innerHTML = renderStep5(); break;
+    case 6: body.innerHTML = renderStep6(); break;
+  }
+  // Scroll modal to top on step change
+  const card = document.querySelector('.modal-card');
+  if (card) card.scrollTop = 0;
+}
+
+function gameSummaryHtml(game) {
+  const divName = (seasonData?.divisions || []).find(d => d.id === game.division_id)?.name || game.division_id;
+  return `<div class="modal-game-summary">
+    <div class="matchup">${esc(game.home_team_name)} vs ${esc(game.away_team_name)}</div>
+    <div class="meta">${divName} · Week ${game.week} · ${game.day} ${formatDate(game.date)} · ${formatTime12h(game.time)}</div>
+    <div class="meta" style="margin-top:2px">📍 ${esc(game.field_name)}</div>
+  </div>`;
+}
+
+// Step 1 — Game context
+function renderStep1() {
+  return gameSummaryHtml(crState.game) + `
+    <p style="font-size:13px;color:#64748b;margin-bottom:20px">We'll guide you through describing your request, then open your email app with a pre-written message ready to send.</p>
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn-primary" onclick="setModalStep(2)">Continue →</button>
+    </div>`;
+}
+
+// Step 2 — Issue type
+function renderStep2() {
+  return `<p class="modal-q">What's the problem with this game?</p>
+    <div class="modal-opts" id="issue-opts">
+      ${ISSUE_OPTS.map(o => `
+        <label class="modal-opt${crState.issue === o.value ? ' selected' : ''}">
+          <input type="radio" name="issue" value="${o.value}" ${crState.issue === o.value ? 'checked' : ''}>
+          <span class="modal-opt-icon">${o.icon}</span>
+          <span>${o.label}</span>
+        </label>`).join('')}
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn-secondary" onclick="setModalStep(1)">← Back</button>
+      <button class="modal-btn modal-btn-primary" id="step2-next">Continue →</button>
+    </div>`;
+}
+
+function wireStep2() {
+  document.querySelectorAll('#issue-opts .modal-opt').forEach(label => {
+    label.addEventListener('click', () => {
+      crState.issue = label.querySelector('input').value;
+      document.querySelectorAll('#issue-opts .modal-opt').forEach(l => l.classList.remove('selected'));
+      label.classList.add('selected');
+    });
+  });
+  document.getElementById('step2-next').addEventListener('click', () => {
+    if (!crState.issue) { alert('Please select an option.'); return; }
+    setModalStep(3);
+  });
+}
+
+// Step 3 — Specific details (varies by issue)
+function renderStep3() {
+  let fields = '';
+  if (crState.issue === 'date') {
+    fields = `
+      <div class="modal-field">
+        <label>What dates and times work for your team this season?</label>
+        <textarea id="f-available" placeholder="e.g. Most weekday evenings work. Saturdays before May 15 are best.">${esc(crState.details.available || '')}</textarea>
+        <div class="hint">Be as specific as you can — weeks, days, time ranges.</div>
+      </div>
+      <div class="modal-field">
+        <label>Any dates you definitely cannot play?</label>
+        <textarea id="f-avoid" placeholder="e.g. April 22, May 6, any Friday">${esc(crState.details.avoid || '')}</textarea>
+      </div>`;
+  } else if (crState.issue === 'time') {
+    fields = `
+      <div class="modal-field">
+        <label>What time would work better?</label>
+        <input type="text" id="f-preferred-time" placeholder="e.g. 6:00 PM, any time after 5:30 PM" value="${esc(crState.details.preferred_time || '')}">
+      </div>
+      <div class="modal-field">
+        <label>Could the date also change if needed?</label>
+        <div class="modal-yesno">
+          <label><input type="radio" name="date-flex" value="yes" ${crState.details.date_flexible === 'yes' ? 'checked' : ''}> Yes, date is flexible</label>
+          <label><input type="radio" name="date-flex" value="no"  ${crState.details.date_flexible === 'no'  ? 'checked' : ''}> No, only the time</label>
+        </div>
+      </div>`;
+  } else if (crState.issue === 'field') {
+    fields = `
+      <div class="modal-field">
+        <label>What's the issue with the field or location?</label>
+        <textarea id="f-field-issue" placeholder="e.g. Field is unavailable, turf is under repair, parking issues…">${esc(crState.details.field_issue || '')}</textarea>
+      </div>
+      <div class="modal-field">
+        <label>Can you suggest an alternative field? (optional)</label>
+        <input type="text" id="f-alt-field" placeholder="e.g. Riverside Park Field 2" value="${esc(crState.details.alt_field || '')}">
+      </div>`;
+  } else {
+    fields = `
+      <div class="modal-field">
+        <label>Please describe the issue</label>
+        <textarea id="f-other" placeholder="Describe what needs to change and why…">${esc(crState.details.description || '')}</textarea>
+      </div>`;
+  }
+
+  const issueLabel = ISSUE_OPTS.find(o => o.value === crState.issue)?.label || crState.issue;
+  return `
+    ${gameSummaryHtml(crState.game)}
+    <p class="modal-q">Tell us more about: <em style="font-weight:400;color:#64748b">${esc(issueLabel)}</em></p>
+    ${fields}
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn-secondary" onclick="setModalStep(2)">← Back</button>
+      <button class="modal-btn modal-btn-primary" onclick="saveStep3AndContinue()">Continue →</button>
+    </div>`;
+}
+
+function saveStep3AndContinue() {
+  if (crState.issue === 'date') {
+    crState.details.available = document.getElementById('f-available')?.value.trim() || '';
+    crState.details.avoid     = document.getElementById('f-avoid')?.value.trim() || '';
+  } else if (crState.issue === 'time') {
+    crState.details.preferred_time = document.getElementById('f-preferred-time')?.value.trim() || '';
+    crState.details.date_flexible  = document.querySelector('input[name="date-flex"]:checked')?.value || '';
+  } else if (crState.issue === 'field') {
+    crState.details.field_issue = document.getElementById('f-field-issue')?.value.trim() || '';
+    crState.details.alt_field   = document.getElementById('f-alt-field')?.value.trim() || '';
+  } else {
+    crState.details.description = document.getElementById('f-other')?.value.trim() || '';
+  }
+  setModalStep(4);
+}
+
+// Step 4 — Additional notes
+function renderStep4() {
+  return `
+    <p class="modal-q">Anything else the admin should know? <span style="font-weight:400;color:#94a3b8">(optional)</span></p>
+    <div class="modal-field">
+      <textarea id="f-notes" placeholder="Any additional context, urgency, or constraints…">${esc(crState.notes)}</textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn-secondary" onclick="setModalStep(3)">← Back</button>
+      <button class="modal-btn modal-btn-primary" onclick="saveStep4AndContinue()">Continue →</button>
+    </div>`;
+}
+
+function saveStep4AndContinue() {
+  crState.notes = document.getElementById('f-notes')?.value.trim() || '';
+  setModalStep(5);
+}
+
+// Step 5 — Contact info confirmation
+function renderStep5() {
+  return `
+    <p class="modal-q">Confirm your contact info</p>
+    <p style="font-size:13px;color:#64748b;margin-bottom:16px">This will be included in the email so the admin can follow up with you.</p>
+    <div class="modal-field">
+      <label>Your name</label>
+      <input type="text" id="f-name" value="${esc(crState.name)}" placeholder="Your name">
+    </div>
+    <div class="modal-field">
+      <label>Email</label>
+      <input type="text" id="f-email" value="${esc(crState.email)}" readonly style="background:#f8fafc;color:#64748b">
+    </div>
+    <div class="modal-field">
+      <label>Phone <span style="font-weight:400;color:#94a3b8">(optional)</span></label>
+      <input type="text" id="f-phone" value="${esc(crState.phone)}" placeholder="Best number to reach you">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn-secondary" onclick="setModalStep(4)">← Back</button>
+      <button class="modal-btn modal-btn-primary" onclick="saveStep5AndContinue()">Preview Email →</button>
+    </div>`;
+}
+
+function saveStep5AndContinue() {
+  crState.name  = document.getElementById('f-name')?.value.trim()  || crState.name;
+  crState.phone = document.getElementById('f-phone')?.value.trim() || '';
+  setModalStep(6);
+}
+
+// Step 6 — Review & send
+function renderStep6() {
+  const mailto = buildMailtoLink();
+  const preview = buildEmailBody();
+  return `
+    <p class="modal-q">Review your request</p>
+    <p style="font-size:13px;color:#64748b;margin-bottom:12px">Tap "Open Email App" to send this — your email app will open with the message ready to go.</p>
+    <div class="modal-email-preview">${esc(preview)}</div>
+    <a href="${esc(mailto)}" class="modal-send-btn">📧 Open Email App</a>
+    <div class="modal-actions" style="margin-top:0">
+      <button class="modal-btn modal-btn-secondary" onclick="setModalStep(5)">← Edit</button>
+      <button class="modal-btn modal-btn-secondary" onclick="closeModal()">Done</button>
+    </div>`;
+}
+
+function buildEmailBody() {
+  const g = crState.game;
+  const divName = (seasonData?.divisions || []).find(d => d.id === g.division_id)?.name || g.division_id;
+  const issueLabel = ISSUE_OPTS.find(o => o.value === crState.issue)?.label || crState.issue;
+
+  let detailLines = [];
+  if (crState.issue === 'date') {
+    if (crState.details.available) detailLines.push('Available dates/times: ' + crState.details.available);
+    if (crState.details.avoid)     detailLines.push('Dates to avoid: ' + crState.details.avoid);
+  } else if (crState.issue === 'time') {
+    if (crState.details.preferred_time) detailLines.push('Preferred time: ' + crState.details.preferred_time);
+    if (crState.details.date_flexible)  detailLines.push('Date flexible: ' + (crState.details.date_flexible === 'yes' ? 'Yes' : 'No, time only'));
+  } else if (crState.issue === 'field') {
+    if (crState.details.field_issue) detailLines.push('Field issue: ' + crState.details.field_issue);
+    if (crState.details.alt_field)   detailLines.push('Alternative field: ' + crState.details.alt_field);
+  } else {
+    if (crState.details.description) detailLines.push(crState.details.description);
+  }
+
+  const lines = [
+    'GAME DETAILS',
+    `Game #${g.game_id} — ${divName}, Week ${g.week}`,
+    `${g.day} ${formatDate(g.date)} at ${formatTime12h(g.time)}`,
+    `${g.home_team_name} (Home) vs ${g.away_team_name} (Away)`,
+    `Field: ${g.field_name}`,
+    '',
+    'CHANGE REQUEST',
+    `Issue: ${issueLabel}`,
+    ...detailLines,
+    ...(crState.notes ? ['', 'Additional notes: ' + crState.notes] : []),
+    '',
+    'SUBMITTED BY',
+    crState.name,
+    crState.email,
+    ...(crState.phone ? [crState.phone] : []),
+  ];
+
+  return lines.join('\n');
+}
+
+function buildMailtoLink() {
+  const g = crState.game;
+  const divName = (seasonData?.divisions || []).find(d => d.id === g.division_id)?.name || g.division_id;
+  const to = session?.request_to || '';
+  const subject = `Game Change Request — ${divName} W${g.week}: ${g.home_team_name} vs ${g.away_team_name} (${formatDate(g.date)})`;
+  const body = buildEmailBody();
+  return `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
