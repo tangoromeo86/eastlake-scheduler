@@ -1,0 +1,5 @@
+node_modules/
+schedule.json
+season.json
+*backup*.json
+*.bak

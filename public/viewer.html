@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Eastlake League Schedule</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    /* ── Viewer-specific overrides ────────────────────────────────────────── */
+    .viewer-header { display: flex; align-items: center; justify-content: space-between; background: #1a1a2e; color: #fff; padding: 14px 20px; }
+    .viewer-header h1 { font-size: 1.15rem; font-weight: 700; }
+    .admin-link { font-size: 12px; color: #94a3b8; text-decoration: none; padding: 5px 10px; border: 1px solid #334155; border-radius: 5px; }
+    .admin-link:hover { color: #e2e8f0; border-color: #64748b; }
+
+    /* Division tabs — horizontally scrollable */
+    .div-tabs-outer { background: #fff; border-bottom: 2px solid #e2e8f0; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .div-tabs-outer::-webkit-scrollbar { display: none; }
+    .div-tabs { display: flex; gap: 0; white-space: nowrap; padding: 0 12px; }
+    .div-tab { background: none; border: none; border-bottom: 3px solid transparent; padding: 11px 16px; font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer; white-space: nowrap; }
+    .div-tab:hover { color: #1a1a2e; }
+    .div-tab.active { color: #2d6cf0; border-bottom-color: #2d6cf0; }
+
+    /* View toggle bar */
+    .vbar { background: #f8fafc; border-bottom: 1px solid #e2e8f0; padding: 8px 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .vbar-btns { display: flex; gap: 2px; background: #e2e8f0; border-radius: 7px; padding: 2px; }
+    .vbar-btn { background: none; border: none; padding: 6px 13px; border-radius: 5px; font-size: 12px; font-weight: 600; color: #64748b; cursor: pointer; white-space: nowrap; }
+    .vbar-btn.active { background: #fff; color: #1a1a2e; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+    .vbar-select { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; background: #fff; max-width: 200px; flex: 1; }
+    .game-count-badge { font-size: 12px; color: #94a3b8; white-space: nowrap; margin-left: 4px; }
+
+    /* Content area */
+    .viewer-content { max-width: 900px; margin: 0 auto; padding: 12px 12px 60px; }
+
+    /* ── Game cards (default: table, mobile: cards) ──────────────────────── */
+    .games-table-wrap { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; overflow-x: auto; }
+    .games-table-wrap table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .games-table-wrap th { background: #f8fafc; padding: 9px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #64748b; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+    .games-table-wrap td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+    .games-table-wrap tr:last-child td { border-bottom: none; }
+    .games-table-wrap tbody tr:hover { background: #f8fafc; }
+    .g-home { font-weight: 600; color: #1d4ed8; }
+    .g-away { font-weight: 600; color: #374151; }
+    .g-addr { color: #94a3b8; font-size: 11px; }
+    .g-id { color: #9ca3af; font-size: 11px; font-weight: 600; }
+    .g-rematch td { background: #fefce8; }
+
+    /* Mobile card view */
+    .games-cards { display: none; flex-direction: column; gap: 8px; }
+    .game-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px; }
+    .game-card-top { font-size: 12px; color: #64748b; margin-bottom: 6px; display: flex; justify-content: space-between; }
+    .game-card-matchup { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+    .game-card-matchup .home { color: #1d4ed8; }
+    .game-card-matchup .vs { color: #9ca3af; font-weight: 400; font-size: 12px; }
+    .game-card-matchup .away { color: #374151; }
+    .game-card-field { margin-top: 5px; font-size: 12px; color: #64748b; }
+    .game-card.rematch { border-left: 3px solid #eab308; }
+    .rematch-badge { font-size: 10px; background: #fef9c3; color: #92400e; border-radius: 3px; padding: 1px 5px; font-weight: 600; }
+
+    @media (max-width: 600px) {
+      .games-table-wrap { display: none; }
+      .games-cards { display: flex; }
+      .viewer-content { padding: 10px 10px 60px; }
+    }
+
+    /* ── Team cards ──────────────────────────────────────────────────────── */
+    .team-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+    .tcard { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+    .tcard-header { background: #1e293b; color: #fff; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; }
+    .tcard-name { font-weight: 700; font-size: 14px; }
+    .tcard-meta { font-size: 11px; color: #94a3b8; }
+    .tcard table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .tcard td { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; }
+    .tcard tr:last-child td { border-bottom: none; }
+    .ha-home { display: inline-block; background: #dbeafe; color: #1d4ed8; border-radius: 3px; padding: 0 5px; font-size: 10px; font-weight: 700; }
+    .ha-away { display: inline-block; background: #f1f5f9; color: #475569; border-radius: 3px; padding: 0 5px; font-size: 10px; font-weight: 700; }
+
+    @media (max-width: 600px) {
+      .team-cards-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ── Loading / empty states ──────────────────────────────────────────── */
+    .loading-state { text-align: center; padding: 48px 24px; color: #94a3b8; font-size: 14px; }
+    .empty-state { text-align: center; padding: 48px 24px; color: #94a3b8; font-size: 14px; }
+
+    /* ── Season bar (reuse shared style, add viewer tweaks) ──────────────── */
+    .viewer-season-bar { background: #0f172a; color: #94a3b8; font-size: 12px; padding: 7px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .viewer-season-bar strong { color: #e2e8f0; }
+
+    /* ── Stats table scroll on mobile ────────────────────────────────────── */
+    .stats-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .stats-table { border-collapse: collapse; font-size: 12px; white-space: nowrap; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+    .stats-table th { background: #f8fafc; padding: 8px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #64748b; border-bottom: 1px solid #e2e8f0; }
+    .stats-table td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; }
+    .stats-table tr:last-child td { border-bottom: none; }
+    .stat-warn { color: #ea580c; font-weight: 600; }
+    .stat-zero { color: #cbd5e1; }
+    .stat-total { font-weight: 700; }
+
+    /* Matrix scroll */
+    .matrix-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .matrix-table { border-collapse: collapse; font-size: 11px; white-space: nowrap; }
+    .matrix-table th { padding: 5px 8px; background: #f8fafc; font-weight: 600; text-align: center; max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+    .matrix-corner { min-width: 80px; }
+    .matrix-row-head { text-align: right; padding: 5px 8px; font-weight: 600; max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+    .matrix-col-head { max-width: 60px; overflow: hidden; text-overflow: ellipsis; }
+    .matrix-cell { text-align: center; padding: 5px; }
+    .matrix-self { text-align: center; color: #e2e8f0; }
+    .matrix-zero { text-align: center; color: #e2e8f0; }
+    .matrix-i1 { background: #dbeafe; }
+    .matrix-i2 { background: #93c5fd; }
+    .matrix-i3 { background: #3b82f6; color: #fff; }
+    .matrix-i4 { background: #1d4ed8; color: #fff; }
+    .matrix-count { font-weight: 700; display: block; }
+    .matrix-ha { font-size: 10px; display: block; color: inherit; opacity: .8; }
+    .matrix-meta { font-size: 11px; color: #94a3b8; margin-bottom: 8px; }
+
+    /* Cal */
+    .cal-controls { padding: 8px 0; }
+    .cal-controls select { padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; background: #fff; width: 100%; max-width: 300px; }
+    .cal-month { margin-bottom: 24px; }
+    .cal-month-label { font-weight: 700; color: #1e293b; margin-bottom: 8px; font-size: 14px; }
+    .cal-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .cal-table th { text-align: center; font-size: 11px; color: #94a3b8; padding: 4px 0; font-weight: 600; }
+    .cal-day { vertical-align: top; padding: 4px; border: 1px solid #f1f5f9; min-height: 44px; }
+    .cal-empty { border: 1px solid #f8fafc; background: #fafafa; }
+    .cal-day-num { font-size: 11px; color: #94a3b8; }
+    .cal-game { background: #dbeafe; border-radius: 3px; padding: 2px 4px; margin-top: 2px; font-size: 10px; line-height: 1.4; }
+    .cal-rematch { background: #fef9c3; }
+    .cal-day.has-game { background: #f0f9ff; }
+    .cal-day.is-blackout { background: #fef2f2; }
+    .cal-day.is-global-blackout { background: #fff8f1; }
+    .cal-opp { display: block; font-weight: 600; font-size: 10px; }
+    .cal-meta { display: block; font-size: 9px; color: #64748b; }
+    .cal-ha-label { font-size: 9px; font-weight: 700; }
+    .cal-ha-label.home { color: #1d4ed8; }
+    .cal-ha-label.away { color: #64748b; }
+    .cal-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; font-size: 11px; color: #64748b; }
+    .cal-legend-item { display: flex; align-items: center; gap: 4px; }
+    .cal-legend-swatch { width: 12px; height: 12px; border-radius: 2px; }
+    .cal-swatch-game { background: #dbeafe; }
+    .cal-swatch-blackout { background: #fef2f2; }
+    .cal-swatch-rematch { background: #fef9c3; }
+    .cal-swatch-global { background: #fff8f1; }
+
+    /* ── Fields view ─────────────────────────────────────────────────────── */
+    .field-date-group { margin-bottom: 20px; }
+    .field-date-header { font-size: 13px; font-weight: 700; color: #1e293b; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 6px 6px 0 0; padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; }
+    .field-date-header .fday-sat { color: #2d6cf0; }
+    .field-date-header .fday-wd  { color: #64748b; }
+    .field-date-count { font-size: 11px; font-weight: 500; color: #94a3b8; }
+    .field-games-table { width: 100%; border-collapse: collapse; font-size: 12px; background: #fff; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 6px 6px; overflow: hidden; }
+    .field-games-table th { background: #f8fafc; padding: 6px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #64748b; border-bottom: 1px solid #e2e8f0; }
+    .field-games-table td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+    .field-games-table tr:last-child td { border-bottom: none; }
+    .field-games-table tbody tr:hover { background: #f8fafc; }
+    .field-div-badge { display: inline-block; background: #e0e7ff; color: #3730a3; font-size: 10px; font-weight: 700; border-radius: 3px; padding: 1px 5px; white-space: nowrap; }
+    .field-utilization { font-size: 12px; color: #64748b; margin-bottom: 12px; }
+    .field-utilization strong { color: #1e293b; }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <header class="viewer-header">
+    <h1>Eastlake League</h1>
+    <a href="admin" class="admin-link">Admin ›</a>
+  </header>
+
+  <!-- Season info bar -->
+  <div id="season-bar" class="viewer-season-bar hidden"></div>
+
+  <!-- Division tabs -->
+  <div id="div-tabs-outer" class="div-tabs-outer hidden">
+    <nav id="division-tabs" class="div-tabs"></nav>
+  </div>
+
+  <!-- View + filter bar -->
+  <div id="vbar" class="vbar hidden">
+    <div class="vbar-btns">
+      <button class="vbar-btn active" data-view="games">Games</button>
+      <button class="vbar-btn" data-view="teams">Teams</button>
+      <button class="vbar-btn" data-view="matrix">Matrix</button>
+      <button class="vbar-btn" data-view="stats">Stats</button>
+      <button class="vbar-btn" data-view="calendar">Calendar</button>
+      <button class="vbar-btn" data-view="fields">Fields</button>
+    </div>
+    <select id="team-filter" class="vbar-select hidden">
+      <option value="">All teams</option>
+    </select>
+    <span id="game-count-badge" class="game-count-badge hidden"></span>
+    <select id="cal-team-select" class="vbar-select hidden"></select>
+    <select id="field-select" class="vbar-select hidden"></select>
+  </div>
+
+  <!-- Content -->
+  <div class="viewer-content">
+    <div id="loading-state" class="loading-state">Loading schedule…</div>
+
+    <div id="view-games" class="hidden">
+      <div class="games-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>Wk</th><th>Date</th><th>Day</th><th>Time</th>
+              <th>Home</th><th>Away</th><th>Field</th><th>Address</th>
+            </tr>
+          </thead>
+          <tbody id="games-tbody"></tbody>
+        </table>
+      </div>
+      <div id="games-cards" class="games-cards"></div>
+      <p id="no-games-msg" class="empty-state hidden">No games found.</p>
+    </div>
+
+    <div id="view-teams" class="hidden">
+      <div id="teams-grid" class="team-cards-grid"></div>
+    </div>
+
+    <div id="view-matrix" class="hidden">
+      <div id="matrix-wrapper"></div>
+    </div>
+
+    <div id="view-stats" class="hidden">
+      <div id="stats-wrapper"></div>
+    </div>
+
+    <div id="view-calendar" class="hidden">
+      <div id="calendar-wrapper"></div>
+    </div>
+
+    <div id="view-fields" class="hidden">
+      <div id="fields-wrapper"></div>
+    </div>
+  </div>
+
+  <script src="viewer.js"></script>
+</body>
+</html>

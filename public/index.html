@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eastlake League Scheduler</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Eastlake League Scheduler</h1>
+    <div class="header-actions">
+      <button id="btn-run" class="btn btn-primary">&#9654; Run Scheduler</button>
+      <button id="btn-upload" class="btn btn-secondary">&#8593; Upload season.json</button>
+      <a id="btn-csv" class="btn btn-secondary" href="api/export/csv" download>&#8595; Export CSV</a>
+    </div>
+  </header>
+  <nav id="top-nav">
+    <button class="top-nav-btn active" data-page="schedule">&#9776; Schedule</button>
+    <button class="top-nav-btn" data-page="teams">&#128101; Teams</button>
+    <button class="top-nav-btn" data-page="editor">&#9998; Editor</button>
+  </nav>
+
+  <input type="file" id="season-file-input" accept=".json,application/json" style="display:none">
+
+  <!-- Season info bar -->
+  <div id="season-bar" class="season-bar hidden">
+    <div class="season-bar-info">
+      <span id="season-bar-text"></span>
+      <a href="api/season/download" download="season.json" class="season-bar-link">Download season.json</a>
+    </div>
+    <div id="season-bar-divisions"></div>
+  </div>
+
+  <!-- Conflict / Failure Report -->
+  <div id="conflict-section" class="conflict-section hidden">
+    <h2>&#9888; Scheduling Conflicts</h2>
+    <div id="conflict-list"></div>
+  </div>
+
+  <!-- Success banner -->
+  <div id="success-banner" class="success-banner hidden">
+    <span id="success-text"></span>
+  </div>
+
+  <div id="page-schedule">
+  <!-- Division Tabs + Views -->
+  <div id="tabs-container" class="hidden">
+    <nav id="division-tabs" class="tabs"></nav>
+
+    <!-- View bar -->
+    <div class="view-bar">
+      <div class="view-btns">
+        <button class="view-btn active" data-view="games">&#9776; Games</button>
+        <button class="view-btn" data-view="teams">&#9632; Teams</button>
+        <button class="view-btn" data-view="matrix">&#9633; Matrix</button>
+        <button class="view-btn" data-view="stats">&#9650; Stats</button>
+        <button class="view-btn" data-view="calendar">&#128197; Calendar</button>
+      </div>
+      <!-- Games-view controls -->
+      <div id="games-controls" class="view-controls">
+        <label>Team:
+          <select id="team-filter">
+            <option value="">All teams</option>
+          </select>
+        </label>
+        <span id="game-count-label" class="game-count"></span>
+      </div>
+    </div>
+
+    <!-- GAMES VIEW -->
+    <div id="view-games" class="view-panel">
+      <div id="schedule-table-wrapper">
+        <table id="schedule-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Week</th>
+              <th>Date</th>
+              <th>Day</th>
+              <th>Time</th>
+              <th>Home Team</th>
+              <th>Away Team</th>
+              <th>Field</th>
+              <th>Address</th>
+            </tr>
+          </thead>
+          <tbody id="schedule-body"></tbody>
+        </table>
+        <p id="no-games-msg" class="no-games hidden">No games scheduled for this division yet.</p>
+      </div>
+    </div>
+
+    <!-- TEAMS VIEW -->
+    <div id="view-teams" class="view-panel hidden">
+      <div id="teams-grid"></div>
+    </div>
+
+    <!-- MATRIX VIEW -->
+    <div id="view-matrix" class="view-panel hidden">
+      <div id="matrix-wrapper"></div>
+    </div>
+
+    <!-- STATS VIEW -->
+    <div id="view-stats" class="view-panel hidden">
+      <div id="stats-wrapper"></div>
+    </div>
+
+    <!-- CALENDAR VIEW -->
+    <div id="view-calendar" class="view-panel hidden">
+      <div class="cal-controls">
+        <label>Team:
+          <select id="cal-team-select"></select>
+        </label>
+      </div>
+      <div id="calendar-wrapper"></div>
+    </div>
+  </div>
+
+  <div id="loading" class="loading hidden">Running scheduler&#8230;</div>
+  </div><!-- /#page-schedule -->
+
+  <div id="page-teams" class="page-section hidden">
+    <div id="teams-roster"></div>
+  </div>
+
+  <div id="page-editor" class="page-section hidden">
+    <div class="editor-toolbar">
+      <span class="editor-toolbar-title">Season Editor</span>
+      <a href="api/season/download" download="season.json" class="btn btn-secondary">&#8595; Download season.json</a>
+    </div>
+    <div id="season-editor-content"></div>
+  </div>
+
+  <!-- Game Edit Modal -->
+  <div id="game-edit-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Edit Game</h3>
+        <button id="modal-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-row">
+          <label>Date<select id="edit-date"></select></label>
+          <label>Time<input id="edit-time" type="text" placeholder="HH:MM"></label>
+        </div>
+        <div class="modal-row">
+          <label>Field<select id="edit-field"></select></label>
+        </div>
+        <div class="modal-row">
+          <label>Home Team<select id="edit-home"></select></label>
+          <label>Away Team<select id="edit-away"></select></label>
+        </div>
+      </div>
+      <div id="edit-violations" class="edit-violations hidden"></div>
+      <div class="modal-footer">
+        <button id="edit-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="edit-save" class="btn btn-primary">Save Changes</button>
+        <button id="edit-force" class="btn btn-warn hidden">Save Anyway</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
