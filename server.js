@@ -544,37 +544,6 @@ app.put('/api/game/:id', requireAdmin, (req, res) => {
   allChanges.push(changeRecord);
   try { fs.writeFileSync(CHANGES_FILE, JSON.stringify(allChanges, null, 2)); } catch {}
 
-  // Auto-email both coaches
-  if (changedFields.length) {
-    const emails = [changeRecord.home_team?.email, changeRecord.away_team?.email].filter(Boolean);
-    if (emails.length) {
-      const divName = changeRecord.division_name || changeRecord.division_id;
-      const subject = `Schedule Update: Game #${gameId} — ${divName}`;
-      const lines = [
-        `Hi coaches,`,
-        ``,
-        `A game has been updated by the league admin:`,
-        ``,
-        `Game #${gameId} — ${divName}`,
-        `${changeRecord.home_team?.name || 'Home'} (H) vs ${changeRecord.away_team?.name || 'Away'} (A)`,
-        ``,
-        `Changes made:`,
-        ...changedFields.map(f => `  ${f.field}: ${f.from} → ${f.to}`),
-        ``,
-        `Updated game details:`,
-        `  Date: ${updatedGame.day} ${updatedGame.date}`,
-        `  Time: ${updatedGame.time}`,
-        `  Field: ${updatedGame.field_name}`,
-        `  Address: ${updatedGame.field_address}`,
-        ``,
-        `Please update your calendars.`,
-        ``,
-        `— Eastlake League`,
-      ];
-      sendEmail({ to: emails, subject, text: lines.join('\n') }); // fire and forget
-    }
-  }
-
   res.json({ ok: true, game: updatedGame, violations, change: changeRecord });
 });
 
@@ -650,6 +619,37 @@ app.post('/api/change-request', requireAuth, (req, res) => {
 
   sendEmail({ to: EMAIL_REPLY_TO || ADMIN_EMAIL, subject, text: lines.join('\n') });
   res.json({ ok: true });
+});
+
+// Manually notify coaches of an existing change log entry
+app.post('/api/notify-change', requireAdmin, async (req, res) => {
+  const { change_id } = req.body;
+  let changes = [];
+  try { changes = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
+  const change = changes.find(c => c.id === change_id);
+  if (!change) return res.status(404).json({ error: 'Change not found' });
+
+  const emails = [change.home_team?.email, change.away_team?.email].filter(Boolean);
+  if (!emails.length) return res.status(400).json({ error: 'No email on file for either team' });
+
+  const divName = change.division_name || change.division_id;
+  const after   = change.after || {};
+  const lines   = [
+    'Hi coaches,', '',
+    'Your game has been updated by the league admin:', '',
+    `Game #${change.game_id} — ${divName}`,
+    `${change.home_team?.name || 'Home'} (H) vs ${change.away_team?.name || 'Away'} (A)`, '',
+    'Changes made:',
+    ...(change.changed_fields || []).map(f => `  ${f.field}: ${f.from} → ${f.to}`),
+    '', 'Current game info:',
+    `  Date: ${after.day || ''} ${after.date || ''}`,
+    `  Time: ${after.time || ''}`,
+    `  Field: ${after.field_name || ''}`,
+    '', 'Please update your calendars accordingly.', '', '— Eastlake League Admin',
+  ];
+  const result = await sendEmail({ to: emails, subject: `Schedule Update: Game #${change.game_id} — ${divName}`, text: lines.join('\n') });
+  if (!result.ok) return res.status(500).json({ error: result.reason });
+  res.json({ ok: true, sent_to: emails });
 });
 
 // ── Field CRUD (admin) ────────────────────────────────────────────────────────

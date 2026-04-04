@@ -848,17 +848,58 @@ function saveStep5AndContinue() {
 
 // Step 6 — Review & send
 function renderStep6() {
-  const mailto = buildMailtoLink();
   const preview = buildEmailBody();
   return `
     <p class="modal-q">Review your request</p>
-    <p style="font-size:13px;color:#64748b;margin-bottom:12px">Tap "Open Email App" to send this — your email app will open with the message ready to go.</p>
+    <p style="font-size:13px;color:#64748b;margin-bottom:12px">Check the details below, then tap Send to submit your request directly to the league admin.</p>
     <div class="modal-email-preview">${esc(preview)}</div>
-    <a href="${esc(mailto)}" class="modal-send-btn">📧 Open Email App</a>
+    <button class="modal-send-btn" id="cr-send-btn" onclick="submitChangeRequest()">📧 Send Request</button>
+    <div id="cr-send-status" style="font-size:13px;margin-top:8px;display:none"></div>
     <div class="modal-actions" style="margin-top:0">
       <button class="modal-btn modal-btn-secondary" onclick="setModalStep(5)">← Edit</button>
       <button class="modal-btn modal-btn-secondary" onclick="closeModal()">Done</button>
     </div>`;
+}
+
+async function submitChangeRequest() {
+  const btn = document.getElementById('cr-send-btn');
+  const status = document.getElementById('cr-send-status');
+  if (!btn || !crState) return;
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  const g = crState.game;
+  const divName = (seasonData?.divisions || []).find(d => d.id === g.division_id)?.name || g.division_id;
+  const issueLabel = ISSUE_OPTS.find(o => o.value === crState.issue)?.label || crState.issue;
+  const body = {
+    game_id:         g.game_id,
+    reason:          issueLabel,
+    details:         buildEmailBody(),
+    preferred_date:  crState.details?.available || crState.details?.preferred_date || '',
+    preferred_time:  crState.details?.preferred_time || '',
+    preferred_field: crState.details?.alt_field || '',
+  };
+  try {
+    const r = await fetch('api/change-request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (d.ok) {
+      btn.style.display = 'none';
+      status.style.display = '';
+      status.style.color = '#16a34a';
+      status.textContent = '✓ Request sent! The league admin will be in touch.';
+    } else {
+      btn.disabled = false;
+      btn.textContent = '📧 Send Request';
+      status.style.display = '';
+      status.style.color = '#dc2626';
+      status.textContent = 'Failed to send: ' + (d.error || 'unknown error');
+    }
+  } catch {
+    btn.disabled = false;
+    btn.textContent = '📧 Send Request';
+    status.style.display = '';
+    status.style.color = '#dc2626';
+    status.textContent = 'Network error — please try again.';
+  }
 }
 
 function buildEmailBody() {
@@ -901,14 +942,6 @@ function buildEmailBody() {
   return lines.join('\n');
 }
 
-function buildMailtoLink() {
-  const g = crState.game;
-  const divName = (seasonData?.divisions || []).find(d => d.id === g.division_id)?.name || g.division_id;
-  const to = session?.request_to || '';
-  const subject = `Game Change Request — ${divName} W${g.week}: ${g.home_team_name} vs ${g.away_team_name} (${formatDate(g.date)})`;
-  const body = buildEmailBody();
-  return `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-}
 
 // ── CSV Exports ───────────────────────────────────────────────────────────────
 function downloadCSV(filename, rows) {

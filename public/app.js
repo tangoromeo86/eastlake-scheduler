@@ -1159,33 +1159,21 @@ function showNotifyPanel(change) {
   }).join('');
   document.getElementById('notify-team-cards').innerHTML = cards;
 
-  // Build mailto link
+  // Wire up send button
   const emails = [change.home_team?.email, change.away_team?.email].filter(Boolean);
+  const emailBtn = document.getElementById('notify-email-btn');
   if (emails.length) {
-    const subject = `Schedule Update: Game #${change.game_id} — ${change.division_name}`;
-    const after = change.after;
-    const lines = ['Hi coaches,', '',
-      `Your game has been updated:`, '',
-      `Game #${change.game_id} — ${change.division_name}`,
-      `  ${change.home_team?.name || 'Home'} (H) vs ${change.away_team?.name || 'Away'} (A)`, '',
-      'Updated details:',
-    ];
-    for (const c of change.changed_fields) {
-      lines.push(`  ${fieldLabel(c.field)}: ${formatFieldValue(c.field, c.from)} → ${formatFieldValue(c.field, c.to)}`);
-    }
-    lines.push('');
-    lines.push(`Current game info:`);
-    lines.push(`  Date: ${after.day} ${formatDate(after.date)}`);
-    lines.push(`  Time: ${formatTime12h(after.time)}`);
-    lines.push(`  Field: ${after.field_name}`);
-    lines.push('');
-    lines.push('Please update your calendars accordingly.');
-    lines.push('');
-    lines.push('— Eastlake League Admin');
-    const body = lines.join('\n');
-    const href = `mailto:${emails.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    const emailBtn = document.getElementById('notify-email-btn');
-    emailBtn.href = href;
+    emailBtn.onclick = async (e) => {
+      e.preventDefault();
+      emailBtn.textContent = 'Sending…';
+      emailBtn.style.pointerEvents = 'none';
+      try {
+        const r = await fetch('api/notify-change', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ change_id: change.id }) });
+        const d = await r.json();
+        if (d.ok) { emailBtn.textContent = '✓ Sent'; emailBtn.style.background = '#16a34a'; }
+        else { emailBtn.textContent = '✗ Failed — ' + (d.error || 'error'); emailBtn.style.pointerEvents = ''; }
+      } catch { emailBtn.textContent = '✗ Network error'; emailBtn.style.pointerEvents = ''; }
+    };
     emailBtn.classList.remove('hidden');
   }
 
@@ -1239,25 +1227,6 @@ async function renderChangesPage() {
     };
 
     const emails = [c.home_team?.email, c.away_team?.email].filter(Boolean);
-    let resendHref = '#';
-    if (emails.length && c.after) {
-      const subject = `Schedule Update: Game #${c.game_id} — ${c.division_name}`;
-      const lines = ['Hi coaches,', '',
-        `Your game has been updated:`, '',
-        `Game #${c.game_id} — ${c.division_name}`,
-        `  ${c.home_team?.name || 'Home'} (H) vs ${c.away_team?.name || 'Away'} (A)`, '',
-        'Updated details:',
-      ];
-      for (const f of (c.changed_fields || [])) {
-        lines.push(`  ${fieldLabel(f.field)}: ${formatFieldValue(f.field, f.from)} → ${formatFieldValue(f.field, f.to)}`);
-      }
-      lines.push('', `Current game info:`,
-        `  Date: ${c.after.day} ${formatDate(c.after.date)}`,
-        `  Time: ${formatTime12h(c.after.time)}`,
-        `  Field: ${c.after.field_name}`, '',
-        'Please update your calendars accordingly.', '', '— Eastlake League Admin');
-      resendHref = `mailto:${emails.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(lines.join('\n'))}`;
-    }
 
     return `<div class="change-entry">
       <div class="change-entry-header">
@@ -1268,10 +1237,25 @@ async function renderChangesPage() {
       </div>
       <div class="change-fields">${pills}</div>
       <div class="change-teams">${teamCard(c.home_team, 'H')}${teamCard(c.away_team, 'A')}</div>
-      ${emails.length ? `<div class="change-entry-actions"><a class="change-resend" href="${resendHref}" target="_blank">&#9993; Resend Email</a></div>` : ''}
+      ${emails.length ? `<div class="change-entry-actions"><button class="change-resend" data-change-id="${c.id}">&#9993; Notify Coaches</button></div>` : ''}
     </div>`;
   }).join('');
 }
+
+// Delegate click on change log notify buttons
+document.getElementById('changes-content').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.change-resend[data-change-id]');
+  if (!btn) return;
+  const changeId = parseInt(btn.dataset.changeId, 10);
+  btn.textContent = 'Sending…';
+  btn.disabled = true;
+  try {
+    const r = await fetch('api/notify-change', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ change_id: changeId }) });
+    const d = await r.json();
+    if (d.ok) { btn.textContent = '✓ Sent'; btn.style.color = '#16a34a'; btn.style.borderColor = '#16a34a'; }
+    else { btn.textContent = '✗ ' + (d.error || 'Failed'); btn.disabled = false; }
+  } catch { btn.textContent = '✗ Network error'; btn.disabled = false; }
+});
 
 function updateChangesBadge() {
   fetchJSON('api/changes').then(changes => {
