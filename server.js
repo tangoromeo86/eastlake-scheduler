@@ -141,8 +141,12 @@ function loginPage(next) {
   </div>
 
   <script>
-    const BASE = ${JSON.stringify(BASE_PATH)};
     const NEXT = ${JSON.stringify(next || '')};
+    // Derive base path from current URL (works under any nginx prefix)
+    function pageBase() {
+      const p = window.location.pathname;
+      return p.substring(0, p.lastIndexOf('/') + 1);
+    }
 
     const emailInput   = document.getElementById('email-input');
     const pwInput      = document.getElementById('pw-input');
@@ -162,7 +166,7 @@ function loginPage(next) {
       continueBtn.disabled = true;
       continueBtn.textContent = 'Checking…';
       try {
-        const res  = await fetch(BASE + '/api/auth/check-email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+        const res  = await fetch('api/auth/check-email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
         const data = await res.json();
         if (!data.found) {
           showError('Email not recognized. Please check and try again.');
@@ -179,9 +183,9 @@ function loginPage(next) {
           pwInput.focus();
         } else {
           continueBtn.textContent = 'Signing in…';
-          const lr   = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+          const lr   = await fetch('api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
           const ld   = await lr.json();
-          if (ld.ok) { window.location = ld.redirect || BASE + '/'; }
+          if (ld.ok) { window.location = pageBase(); }
           else { showError(ld.error || 'Login failed. Try again.'); continueBtn.disabled = false; continueBtn.textContent = 'Continue'; }
         }
       } catch { showError('Something went wrong. Please try again.'); continueBtn.disabled = false; continueBtn.textContent = 'Continue'; }
@@ -195,9 +199,9 @@ function loginPage(next) {
       signinBtn.disabled = true;
       signinBtn.textContent = 'Signing in…';
       try {
-        const res  = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pw, next: NEXT }) });
+        const res  = await fetch('api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pw, next: NEXT }) });
         const data = await res.json();
-        if (data.ok) { window.location = data.redirect || BASE + '/'; }
+        if (data.ok) { window.location = NEXT === 'admin' ? pageBase() + 'admin' : pageBase(); }
         else { showError(data.error || 'Incorrect password.'); signinBtn.disabled = false; signinBtn.textContent = 'Sign In'; pwInput.focus(); pwInput.select(); }
       } catch { showError('Something went wrong. Please try again.'); signinBtn.disabled = false; signinBtn.textContent = 'Sign In'; }
     }
