@@ -27,6 +27,8 @@
     .vbar-btn.active { background: #fff; color: #1a1a2e; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
     .vbar-select { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; background: #fff; max-width: 200px; flex: 1; }
     .game-count-badge { font-size: 12px; color: #94a3b8; white-space: nowrap; margin-left: 4px; }
+    .export-btn { font-size: 12px; color: #16a34a; background: none; border: 1px solid #16a34a; border-radius: 5px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
+    .export-btn:hover { background: #f0fdf4; }
 
     /* Content area */
     .viewer-content { max-width: 900px; margin: 0 auto; padding: 12px 12px 60px; }
@@ -256,8 +258,10 @@
       <option value="">All teams</option>
     </select>
     <span id="game-count-badge" class="game-count-badge hidden"></span>
+    <button id="team-export-btn" class="export-btn hidden">↓ Export CSV</button>
     <select id="cal-team-select" class="vbar-select hidden"></select>
     <select id="field-select" class="vbar-select hidden"></select>
+    <button id="field-export-btn" class="export-btn hidden">↓ Export CSV</button>
   </div>
 
   <!-- Content -->

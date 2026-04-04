@@ -125,22 +125,26 @@ document.querySelectorAll('.vbar-btn').forEach(btn => {
 });
 
 function syncFilterVisibility() {
-  const tf = document.getElementById('team-filter');
-  const gc = document.getElementById('game-count-badge');
-  const cs = document.getElementById('cal-team-select');
-  const fs = document.getElementById('field-select');
+  const tf  = document.getElementById('team-filter');
+  const gc  = document.getElementById('game-count-badge');
+  const teb = document.getElementById('team-export-btn');
+  const cs  = document.getElementById('cal-team-select');
+  const fs  = document.getElementById('field-select');
+  const feb = document.getElementById('field-export-btn');
   if (activeView === 'games') {
-    tf.classList.remove('hidden'); gc.classList.remove('hidden');
-    cs.classList.add('hidden');    fs.classList.add('hidden');
+    tf.classList.remove('hidden');  gc.classList.remove('hidden');
+    cs.classList.add('hidden');     fs.classList.add('hidden');     feb.classList.add('hidden');
+    // team export only visible when a specific team is selected
+    teb.classList.toggle('hidden', !tf.value);
   } else if (activeView === 'calendar') {
-    tf.classList.add('hidden');  gc.classList.add('hidden');
-    cs.classList.remove('hidden'); fs.classList.add('hidden');
+    tf.classList.add('hidden');     gc.classList.add('hidden');     teb.classList.add('hidden');
+    cs.classList.remove('hidden');  fs.classList.add('hidden');     feb.classList.add('hidden');
   } else if (activeView === 'fields') {
-    tf.classList.add('hidden');  gc.classList.add('hidden');
-    cs.classList.add('hidden');  fs.classList.remove('hidden');
+    tf.classList.add('hidden');     gc.classList.add('hidden');     teb.classList.add('hidden');
+    cs.classList.add('hidden');     fs.classList.remove('hidden');  feb.classList.remove('hidden');
   } else {
-    tf.classList.add('hidden');  gc.classList.add('hidden');
-    cs.classList.add('hidden');  fs.classList.add('hidden');
+    tf.classList.add('hidden');     gc.classList.add('hidden');     teb.classList.add('hidden');
+    cs.classList.add('hidden');     fs.classList.add('hidden');     feb.classList.add('hidden');
   }
 }
 
@@ -188,6 +192,22 @@ function populateTeamFilter() {
 document.getElementById('team-filter').addEventListener('change', () => {
   if (!scheduleData || activeView !== 'games') return;
   renderGames((scheduleData.games || []).filter(g => g.division_id === activeDivision));
+  syncFilterVisibility();
+});
+
+document.getElementById('team-export-btn').addEventListener('click', () => {
+  const sel = document.getElementById('team-filter');
+  const rawVal = sel.value;
+  if (!rawVal) return;
+  const teamId = isNaN(parseInt(rawVal, 10)) ? rawVal : parseInt(rawVal, 10);
+  const teamName = sel.options[sel.selectedIndex]?.text || 'team';
+  exportTeamCSV(teamId, teamName);
+});
+
+document.getElementById('field-export-btn').addEventListener('click', () => {
+  const sel = document.getElementById('field-select');
+  const fieldName = sel.value || 'all-fields';
+  exportFieldCSV(fieldName);
 });
 
 // ── GAMES VIEW ────────────────────────────────────────────────────────────────
@@ -818,6 +838,68 @@ function buildMailtoLink() {
   const subject = `Game Change Request — ${divName} W${g.week}: ${g.home_team_name} vs ${g.away_team_name} (${formatDate(g.date)})`;
   const body = buildEmailBody();
   return `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+// ── CSV Exports ───────────────────────────────────────────────────────────────
+function downloadCSV(filename, rows) {
+  const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function exportTeamCSV(teamId, teamName) {
+  const allGames = scheduleData?.games || [];
+  const myGames = allGames
+    .filter(g => g.home_team_id === teamId || g.away_team_id === teamId)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+  const divNames = Object.fromEntries((seasonData?.divisions || []).map(d => [d.id, d.name || d.label || d.id]));
+
+  const rows = [['Week', 'Date', 'Day', 'Time', 'Home/Away', 'Opponent', 'Field', 'Address', 'Division']];
+  for (const g of myGames) {
+    const isHome = g.home_team_id === teamId;
+    rows.push([
+      'W' + g.week,
+      formatDate(g.date),
+      g.day,
+      formatTime12h(g.time),
+      isHome ? 'Home' : 'Away',
+      isHome ? g.away_team_name : g.home_team_name,
+      g.field_name,
+      g.field_address || '',
+      divNames[g.division_id] || g.division_id,
+    ]);
+  }
+  const safeName = teamName.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+  downloadCSV(`${safeName}-schedule.csv`, rows);
+}
+
+function exportFieldCSV(fieldName) {
+  const allGames = [...(scheduleData?.games || [])]
+    .filter(g => !fieldName || fieldName === 'all-fields' || g.field_name === fieldName)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+  const divNames = Object.fromEntries((seasonData?.divisions || []).map(d => [d.id, d.name || d.label || d.id]));
+
+  const rows = [['Date', 'Day', 'Time', 'Division', 'Home Team', 'Away Team', 'Field', 'Address']];
+  for (const g of allGames) {
+    rows.push([
+      formatDate(g.date),
+      g.day,
+      formatTime12h(g.time),
+      divNames[g.division_id] || g.division_id,
+      g.home_team_name,
+      g.away_team_name,
+      g.field_name,
+      g.field_address || '',
+    ]);
+  }
+  const safeField = (fieldName === 'all-fields' ? 'all-fields' : fieldName).replace(/[^a-z0-9]/gi, '-').toLowerCase();
+  downloadCSV(`field-schedule-${safeField}.csv`, rows);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
