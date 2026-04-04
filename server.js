@@ -467,11 +467,15 @@ app.put('/api/game/:id', requireAdmin, (req, res) => {
   const homeTeam = (seasonData.teams || []).find(t => t.id === home_team_id);
   const awayTeam = (seasonData.teams || []).find(t => t.id === away_team_id);
 
+  const isSat = dayName(date) === 'Saturday';
+  const resolvedFieldName    = fieldObj ? (isSat ? (fieldObj.weekend_venue    || fieldObj.name    || field_id) : (fieldObj.name    || field_id)) : field_id;
+  const resolvedFieldAddress = fieldObj ? (isSat ? (fieldObj.weekend_address  || fieldObj.address || '')       : (fieldObj.address || ''))       : '';
+
   const updatedGame = {
     ...existingGame,
     date, day: dayName(date), time, field_id,
-    field_name:    fieldObj ? (fieldObj.name || field_id) : field_id,
-    field_address: fieldObj ? (fieldObj.address || '') : '',
+    field_name:    resolvedFieldName,
+    field_address: resolvedFieldAddress,
     home_team_id,  home_team_name: homeTeam ? teamName(homeTeam) : String(home_team_id),
     away_team_id,  away_team_name: awayTeam ? teamName(awayTeam) : String(away_team_id),
     week: newWeek,
@@ -607,6 +611,24 @@ app.put('/api/season/fields/:id', requireAdmin, (req, res) => {
   fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+
+  // Re-resolve field names in schedule.json for all games using this field
+  if (fs.existsSync(SCHEDULE_FILE)) {
+    try {
+      const sched = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8'));
+      let changed = false;
+      for (const g of sched.games || []) {
+        if (String(g.field_id) === req.params.id) {
+          const isSat = g.day === 'Saturday';
+          g.field_name    = isSat ? (updated.weekend_venue    || updated.name    || g.field_id) : (updated.name    || g.field_id);
+          g.field_address = isSat ? (updated.weekend_address  || updated.address || '')          : (updated.address || '');
+          changed = true;
+        }
+      }
+      if (changed) fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(sched, null, 2));
+    } catch {} // schedule update is best-effort; don't fail the field save
+  }
+
   res.json({ ok: true, field: updated });
 });
 
