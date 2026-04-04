@@ -68,6 +68,12 @@ function updateHeader() {
   } else {
     el.innerHTML = `<a href="login" class="header-link">Sign in</a>`;
   }
+  // Matrix and Stats are admin-only views
+  const isAdmin = session && session.role === 'admin';
+  ['matrix','stats'].forEach(v => {
+    const btn = document.querySelector(`.vbar-btn[data-view="${v}"]`);
+    if (btn) btn.classList.toggle('hidden', !isAdmin);
+  });
 }
 
 // ── Season bar ────────────────────────────────────────────────────────────────
@@ -398,7 +404,7 @@ function populateCalTeamSelect() {
   const teams = getDivTeams(activeDivision);
   const sel = document.getElementById('cal-team-select');
   const prev = sel.value;
-  sel.innerHTML = '';
+  sel.innerHTML = '<option value="all">All teams</option>';
   teams.forEach(t => {
     const opt = document.createElement('option');
     opt.value = t.id; opt.textContent = teamLabel(t);
@@ -417,6 +423,28 @@ function renderCalendarView(divGames, divTeams) {
   const wrapper = document.getElementById('calendar-wrapper');
   if (!divTeams.length) { wrapper.innerHTML = '<p class="empty-state">No teams found.</p>'; return; }
   const rawVal = document.getElementById('cal-team-select').value;
+  const months = [
+    { year: 2026, month: 4, label: 'April 2026' },
+    { year: 2026, month: 5, label: 'May 2026' },
+    { year: 2026, month: 6, label: 'June 2026' },
+  ];
+
+  if (rawVal === 'all') {
+    const byDate = {};
+    divGames.forEach(g => { (byDate[g.date] = byDate[g.date] || []).push(g); });
+    const globalBo = new Set(seasonData?.season?.blackout_dates || []);
+    for (const w of (seasonData?.season?.blackout_weekends || [])) {
+      (w.dates || []).forEach(d => globalBo.add(d));
+      if (w.saturday) globalBo.add(w.saturday);
+    }
+    const legend = `<div class="cal-legend">
+      <span class="cal-legend-item"><span class="cal-legend-swatch cal-swatch-game"></span> Game</span>
+      <span class="cal-legend-item"><span class="cal-legend-swatch cal-swatch-rematch"></span> Rematch</span>
+    </div>`;
+    wrapper.innerHTML = legend + months.map(m => renderCalMonthAll(m.year, m.month, m.label, byDate, globalBo)).join('');
+    return;
+  }
+
   const teamId = isNaN(parseInt(rawVal,10)) ? rawVal : parseInt(rawVal,10);
   const team = divTeams.find(t => t.id === teamId) || divTeams[0];
   if (!team) { wrapper.innerHTML = '<p class="empty-state">Select a team.</p>'; return; }
@@ -430,11 +458,6 @@ function renderCalendarView(divGames, divTeams) {
     if (w.saturday) blackouts.add(w.saturday);
   }
   globalBo.forEach(d => blackouts.add(d));
-  const months = [
-    { year: 2026, month: 4, label: 'April 2026' },
-    { year: 2026, month: 5, label: 'May 2026' },
-    { year: 2026, month: 6, label: 'June 2026' },
-  ];
   const legend = `<div class="cal-legend">
     <span class="cal-legend-item"><span class="cal-legend-swatch cal-swatch-game"></span> Game</span>
     <span class="cal-legend-item"><span class="cal-legend-swatch cal-swatch-rematch"></span> Rematch</span>
@@ -459,6 +482,38 @@ function renderCalMonth(year, month, label, byDate, teamId, blackouts) {
       const ha = isHome ? '<span class="cal-ha-label home">H</span>' : '<span class="cal-ha-label away">A</span>';
       return `<div class="cal-game${g.is_rematch ? ' cal-rematch' : ''}">${ha}<span class="cal-opp">${opp}</span><span class="cal-meta">${formatTime12h(g.time)}</span></div>`;
     }).join('');
+    let cls = 'cal-day';
+    if (games.length) cls += ' has-game';
+    if (isBlackout && !games.length) cls += ' is-blackout';
+    cells.push(`<td class="${cls}"><span class="cal-day-num">${d}</span>${gameHtml}</td>`);
+  }
+  const remaining = (7 - (cells.length % 7)) % 7;
+  for (let i = 0; i < remaining; i++) cells.push('<td class="cal-empty"></td>');
+  const rows = [];
+  for (let i = 0; i < cells.length; i += 7) rows.push('<tr>' + cells.slice(i, i+7).join('') + '</tr>');
+  return `<div class="cal-month"><div class="cal-month-label">${label}</div>
+    <table class="cal-table">
+      <thead><tr>${DAY_HEADS.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table></div>`;
+}
+
+function renderCalMonthAll(year, month, label, byDate, blackouts) {
+  const firstDow = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const DAY_HEADS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push('<td class="cal-empty"></td>');
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = year + '-' + String(month).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+    const games = (byDate[dateStr] || []).slice().sort((a, b) => a.time.localeCompare(b.time));
+    const isBlackout = blackouts.has(dateStr);
+    const gameHtml = games.map(g =>
+      `<div class="cal-game${g.is_rematch ? ' cal-rematch' : ''}">
+        <span class="cal-opp">${esc(g.home_team_name)} vs ${esc(g.away_team_name)}</span>
+        <span class="cal-meta">${formatTime12h(g.time)} · ${esc(g.field_name)}</span>
+      </div>`
+    ).join('');
     let cls = 'cal-day';
     if (games.length) cls += ' has-game';
     if (isBlackout && !games.length) cls += ' is-blackout';
