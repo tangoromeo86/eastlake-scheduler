@@ -293,29 +293,26 @@ function renderTeamsView(divGames, divTeams) {
     const myGames = sorted.filter(g => g.home_team_id === team.id || g.away_team_id === team.id);
     const homeCount = myGames.filter(g => g.home_team_id === team.id).length;
     const awayCount = myGames.filter(g => g.away_team_id === team.id).length;
-    const rows = myGames.map(g => {
+
+    const gameRows = myGames.map(g => {
       const isHome = g.home_team_id === team.id;
-      const opp = isHome ? g.away_team_name : g.home_team_name;
-      const ha = isHome ? '<span class="ha-home">H</span>' : '<span class="ha-away">A</span>';
-      return `<tr>
-        <td>W${g.week}</td>
-        <td>${formatDate(g.date)}</td>
-        <td>${g.day.slice(0,3)}</td>
-        <td>${formatTime12h(g.time)}</td>
-        <td>${ha}</td>
-        <td>${esc(opp)}</td>
-        <td style="color:#94a3b8;font-size:11px">${esc(g.field_name)}</td>
-      </tr>`;
+      const opp    = esc(isHome ? g.away_team_name : g.home_team_name);
+      const ha     = isHome ? '<span class="ha-home">H</span>' : '<span class="ha-away">A</span>';
+      const dt     = `${g.day.slice(0,3)} ${formatDate(g.date)} · ${formatTime12h(g.time)}`;
+      return `<div class="tgame">
+        <div class="tgame-main">${ha}<span class="tgame-opp">${opp}</span><span class="tgame-dt">${dt}</span></div>
+        <div class="tgame-field">📍 ${esc(g.field_name)}</div>
+      </div>`;
     }).join('');
 
-    // Contact info block — only shown when authenticated
+    // Contact info — only shown when authenticated
     let contactHtml = '';
     if (session && (team.coach || team.email || team.phone)) {
       const parts = [];
       if (team.coach) parts.push(`<span style="font-weight:600">${esc(team.coach)}</span>`);
       if (team.email) parts.push(`<a href="mailto:${esc(team.email)}" style="color:#2d6cf0">${esc(team.email)}</a>`);
       if (team.phone) parts.push(`<a href="tel:${esc(team.phone)}" style="color:#64748b">${esc(team.phone)}</a>`);
-      contactHtml = `<div style="padding:8px 14px;font-size:12px;background:#f0f9ff;border-top:1px solid #e2e8f0;display:flex;flex-wrap:wrap;gap:10px">${parts.join('<span style="color:#cbd5e1">·</span>')}</div>`;
+      contactHtml = `<div style="padding:8px 14px;font-size:12px;background:#f0f9ff;border-bottom:1px solid #e2e8f0;display:flex;flex-wrap:wrap;gap:10px;align-items:center">${parts.join('<span style="color:#cbd5e1;margin:0 2px">·</span>')}</div>`;
     }
 
     return `<div class="tcard">
@@ -324,10 +321,7 @@ function renderTeamsView(divGames, divTeams) {
         <span class="tcard-meta">${myGames.length} games · ${homeCount}H ${awayCount}A</span>
       </div>
       ${contactHtml}
-      <table>
-        <thead><tr><th>Wk</th><th>Date</th><th>Day</th><th>Time</th><th></th><th>Opponent</th><th>Field</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      ${gameRows || '<div class="tgame" style="color:#94a3b8;font-size:12px">No games scheduled</div>'}
     </div>`;
   }).join('');
   document.getElementById('teams-grid').innerHTML = cards || '<p class="empty-state">No team data available.</p>';
