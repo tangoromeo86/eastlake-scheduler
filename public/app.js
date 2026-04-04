@@ -17,9 +17,11 @@ document.querySelectorAll('.top-nav-btn').forEach(btn => {
     document.getElementById('page-teams').classList.toggle('hidden', currentPage !== 'teams');
     document.getElementById('page-editor').classList.toggle('hidden', currentPage !== 'editor');
     document.getElementById('page-changes').classList.toggle('hidden', currentPage !== 'changes');
+    document.getElementById('page-fields').classList.toggle('hidden', currentPage !== 'fields');
     if (currentPage === 'teams') renderTeamsPage();
     if (currentPage === 'editor') renderSeasonEditor();
     if (currentPage === 'changes') renderChangesPage();
+    if (currentPage === 'fields') renderFieldsPage();
   });
 });
 
@@ -1284,5 +1286,118 @@ document.getElementById('btn-clear-changes').addEventListener('click', async () 
   document.getElementById('nav-changes').textContent = '📋 Changes';
   renderChangesPage();
 });
+
+// ── FIELDS PAGE ───────────────────────────────────────────────────────────────
+let editingFieldId = null;
+
+function renderFieldsPage() {
+  const fields = seasonData?.fields || [];
+  const teams  = seasonData?.teams  || [];
+  const list = document.getElementById('fields-list');
+
+  // Count how many teams use each field
+  const usageCount = {};
+  teams.forEach(t => {
+    if (t.home_field_id) usageCount[t.home_field_id] = (usageCount[t.home_field_id] || 0) + 1;
+    if (t.home_field_saturday_id) usageCount[t.home_field_saturday_id] = (usageCount[t.home_field_saturday_id] || 0) + 1;
+  });
+
+  if (!fields.length) {
+    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No fields defined. Add one above.</p>';
+    return;
+  }
+
+  list.innerHTML = `<table class="fields-table">
+    <thead><tr>
+      <th>ID</th><th>Weekday Name</th><th>Weekday Address</th>
+      <th>Weekend Override</th><th>Used By</th><th></th>
+    </tr></thead>
+    <tbody>
+    ${fields.map(f => {
+      const usage = usageCount[f.id] || 0;
+      const hasWeekend = f.weekend_venue || f.weekend_address;
+      return `<tr>
+        <td style="color:#94a3b8;font-size:11px">${esc(String(f.id))}</td>
+        <td><strong>${esc(f.name)}</strong></td>
+        <td>${esc(f.address || '—')}</td>
+        <td>${hasWeekend
+          ? `<span class="field-wknd-badge">Weekend</span> ${esc(f.weekend_venue || f.name)}`
+          : '<span style="color:#cbd5e1">—</span>'}</td>
+        <td>${usage ? `<span class="field-used-badge">${usage} team${usage !== 1 ? 's' : ''}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
+        <td><div class="field-row-actions">
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteField('${String(f.id)}','${esc(f.name)}')">Delete</button>
+        </div></td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table>`;
+}
+
+function openFieldAdd() {
+  editingFieldId = null;
+  document.getElementById('field-form-title').textContent = 'Add Field';
+  document.getElementById('ffe-name').value = '';
+  document.getElementById('ffe-address').value = '';
+  document.getElementById('ffe-wknd-name').value = '';
+  document.getElementById('ffe-wknd-addr').value = '';
+  document.getElementById('ffe-error').classList.add('hidden');
+  document.getElementById('field-editor-form').classList.remove('hidden');
+  document.getElementById('ffe-name').focus();
+}
+
+function openFieldEdit(fieldId) {
+  const field = (seasonData?.fields || []).find(f => String(f.id) === fieldId);
+  if (!field) return;
+  editingFieldId = fieldId;
+  document.getElementById('field-form-title').textContent = 'Edit Field';
+  document.getElementById('ffe-name').value = field.name || '';
+  document.getElementById('ffe-address').value = field.address || '';
+  document.getElementById('ffe-wknd-name').value = field.weekend_venue || '';
+  document.getElementById('ffe-wknd-addr').value = field.weekend_address || '';
+  document.getElementById('ffe-error').classList.add('hidden');
+  document.getElementById('field-editor-form').classList.remove('hidden');
+  document.getElementById('ffe-name').focus();
+}
+
+document.getElementById('btn-add-field').addEventListener('click', openFieldAdd);
+
+document.getElementById('ffe-cancel').addEventListener('click', () => {
+  document.getElementById('field-editor-form').classList.add('hidden');
+});
+
+document.getElementById('ffe-save').addEventListener('click', async () => {
+  const errEl = document.getElementById('ffe-error');
+  errEl.classList.add('hidden');
+  const body = {
+    name:            document.getElementById('ffe-name').value.trim(),
+    address:         document.getElementById('ffe-address').value.trim(),
+    weekend_venue:   document.getElementById('ffe-wknd-name').value.trim(),
+    weekend_address: document.getElementById('ffe-wknd-addr').value.trim(),
+  };
+  if (!body.name) { errEl.textContent = 'Field name is required.'; errEl.classList.remove('hidden'); return; }
+  const url    = editingFieldId ? `api/season/fields/${editingFieldId}` : 'api/season/fields';
+  const method = editingFieldId ? 'PUT' : 'POST';
+  try {
+    const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
+    // Refresh seasonData fields
+    seasonData = await fetchJSON('api/season');
+    document.getElementById('field-editor-form').classList.add('hidden');
+    renderFieldsPage();
+  } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
+});
+
+async function deleteField(fieldId, fieldName) {
+  if (!confirm(`Delete field "${fieldName}"? This cannot be undone.`)) return;
+  try {
+    const res  = await fetch(`api/season/fields/${fieldId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    seasonData = await fetchJSON('api/season');
+    renderFieldsPage();
+  } catch (e) { alert('Network error. Try again.'); }
+}
 
 init();

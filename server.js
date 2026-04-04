@@ -570,6 +570,60 @@ app.patch('/api/division/:id', requireAdmin, (req, res) => {
   res.json({ ok: true, division: div });
 });
 
+// ── Field CRUD (admin) ────────────────────────────────────────────────────────
+
+app.post('/api/season/fields', requireAdmin, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const { name, address, weekend_venue, weekend_address } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Field name is required' });
+  const f = { id: 'field-' + Date.now(), name: name.trim(), address: (address || '').trim() };
+  if (weekend_venue?.trim()) f.weekend_venue = weekend_venue.trim();
+  if (weekend_address?.trim()) f.weekend_address = weekend_address.trim();
+  data.fields = [...(data.fields || []), f];
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true, field: f });
+});
+
+app.put('/api/season/fields/:id', requireAdmin, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const idx = (data.fields || []).findIndex(f => String(f.id) === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Field not found' });
+  const { name, address, weekend_venue, weekend_address } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Field name is required' });
+  const updated = { ...data.fields[idx], name: name.trim(), address: (address || '').trim() };
+  if (weekend_venue?.trim()) updated.weekend_venue = weekend_venue.trim();
+  else delete updated.weekend_venue;
+  if (weekend_address?.trim()) updated.weekend_address = weekend_address.trim();
+  else delete updated.weekend_address;
+  data.fields[idx] = updated;
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true, field: updated });
+});
+
+app.delete('/api/season/fields/:id', requireAdmin, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const before = (data.fields || []).length;
+  data.fields = (data.fields || []).filter(f => String(f.id) !== req.params.id);
+  if (data.fields.length === before) return res.status(404).json({ error: 'Field not found' });
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true });
+});
+
 // ── CSV parser ────────────────────────────────────────────────────────────────
 function parseCSV(text) {
   const rows = [];

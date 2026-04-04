@@ -960,3 +960,43 @@ header h1 {
 .div-target-wrap { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 400; font-size: 12px; color: #64748b; }
 .div-target-input { width: 52px; padding: 3px 6px; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 4px; text-align: center; }
 .div-target-hint { color: #94a3b8; }
+
+/* ── Field editor ────────────────────────────────────────────────────────── */
+.field-editor-form { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; margin: 0 0 16px; overflow: hidden; }
+.field-form-inner { padding: 20px; }
+.field-form-inner h3 { font-size: 15px; font-weight: 700; margin-bottom: 14px; color: #1e293b; }
+.field-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.field-form-row label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: #374151; }
+.field-form-row input { padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }
+.field-form-hint { font-weight: 400; color: #94a3b8; }
+.field-form-actions { display: flex; gap: 8px; margin-top: 16px; }
+.field-form-error { color: #dc2626; font-size: 12px; margin-top: 8px; padding: 6px 10px; background: #fef2f2; border-radius: 5px; }
+
+.fields-table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; font-size: 13px; }
+.fields-table th { background: #f8fafc; padding: 9px 12px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #64748b; border-bottom: 1px solid #e2e8f0; }
+.fields-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+.fields-table tr:last-child td { border-bottom: none; }
+.fields-table tbody tr:hover { background: #f8fafc; }
+.field-wknd-badge { display: inline-block; font-size: 10px; background: #ede9fe; color: #6d28d9; border-radius: 3px; padding: 1px 6px; margin-left: 6px; font-weight: 600; }
+.field-row-actions { display: flex; gap: 6px; }
+.field-used-badge { font-size: 10px; color: #94a3b8; background: #f1f5f9; border-radius: 3px; padding: 1px 6px; }
+@media (max-width: 600px) { .field-form-row { grid-template-columns: 1fr; } }
+
+/* ── Help modal ──────────────────────────────────────────────────────────── */
+.help-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.help-modal { background: #fff; border-radius: 14px; max-width: 540px; width: 100%; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+.help-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 14px; border-bottom: 1px solid #e2e8f0; }
+.help-modal-header h2 { font-size: 17px; font-weight: 700; color: #1e293b; }
+.help-modal-close { background: none; border: none; font-size: 22px; color: #94a3b8; cursor: pointer; line-height: 1; padding: 0 4px; }
+.help-modal-close:hover { color: #374151; }
+.help-modal-body { padding: 18px 20px 24px; }
+.help-section { margin-bottom: 20px; }
+.help-section:last-child { margin-bottom: 0; }
+.help-section h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #64748b; margin-bottom: 10px; }
+.help-item { display: flex; gap: 10px; margin-bottom: 10px; }
+.help-icon { font-size: 20px; line-height: 1.3; flex-shrink: 0; }
+.help-item-body { flex: 1; }
+.help-item-body strong { display: block; font-size: 13px; color: #1e293b; margin-bottom: 2px; }
+.help-item-body p { font-size: 12px; color: #64748b; line-height: 1.5; }
+.help-btn { margin-left: 6px; background: none; border: 1px solid #cbd5e1; border-radius: 5px; padding: 2px 8px; font-size: 11px; color: #374151; cursor: pointer; vertical-align: middle; }
+.help-btn:hover { background: #f1f5f9; }

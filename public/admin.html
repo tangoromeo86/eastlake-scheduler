@@ -22,6 +22,7 @@
     <button class="top-nav-btn" data-page="teams">&#128101; Teams</button>
     <button class="top-nav-btn" data-page="editor">&#9998; Editor</button>
     <button class="top-nav-btn" data-page="changes" id="nav-changes">&#128221; Changes</button>
+    <button class="top-nav-btn" data-page="fields">&#127967; Fields</button>
   </nav>
 
   <input type="file" id="season-file-input" accept=".json,application/json" style="display:none">
@@ -141,6 +142,32 @@
       <button id="btn-clear-changes" class="btn btn-secondary">Clear Log</button>
     </div>
     <div id="changes-content"></div>
+  </div>
+
+  <div id="page-fields" class="page-section hidden">
+    <div class="changes-toolbar">
+      <span class="changes-toolbar-title">&#127967; Field Manager</span>
+      <button id="btn-add-field" class="btn btn-primary">+ Add Field</button>
+    </div>
+    <div id="field-editor-form" class="field-editor-form hidden">
+      <div class="field-form-inner">
+        <h3 id="field-form-title">Add Field</h3>
+        <div class="field-form-row">
+          <label>Weekday Field Name *<input id="ffe-name" type="text" placeholder="e.g. Eastlake Middle School"></label>
+          <label>Weekday Address<input id="ffe-address" type="text" placeholder="e.g. 2375 Schoolhouse Way, Chula Vista"></label>
+        </div>
+        <div class="field-form-row">
+          <label>Weekend Venue Name <span class="field-form-hint">(if different)</span><input id="ffe-wknd-name" type="text" placeholder="Leave blank if same as weekday"></label>
+          <label>Weekend Address <span class="field-form-hint">(if different)</span><input id="ffe-wknd-addr" type="text" placeholder="Leave blank if same as weekday"></label>
+        </div>
+        <div class="field-form-actions">
+          <button id="ffe-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="ffe-save" class="btn btn-primary">Save Field</button>
+        </div>
+        <div id="ffe-error" class="field-form-error hidden"></div>
+      </div>
+    </div>
+    <div id="fields-list"></div>
   </div>
 
   <!-- Game Edit Modal -->

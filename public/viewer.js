@@ -62,9 +62,18 @@ function updateHeader() {
   if (!el) return;
   if (session) {
     el.innerHTML =
+      `<button class="help-trigger" id="help-btn" title="Help">?</button>` +
       `<span class="header-name">${esc(session.name)}</span>` +
       (session.role === 'admin' ? '<a href="admin" class="header-link">Admin ›</a>' : '') +
       `<a href="logout" class="header-link">Sign out</a>`;
+    document.getElementById('help-btn').addEventListener('click', openHelp);
+
+    // Auto-show help on first login
+    const key = 'el_help_seen_v1';
+    if (!localStorage.getItem(key)) {
+      localStorage.setItem(key, '1');
+      setTimeout(openHelp, 400);
+    }
   } else {
     el.innerHTML = `<a href="login" class="header-link">Sign in</a>`;
   }
@@ -75,6 +84,18 @@ function updateHeader() {
     if (btn) btn.classList.toggle('hidden', !isAdmin);
   });
 }
+
+function openHelp() {
+  document.getElementById('help-modal').classList.remove('hidden');
+}
+
+document.getElementById('help-close').addEventListener('click', () => {
+  document.getElementById('help-modal').classList.add('hidden');
+});
+
+document.getElementById('help-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
+});
 
 // ── Season bar ────────────────────────────────────────────────────────────────
 function renderSeasonBar(seas) {

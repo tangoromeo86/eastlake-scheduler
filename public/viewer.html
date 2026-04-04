@@ -11,6 +11,11 @@
     .viewer-header h1 { font-size: 1.15rem; font-weight: 700; }
     .admin-link { font-size: 12px; color: #94a3b8; text-decoration: none; padding: 5px 10px; border: 1px solid #334155; border-radius: 5px; }
     .admin-link:hover { color: #e2e8f0; border-color: #64748b; }
+    .header-name { font-size: 12px; color: #94a3b8; }
+    .header-link { font-size: 12px; color: #94a3b8; text-decoration: none; padding: 5px 10px; border: 1px solid #334155; border-radius: 5px; }
+    .header-link:hover { color: #e2e8f0; border-color: #64748b; }
+    .help-trigger { background: none; border: 1px solid #334155; border-radius: 50%; color: #94a3b8; cursor: pointer; font-size: 13px; font-weight: 700; width: 28px; height: 28px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+    .help-trigger:hover { color: #e2e8f0; border-color: #64748b; }
 
     /* Division tabs — horizontally scrollable */
     .div-tabs-outer { background: #fff; border-bottom: 2px solid #e2e8f0; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
@@ -306,6 +311,69 @@
 
     <div id="view-fields" class="hidden">
       <div id="fields-wrapper"></div>
+    </div>
+  </div>
+
+  <!-- Help Modal -->
+  <div id="help-modal" class="help-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="help-modal">
+      <div class="help-modal-header">
+        <h2>How to use the schedule viewer</h2>
+        <button class="help-modal-close" id="help-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="help-modal-body">
+        <div class="help-section">
+          <h3>Views</h3>
+          <div class="help-item">
+            <span class="help-icon">&#9776;</span>
+            <div class="help-item-body">
+              <strong>Games</strong>
+              <p>Full list of games for the selected division. Use the team filter to see only your team's games. Hit <strong>↓ Export CSV</strong> to download a spreadsheet.</p>
+            </div>
+          </div>
+          <div class="help-item">
+            <span class="help-icon">&#128101;</span>
+            <div class="help-item-body">
+              <strong>Teams</strong>
+              <p>Each team's schedule as a card — opponent, date, time, home/away, and field. Tap a team's Export button to download their schedule as a CSV.</p>
+            </div>
+          </div>
+          <div class="help-item">
+            <span class="help-icon">&#128197;</span>
+            <div class="help-item-body">
+              <strong>Calendar</strong>
+              <p>Month-by-month view. Choose a specific team to see their games highlighted, or pick <em>All teams</em> to see every game in the division at a glance.</p>
+            </div>
+          </div>
+          <div class="help-item">
+            <span class="help-icon">&#127963;</span>
+            <div class="help-item-body">
+              <strong>Fields</strong>
+              <p>All games grouped by date and field. Use the field filter to zoom in on a specific venue, and export a field schedule as CSV.</p>
+            </div>
+          </div>
+        </div>
+        <div class="help-section">
+          <h3>Requesting a change</h3>
+          <div class="help-item">
+            <span class="help-icon">&#9993;</span>
+            <div class="help-item-body">
+              <strong>Request Change button</strong>
+              <p>Click <strong>Request Change</strong> next to any game in the Games view to open a guided form. It will draft an email to the league admin with all the details pre-filled — just hit Send.</p>
+            </div>
+          </div>
+        </div>
+        <div class="help-section">
+          <h3>Divisions</h3>
+          <div class="help-item">
+            <span class="help-icon">&#128196;</span>
+            <div class="help-item-body">
+              <strong>Division tabs</strong>
+              <p>Use the tabs at the top to switch between divisions. Each division has its own schedule, team list, and calendar.</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
