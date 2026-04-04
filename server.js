@@ -621,6 +621,29 @@ app.post('/api/change-request', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Missing coach info submission ─────────────────────────────────────────────
+
+app.post('/api/missing-info', requireAuth, (req, res) => {
+  const s = getSession(req);
+  const { team_name, coach, email, phone } = req.body;
+  if (!team_name) return res.status(400).json({ error: 'team_name required' });
+  if (!coach && !email && !phone) return res.status(400).json({ error: 'At least one field required' });
+
+  const subject = `Missing Coach Info: ${team_name}`;
+  const lines = [
+    `A user has submitted missing coach information.`,
+    ``,
+    `Team: ${team_name}`,
+  ];
+  if (coach) lines.push(`Coach: ${coach}`);
+  if (email) lines.push(`Email: ${email}`);
+  if (phone) lines.push(`Phone: ${phone}`);
+  lines.push('', `Submitted by: ${s.name} (${s.email})`, '', '— Eastlake Scheduler');
+
+  sendEmail({ to: EMAIL_REPLY_TO || ADMIN_EMAIL, subject, text: lines.join('\n') });
+  res.json({ ok: true });
+});
+
 // Manually notify coaches of an existing change log entry
 app.post('/api/notify-change', requireAdmin, async (req, res) => {
   const { change_id } = req.body;

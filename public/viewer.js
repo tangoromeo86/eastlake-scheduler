@@ -334,12 +334,16 @@ function renderTeamsView(divGames, divTeams) {
 
     // Contact info — only shown when authenticated
     let contactHtml = '';
-    if (session && (team.coach || team.email || team.phone)) {
+    if (session) {
       const parts = [];
       if (team.coach) parts.push(`<span style="font-weight:600">${esc(team.coach)}</span>`);
       if (team.email) parts.push(`<a href="mailto:${esc(team.email)}" style="color:#2d6cf0">${esc(team.email)}</a>`);
       if (team.phone) parts.push(`<a href="tel:${esc(team.phone)}" style="color:#64748b">${esc(team.phone)}</a>`);
-      contactHtml = `<div style="padding:8px 14px;font-size:12px;background:#f0f9ff;border-bottom:1px solid #e2e8f0;display:flex;flex-wrap:wrap;gap:10px;align-items:center">${parts.join('<span style="color:#cbd5e1;margin:0 2px">·</span>')}</div>`;
+      if (!team.coach || !team.email || !team.phone) {
+        parts.push(`<button class="missing-info-link" data-tid="${team.id}" style="background:none;border:none;padding:0;cursor:pointer;color:#ea580c;font-size:11px;font-weight:600;text-decoration:underline">Missing info</button>`);
+      }
+      const sep = '<span style="color:#cbd5e1;margin:0 2px">·</span>';
+      contactHtml = `<div style="padding:8px 14px;font-size:12px;background:#f0f9ff;border-bottom:1px solid #e2e8f0;display:flex;flex-wrap:wrap;gap:10px;align-items:center">${parts.join(sep)}</div>`;
     }
 
     return `<div class="tcard">
@@ -352,6 +356,11 @@ function renderTeamsView(divGames, divTeams) {
     </div>`;
   }).join('');
   document.getElementById('teams-grid').innerHTML = cards || '<p class="empty-state">No team data available.</p>';
+  if (session) {
+    document.querySelectorAll('.missing-info-link[data-tid]').forEach(btn => {
+      btn.addEventListener('click', () => openMissingInfo(parseInt(btn.dataset.tid, 10)));
+    });
+  }
 }
 
 // ── MATRIX VIEW ───────────────────────────────────────────────────────────────
@@ -942,6 +951,102 @@ function buildEmailBody() {
   return lines.join('\n');
 }
 
+
+// ── Missing coach info modal ──────────────────────────────────────────────────
+let miTeam = null;
+
+function openMissingInfo(teamId) {
+  miTeam = (seasonData?.teams || []).find(t => t.id === teamId);
+  if (!miTeam || !session) return;
+  document.getElementById('missing-info-modal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  renderMissingInfoForm();
+}
+
+function closeMissingInfoModal() {
+  document.getElementById('missing-info-modal').classList.add('hidden');
+  document.body.style.overflow = '';
+  miTeam = null;
+}
+
+document.getElementById('mi-close-btn').addEventListener('click', closeMissingInfoModal);
+document.getElementById('missing-info-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeMissingInfoModal();
+});
+
+function renderMissingInfoForm(sent) {
+  const body = document.getElementById('mi-body');
+  if (sent) {
+    body.innerHTML = `
+      <p style="color:#16a34a;font-weight:600;font-size:15px;margin-bottom:8px">✓ Submitted!</p>
+      <p style="font-size:13px;color:#64748b">Thanks — the league admin will update the roster.</p>
+      <div class="modal-actions" style="margin-top:20px">
+        <button class="modal-btn modal-btn-secondary" onclick="closeMissingInfoModal()">Close</button>
+      </div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="modal-game-summary" style="margin-bottom:16px">
+      <div class="matchup">${esc(teamLabel(miTeam))}</div>
+      <div class="meta">Fill in any missing contact info below and hit Submit.</div>
+    </div>
+    <div class="modal-field">
+      <label>Coach name${miTeam.coach ? '' : ' <span style="color:#ea580c">*</span>'}</label>
+      <input type="text" id="mi-coach" value="${esc(miTeam.coach || '')}" placeholder="First Last">
+    </div>
+    <div class="modal-field">
+      <label>Email${miTeam.email ? '' : ' <span style="color:#ea580c">*</span>'}</label>
+      <input type="text" id="mi-email" value="${esc(miTeam.email || '')}" placeholder="coach@example.com">
+    </div>
+    <div class="modal-field">
+      <label>Phone${miTeam.phone ? '' : ' <span style="color:#ea580c">*</span>'}</label>
+      <input type="text" id="mi-phone" value="${esc(miTeam.phone || '')}" placeholder="(555) 555-5555">
+    </div>
+    <div id="mi-error" style="color:#dc2626;font-size:12px;margin-bottom:10px;display:none"></div>
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn-secondary" onclick="closeMissingInfoModal()">Cancel</button>
+      <button class="modal-btn modal-btn-primary" id="mi-submit-btn" onclick="submitMissingInfo()">Submit</button>
+    </div>`;
+}
+
+async function submitMissingInfo() {
+  const coach = document.getElementById('mi-coach')?.value.trim();
+  const email = document.getElementById('mi-email')?.value.trim();
+  const phone = document.getElementById('mi-phone')?.value.trim();
+  const errEl = document.getElementById('mi-error');
+  const btn   = document.getElementById('mi-submit-btn');
+
+  if (!coach && !email && !phone) {
+    errEl.textContent = 'Please fill in at least one field.';
+    errEl.style.display = '';
+    return;
+  }
+  errEl.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+
+  try {
+    const r = await fetch('api/missing-info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team_id: miTeam.id, team_name: teamLabel(miTeam), coach, email, phone }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      renderMissingInfoForm(true);
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Submit';
+      errEl.textContent = 'Failed to send: ' + (d.error || 'unknown error');
+      errEl.style.display = '';
+    }
+  } catch {
+    btn.disabled = false;
+    btn.textContent = 'Submit';
+    errEl.textContent = 'Network error — please try again.';
+    errEl.style.display = '';
+  }
+}
 
 // ── CSV Exports ───────────────────────────────────────────────────────────────
 function downloadCSV(filename, rows) {
