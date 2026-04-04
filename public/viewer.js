@@ -1029,7 +1029,12 @@ async function submitMissingInfo() {
     const r = await fetch('api/missing-info', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team_id: miTeam.id, team_name: teamLabel(miTeam), coach, email, phone }),
+      body: JSON.stringify({
+        team_id: miTeam.id,
+        team_name: teamLabel(miTeam),
+        division_name: (seasonData?.divisions || []).find(d => d.id === miTeam.division_id)?.name || miTeam.division_id || '',
+        coach, email, phone,
+      }),
     });
     const d = await r.json();
     if (d.ok) {

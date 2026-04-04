@@ -625,7 +625,7 @@ app.post('/api/change-request', requireAuth, (req, res) => {
 
 app.post('/api/missing-info', requireAuth, (req, res) => {
   const s = getSession(req);
-  const { team_name, coach, email, phone } = req.body;
+  const { team_name, division_name, coach, email, phone } = req.body;
   if (!team_name) return res.status(400).json({ error: 'team_name required' });
   if (!coach && !email && !phone) return res.status(400).json({ error: 'At least one field required' });
 
@@ -634,6 +634,7 @@ app.post('/api/missing-info', requireAuth, (req, res) => {
     `A user has submitted missing coach information.`,
     ``,
     `Team: ${team_name}`,
+    ...(division_name ? [`Division: ${division_name}`] : []),
   ];
   if (coach) lines.push(`Coach: ${coach}`);
   if (email) lines.push(`Email: ${email}`);
