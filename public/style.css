@@ -977,7 +977,7 @@ header h1 {
 .fields-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
 .fields-table tr:last-child td { border-bottom: none; }
 .fields-table tbody tr:hover { background: #f8fafc; }
-.field-wknd-badge { display: inline-block; font-size: 10px; background: #ede9fe; color: #6d28d9; border-radius: 3px; padding: 1px 6px; margin-left: 6px; font-weight: 600; }
+.field-subfield-badge { display: inline-block; font-size: 10px; background: #ede9fe; color: #6d28d9; border-radius: 3px; padding: 1px 6px; margin-left: 6px; font-weight: 600; }
 .field-row-actions { display: flex; gap: 6px; }
 .field-used-badge { font-size: 10px; color: #94a3b8; background: #f1f5f9; border-radius: 3px; padding: 1px 6px; }
 @media (max-width: 600px) { .field-form-row { grid-template-columns: 1fr; } }
