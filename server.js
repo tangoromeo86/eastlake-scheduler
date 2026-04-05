@@ -680,11 +680,12 @@ app.post('/api/season/fields', requireAdmin, (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
-  const { name, sub_field, address, notes } = req.body;
+  const { name, sub_field, address, notes, coordinates } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Venue name is required' });
   const f = { id: 'field-' + Date.now(), name: name.trim(), address: (address || '').trim() };
   if (sub_field?.trim()) f.sub_field = sub_field.trim();
   if (notes?.trim()) f.notes = notes.trim();
+  if (coordinates?.trim()) f.coordinates = coordinates.replace(/\s/g, '');
   data.fields = [...(data.fields || []), f];
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
   fs.copyFileSync(SEASON_FILE, backup);
@@ -699,11 +700,12 @@ app.put('/api/season/fields/:id', requireAdmin, (req, res) => {
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
   const idx = (data.fields || []).findIndex(f => String(f.id) === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Field not found' });
-  const { name, sub_field, address, notes } = req.body;
+  const { name, sub_field, address, notes, coordinates } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Venue name is required' });
   const updated = { ...data.fields[idx], name: name.trim(), address: (address || '').trim() };
   if (sub_field?.trim()) updated.sub_field = sub_field.trim(); else delete updated.sub_field;
   if (notes?.trim()) updated.notes = notes.trim(); else delete updated.notes;
+  if (coordinates?.trim()) updated.coordinates = coordinates.replace(/\s/g, ''); else delete updated.coordinates;
   delete updated.weekend_venue; delete updated.weekend_address;
   data.fields[idx] = updated;
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);

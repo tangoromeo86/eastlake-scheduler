@@ -1270,6 +1270,12 @@ function fieldDisplayName(f) {
   return f.sub_field ? `${f.name} – ${f.sub_field}` : f.name;
 }
 
+function fieldMapLink(f, label) {
+  if (!f?.coordinates) return '';
+  const url = `https://www.google.com/maps?q=${f.coordinates}&t=k`;
+  return `<a href="${url}" target="_blank" rel="noopener" class="map-link">${label || '📍 Map'}</a>`;
+}
+
 function renderFieldsPage() {
   const fields = seasonData?.fields || [];
   const teams  = seasonData?.teams  || [];
@@ -1285,7 +1291,7 @@ function renderFieldsPage() {
 
   list.innerHTML = `<table class="fields-table">
     <thead><tr>
-      <th>Field</th><th>Address</th><th>Notes</th><th>Used By</th><th></th>
+      <th>Field</th><th>Address</th><th>Notes</th><th>Map</th><th>Used By</th><th></th>
     </tr></thead>
     <tbody>
     ${fields.map(f => {
@@ -1297,6 +1303,7 @@ function renderFieldsPage() {
         </td>
         <td>${esc(f.address || '—')}</td>
         <td style="font-size:12px;color:#94a3b8">${esc(f.notes || '—')}</td>
+        <td>${fieldMapLink(f, '📍 View') || '<span style="color:#cbd5e1">—</span>'}</td>
         <td>${usage ? `<span class="field-used-badge">${usage} team${usage !== 1 ? 's' : ''}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
         <td><div class="field-row-actions">
           <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
@@ -1315,6 +1322,7 @@ function openFieldAdd() {
   document.getElementById('ffe-subfield').value = '';
   document.getElementById('ffe-address').value = '';
   document.getElementById('ffe-notes').value = '';
+  document.getElementById('ffe-coords').value = '';
   document.getElementById('ffe-error').classList.add('hidden');
   document.getElementById('field-editor-form').classList.remove('hidden');
   document.getElementById('ffe-name').focus();
@@ -1329,6 +1337,7 @@ function openFieldEdit(fieldId) {
   document.getElementById('ffe-subfield').value = field.sub_field || '';
   document.getElementById('ffe-address').value = field.address || '';
   document.getElementById('ffe-notes').value = field.notes || '';
+  document.getElementById('ffe-coords').value = field.coordinates ? field.coordinates.replace(',', ', ') : '';
   document.getElementById('ffe-error').classList.add('hidden');
   document.getElementById('field-editor-form').classList.remove('hidden');
   document.getElementById('ffe-name').focus();
@@ -1344,10 +1353,11 @@ document.getElementById('ffe-save').addEventListener('click', async () => {
   const errEl = document.getElementById('ffe-error');
   errEl.classList.add('hidden');
   const body = {
-    name:      document.getElementById('ffe-name').value.trim(),
-    sub_field: document.getElementById('ffe-subfield').value.trim(),
-    address:   document.getElementById('ffe-address').value.trim(),
-    notes:     document.getElementById('ffe-notes').value.trim(),
+    name:        document.getElementById('ffe-name').value.trim(),
+    sub_field:   document.getElementById('ffe-subfield').value.trim(),
+    address:     document.getElementById('ffe-address').value.trim(),
+    notes:       document.getElementById('ffe-notes').value.trim(),
+    coordinates: document.getElementById('ffe-coords').value.trim(),
   };
   if (!body.name) { errEl.textContent = 'Venue name is required.'; errEl.classList.remove('hidden'); return; }
   const url    = editingFieldId ? `api/season/fields/${editingFieldId}` : 'api/season/fields';
