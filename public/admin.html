@@ -50,17 +50,32 @@
   <div id="page-schedule">
   <!-- Division Tabs + Views -->
   <div id="tabs-container" class="hidden">
-    <nav id="division-tabs" class="tabs"></nav>
+    <nav id="division-tabs" class="tabs">
+      <div class="admin-tabs-sep"></div>
+      <button class="admin-top-view-btn" data-topview="fields">&#127967; Fields</button>
+      <button class="admin-top-view-btn" data-topview="city">&#127961; City</button>
+    </nav>
 
-    <!-- View bar -->
-    <div class="view-bar">
+    <!-- Cross-division controls (Fields / City mode) -->
+    <div id="admin-cross-div-bar" class="view-bar hidden">
+      <div id="fields-controls" class="view-controls hidden">
+        <label>Field: <select id="admin-field-select"><option value="">All fields</option></select></label>
+        <button id="admin-field-export-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">&#8595; CSV</button>
+      </div>
+      <div id="city-controls" class="view-controls hidden">
+        <label>City: <select id="admin-city-select"></select></label>
+        <button id="admin-city-export-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">&#8595; CSV</button>
+      </div>
+    </div>
+
+    <!-- Per-division view bar -->
+    <div class="view-bar" id="admin-div-view-bar">
       <div class="view-btns">
         <button class="view-btn active" data-view="games">&#9776; Games</button>
         <button class="view-btn" data-view="teams">&#9632; Teams</button>
         <button class="view-btn" data-view="matrix">&#9633; Matrix</button>
         <button class="view-btn" data-view="stats">&#9650; Stats</button>
         <button class="view-btn" data-view="calendar">&#128197; Calendar</button>
-        <button class="view-btn" data-view="fields">&#127967; Fields</button>
       </div>
       <!-- Games-view controls -->
       <div id="games-controls" class="view-controls">
@@ -70,13 +85,6 @@
           </select>
         </label>
         <span id="game-count-label" class="game-count"></span>
-      </div>
-      <!-- Fields-view controls -->
-      <div id="fields-controls" class="view-controls hidden">
-        <label>Field:
-          <select id="admin-field-select"><option value="">All fields</option></select>
-        </label>
-        <button id="admin-field-export-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">&#8595; CSV</button>
       </div>
     </div>
 
@@ -131,6 +139,11 @@
     <!-- FIELDS VIEW -->
     <div id="view-fields" class="view-panel hidden">
       <div id="admin-fields-wrapper"></div>
+    </div>
+
+    <!-- CITY VIEW -->
+    <div id="view-city" class="view-panel hidden">
+      <div id="admin-city-wrapper"></div>
     </div>
   </div>
 

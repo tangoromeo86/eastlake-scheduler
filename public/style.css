@@ -133,12 +133,18 @@ header h1 {
   padding: 0 16px;
 }
 
+.admin-tabs-sep { width: 1px; height: 18px; background: #e2e8f0; margin: 0 8px; flex-shrink: 0; align-self: center; }
+.admin-top-view-btn { background: none; border: 1px solid #e2e8f0; border-radius: 5px; padding: 4px 11px; font-size: 12px; font-weight: 600; color: #64748b; cursor: pointer; white-space: nowrap; margin: 4px 2px; align-self: center; }
+.admin-top-view-btn:hover { color: #1a1a2e; border-color: #94a3b8; }
+.admin-top-view-btn.active { background: #2d6cf0; color: #fff; border-color: #2d6cf0; }
+
 .tabs {
   display: flex;
   gap: 4px;
   border-bottom: 2px solid #e2e8f0;
   padding-bottom: 0;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .tab-btn {

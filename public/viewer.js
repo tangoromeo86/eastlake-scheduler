@@ -5,6 +5,7 @@ let seasonData   = null;
 let session      = null;
 let activeDivision = null;
 let activeView   = 'games';
+let activeTopView = null;  // 'fields' | 'city' | null (null = division mode)
 let seasonSlots  = null;
 let gamesById    = {};   // game_id → game object, for change request lookup
 
@@ -34,7 +35,6 @@ async function init() {
 
   if ((scheduleData.games || []).length) {
     buildDivTabs(scheduleData.games);
-    populateFieldSelect();
     document.getElementById('div-tabs-outer').classList.remove('hidden');
     document.getElementById('vbar').classList.remove('hidden');
   } else {
@@ -121,27 +121,75 @@ function buildDivTabs(games) {
   const divs    = [...present, ...extra];
 
   const nav = document.getElementById('division-tabs');
-  nav.innerHTML = '';
+  const sep = nav.querySelector('.div-tabs-sep');
+  // remove old div tabs only, keep sep + top-view-btns
+  nav.querySelectorAll('.div-tab').forEach(el => el.remove());
   divs.forEach(divId => {
     const btn = document.createElement('button');
     btn.className = 'div-tab';
     btn.textContent = names[divId] || divId;
     btn.dataset.divId = divId;
     btn.addEventListener('click', () => selectDivision(divId));
-    nav.appendChild(btn);
+    nav.insertBefore(btn, sep);
   });
   if (divs.length) selectDivision(divs[0]);
 }
 
 function selectDivision(divId) {
   activeDivision = divId;
+  activeTopView = null;
   document.querySelectorAll('.div-tab').forEach(b => b.classList.toggle('active', b.dataset.divId === divId));
+  document.querySelectorAll('.top-view-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('vbar').classList.remove('hidden');
+  document.getElementById('cross-div-bar').classList.add('hidden');
   populateTeamFilter();
   populateCalTeamSelect();
   renderCurrentView();
 }
 
-// ── View bar ──────────────────────────────────────────────────────────────────
+// ── Top-level view buttons (Fields / City) ────────────────────────────────────
+document.querySelectorAll('.top-view-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.topview;
+    if (activeTopView === mode) {
+      // toggle off — back to division mode
+      activeTopView = null;
+      document.querySelectorAll('.top-view-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('vbar').classList.remove('hidden');
+      document.getElementById('cross-div-bar').classList.add('hidden');
+      renderCurrentView();
+    } else {
+      activeTopView = mode;
+      document.querySelectorAll('.top-view-btn').forEach(b => b.classList.toggle('active', b === btn));
+      document.getElementById('vbar').classList.add('hidden');
+      syncCrossDivBar();
+      renderCurrentView();
+    }
+  });
+});
+
+function syncCrossDivBar() {
+  const bar = document.getElementById('cross-div-bar');
+  const fs  = document.getElementById('field-select');
+  const feb = document.getElementById('field-export-btn');
+  const cys = document.getElementById('city-select');
+  const cyb = document.getElementById('city-export-btn');
+  if (activeTopView === 'fields') {
+    bar.classList.remove('hidden');
+    fs.classList.remove('hidden');  feb.classList.remove('hidden');
+    cys.classList.add('hidden');    cyb.classList.add('hidden');
+    populateFieldSelect();
+  } else if (activeTopView === 'city') {
+    bar.classList.remove('hidden');
+    fs.classList.add('hidden');     feb.classList.add('hidden');
+    cys.classList.remove('hidden'); cyb.classList.remove('hidden');
+    populateCitySelect();
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+// ── Per-division view bar ─────────────────────────────────────────────────────
 document.querySelectorAll('.vbar-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     activeView = btn.dataset.view;
@@ -156,31 +204,24 @@ function syncFilterVisibility() {
   const gc  = document.getElementById('game-count-badge');
   const teb = document.getElementById('team-export-btn');
   const cs  = document.getElementById('cal-team-select');
-  const fs  = document.getElementById('field-select');
-  const feb = document.getElementById('field-export-btn');
+  tf.classList.add('hidden');  gc.classList.add('hidden');  teb.classList.add('hidden');
+  cs.classList.add('hidden');
   if (activeView === 'games') {
-    tf.classList.remove('hidden');  gc.classList.remove('hidden');
-    cs.classList.add('hidden');     fs.classList.add('hidden');     feb.classList.add('hidden');
-    // team export only visible when a specific team is selected
+    tf.classList.remove('hidden'); gc.classList.remove('hidden');
     teb.classList.toggle('hidden', !tf.value);
   } else if (activeView === 'calendar') {
-    tf.classList.add('hidden');     gc.classList.add('hidden');     teb.classList.add('hidden');
-    cs.classList.remove('hidden');  fs.classList.add('hidden');     feb.classList.add('hidden');
-  } else if (activeView === 'fields') {
-    tf.classList.add('hidden');     gc.classList.add('hidden');     teb.classList.add('hidden');
-    cs.classList.add('hidden');     fs.classList.remove('hidden');  feb.classList.remove('hidden');
-  } else {
-    tf.classList.add('hidden');     gc.classList.add('hidden');     teb.classList.add('hidden');
-    cs.classList.add('hidden');     fs.classList.add('hidden');     feb.classList.add('hidden');
+    cs.classList.remove('hidden');
   }
 }
 
 function renderCurrentView() {
-  ['games','teams','matrix','stats','calendar','fields'].forEach(v => {
-    document.getElementById('view-' + v).classList.toggle('hidden', v !== activeView);
+  const effectiveView = activeTopView || activeView;
+  ['games','teams','matrix','stats','calendar','fields','city'].forEach(v => {
+    document.getElementById('view-' + v).classList.toggle('hidden', v !== effectiveView);
   });
   if (!scheduleData) return;
-  if (activeView === 'fields') { renderFieldsView(); return; }
+  if (activeTopView === 'fields') { renderFieldsView(); return; }
+  if (activeTopView === 'city')   { renderCityView();   return; }
   if (!activeDivision) return;
   const divGames = (scheduleData.games || []).filter(g => g.division_id === activeDivision);
   const divTeams = getDivTeams(activeDivision);
@@ -231,10 +272,15 @@ document.getElementById('team-export-btn').addEventListener('click', () => {
   exportTeamCSV(teamId, teamName);
 });
 
+
+document.getElementById('field-select').addEventListener('change', () => { if (activeTopView === 'fields') renderFieldsView(); });
+document.getElementById('city-select').addEventListener('change', () => { if (activeTopView === 'city') renderCityView(); });
 document.getElementById('field-export-btn').addEventListener('click', () => {
-  const sel = document.getElementById('field-select');
-  const fieldName = sel.value || 'all-fields';
-  exportFieldCSV(fieldName);
+  exportFieldCSV(document.getElementById('field-select').value || 'all-fields');
+});
+document.getElementById('city-export-btn').addEventListener('click', () => {
+  const clubId = document.getElementById('city-select').value;
+  if (clubId) exportCityCSV(clubId);
 });
 
 // ── GAMES VIEW ────────────────────────────────────────────────────────────────
@@ -560,6 +606,106 @@ function renderCalMonthAll(year, month, label, byDate, blackouts) {
     </table></div>`;
 }
 
+// ── CITY VIEW ─────────────────────────────────────────────────────────────────
+function clubName(clubId) {
+  // Derive display name from common prefix of all team labels for this club
+  const labels = (seasonData?.teams || []).filter(t => t.club_id === clubId).map(t => t.label || '');
+  if (!labels.length) return clubId;
+  if (labels.length === 1) return labels[0].replace(/\s+\d+$/, '').replace(/\s+-\s+\w+$/, '').trim();
+  let prefix = labels[0];
+  for (const l of labels.slice(1)) {
+    let i = 0;
+    while (i < prefix.length && i < l.length && prefix[i] === l[i]) i++;
+    prefix = prefix.slice(0, i);
+  }
+  return prefix.replace(/[\s\-]+$/, '').trim() || clubId;
+}
+
+function populateCitySelect() {
+  const sel = document.getElementById('city-select');
+  const prev = sel.value;
+  const teams = seasonData?.teams || [];
+  const clubIds = [...new Set(teams.map(t => t.club_id).filter(Boolean))].sort((a, b) => clubName(a).localeCompare(clubName(b)));
+  sel.innerHTML = '<option value="">All cities</option>';
+  clubIds.forEach(id => {
+    const opt = document.createElement('option');
+    opt.value = id; opt.textContent = clubName(id);
+    sel.appendChild(opt);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  else if (clubIds.length) sel.value = clubIds[0];
+}
+
+function renderCityView() {
+  populateCitySelect();
+  const wrapper = document.getElementById('city-wrapper');
+  const clubId  = document.getElementById('city-select').value;
+  const teams   = seasonData?.teams || [];
+  const clubTeamIds = clubId ? new Set(teams.filter(t => t.club_id === clubId).map(t => t.id)) : null;
+  const divNames = Object.fromEntries((seasonData?.divisions || []).map(d => [d.id, d.name || d.label || d.id]));
+  const name = clubId ? clubName(clubId) : 'All cities';
+
+  const games = [...(scheduleData?.games || [])]
+    .filter(g => !clubTeamIds || clubTeamIds.has(g.home_team_id) || clubTeamIds.has(g.away_team_id))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+  if (!games.length) { wrapper.innerHTML = `<p class="empty-state">No games found.</p>`; return; }
+
+  const byDate = new Map();
+  for (const g of games) { if (!byDate.has(g.date)) byDate.set(g.date, []); byDate.get(g.date).push(g); }
+
+  const summary = `<p class="field-utilization"><strong>${name}</strong> — <strong>${games.length}</strong> game${games.length !== 1 ? 's' : ''} across <strong>${byDate.size}</strong> date${byDate.size !== 1 ? 's' : ''} <button onclick="exportCityCSV('${clubId}')" style="margin-left:8px;font-size:11px;padding:2px 8px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;color:#475569">↓ CSV</button></p>`;
+
+  const groups = [...byDate.entries()].map(([date, dateGames]) => {
+    const isSat = dateGames[0].day === 'Saturday';
+    const dayClass = isSat ? 'fday-sat' : 'fday-wd';
+    const rows = dateGames.map(g => {
+      const haLabel = clubTeamIds
+        ? (clubTeamIds.has(g.home_team_id) ? '<span style="color:#16a34a;font-weight:700">Home</span>' : '<span style="color:#dc2626;font-weight:700">Away</span>')
+        : '';
+      return `<tr>
+        <td>${formatTime12h(g.time)}</td>
+        ${clubTeamIds ? `<td>${haLabel}</td>` : ''}
+        <td><span class="field-div-badge">${esc(divNames[g.division_id] || g.division_id)}</span></td>
+        <td class="g-home">${esc(g.home_team_name)}</td>
+        <td style="color:#94a3b8;font-size:11px">vs</td>
+        <td class="g-away">${esc(g.away_team_name)}</td>
+        <td style="font-size:11px;color:#64748b">${esc(g.field_name)}</td>
+        <td style="color:#94a3b8;font-size:11px;white-space:nowrap">#${g.game_id}</td>
+      </tr>`;
+    }).join('');
+    return `<div class="field-date-group">
+      <div class="field-date-header">
+        <span><span class="${dayClass}">${dateGames[0].day}</span> ${formatDate(date)} — Week ${dateGames[0].week}</span>
+        <span class="field-date-count">${dateGames.length} game${dateGames.length !== 1 ? 's' : ''}</span>
+      </div>
+      <table class="field-games-table">
+        <thead><tr><th>Time</th>${clubTeamIds ? '<th>H/A</th>' : ''}<th>Division</th><th>Home</th><th></th><th>Away</th><th>Field</th><th>#</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+
+  wrapper.innerHTML = summary + groups;
+}
+
+function exportCityCSV(clubId) {
+  const teams = seasonData?.teams || [];
+  const clubTeamIds = new Set(teams.filter(t => t.club_id === clubId).map(t => t.id));
+  const divNames = Object.fromEntries((seasonData?.divisions || []).map(d => [d.id, d.name || d.label || d.id]));
+  const games = [...(scheduleData?.games || [])]
+    .filter(g => clubTeamIds.has(g.home_team_id) || clubTeamIds.has(g.away_team_id))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+  const rows = [['Date','Day','Time','Home/Away','Division','Home Team','Away Team','Field','Address','Game #']];
+  for (const g of games) {
+    const isHome = clubTeamIds.has(g.home_team_id);
+    rows.push([formatDate(g.date), g.day, formatTime12h(g.time), isHome ? 'Home' : 'Away',
+      divNames[g.division_id] || g.division_id, g.home_team_name, g.away_team_name,
+      g.field_name, g.field_address || '', '#' + g.game_id]);
+  }
+  downloadCSV(`${clubName(clubId).replace(/[^a-z0-9]/gi,'-').toLowerCase()}-schedule.csv`, rows);
+}
+
 // ── FIELDS VIEW ───────────────────────────────────────────────────────────────
 function populateFieldSelect() {
   const allGames = scheduleData?.games || [];
@@ -579,7 +725,6 @@ function populateFieldSelect() {
   if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
 
-document.getElementById('field-select').addEventListener('change', () => { if (activeView === 'fields') renderFieldsView(); });
 
 function renderFieldsView() {
   const wrapper = document.getElementById('fields-wrapper');
