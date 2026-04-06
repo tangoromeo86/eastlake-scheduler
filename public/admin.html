@@ -60,6 +60,7 @@
         <button class="view-btn" data-view="matrix">&#9633; Matrix</button>
         <button class="view-btn" data-view="stats">&#9650; Stats</button>
         <button class="view-btn" data-view="calendar">&#128197; Calendar</button>
+        <button class="view-btn" data-view="fields">&#127967; Fields</button>
       </div>
       <!-- Games-view controls -->
       <div id="games-controls" class="view-controls">
@@ -69,6 +70,13 @@
           </select>
         </label>
         <span id="game-count-label" class="game-count"></span>
+      </div>
+      <!-- Fields-view controls -->
+      <div id="fields-controls" class="view-controls hidden">
+        <label>Field:
+          <select id="admin-field-select"><option value="">All fields</option></select>
+        </label>
+        <button id="admin-field-export-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">&#8595; CSV</button>
       </div>
     </div>
 
@@ -118,6 +126,11 @@
         </label>
       </div>
       <div id="calendar-wrapper"></div>
+    </div>
+
+    <!-- FIELDS VIEW -->
+    <div id="view-fields" class="view-panel hidden">
+      <div id="admin-fields-wrapper"></div>
     </div>
   </div>
 

@@ -227,14 +227,16 @@ document.querySelectorAll('.view-btn').forEach(btn => {
     document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b === btn));
     document.getElementById('games-controls').classList.toggle('hidden', activeView !== 'games');
     document.getElementById('cal-team-select').closest('.cal-controls').classList.toggle('hidden', activeView !== 'calendar');
+    document.getElementById('fields-controls').classList.toggle('hidden', activeView !== 'fields');
     renderCurrentView();
   });
 });
 
 function renderCurrentView() {
-  ['games','teams','matrix','stats','calendar'].forEach(v =>
+  ['games','teams','matrix','stats','calendar','fields'].forEach(v =>
     document.getElementById('view-' + v).classList.toggle('hidden', v !== activeView)
   );
+  if (activeView === 'fields') { renderAdminFieldsView(); return; }
   if (!scheduleData || !activeDivision) return;
   const divGames = (scheduleData.games || []).filter(g => g.division_id === activeDivision);
   const divTeams = getDivTeams(activeDivision);
@@ -245,6 +247,100 @@ function renderCurrentView() {
   if (activeView === 'stats')    renderStatsView(divGames, divTeams);
   if (activeView === 'calendar') renderCalendarView(divGames, divTeams);
 }
+
+function populateAdminFieldSelect() {
+  const sel = document.getElementById('admin-field-select');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All fields</option>';
+  const games = scheduleData?.games || [];
+  const names = [...new Set(games.map(g => g.field_name).filter(Boolean))].sort();
+  for (const name of names) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    if (name === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+function renderAdminFieldsView() {
+  if (!scheduleData) return;
+  populateAdminFieldSelect();
+  const wrapper = document.getElementById('admin-fields-wrapper');
+  const filterField = document.getElementById('admin-field-select').value;
+  const divNames = Object.fromEntries((seasonData?.divisions || []).map(d => [d.id, d.name || d.label || d.id]));
+  const fieldIndex = Object.fromEntries((seasonData?.fields || []).map(f => [f.id, f]));
+
+  const allGames = [...(scheduleData.games || [])]
+    .filter(g => !filterField || g.field_name === filterField)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+  if (!allGames.length) { wrapper.innerHTML = '<p class="no-games">No games found.</p>'; return; }
+
+  const uniqueDates  = new Set(allGames.map(g => g.date));
+  const uniqueFields = new Set(allGames.map(g => g.field_name));
+  const showFieldCol = !filterField;
+
+  const byDate = new Map();
+  for (const g of allGames) { if (!byDate.has(g.date)) byDate.set(g.date, []); byDate.get(g.date).push(g); }
+
+  const utilHtml = `<p class="field-utilization"><strong>${allGames.length}</strong> games across <strong>${uniqueDates.size}</strong> dates at <strong>${uniqueFields.size}</strong> field${uniqueFields.size !== 1 ? 's' : ''}</p>`;
+
+  const groups = [...byDate.entries()].map(([date, dateGames]) => {
+    const isSat = dateGames[0].day === 'Saturday';
+    const dayClass = isSat ? 'fday-sat' : 'fday-wd';
+    const rows = dateGames.map(g => {
+      const fieldObj = fieldIndex[g.field_id];
+      const mapLink = fieldObj?.coordinates
+        ? ` <a href="https://www.google.com/maps?q=${fieldObj.coordinates}&t=k" target="_blank" rel="noopener" class="map-link">Map</a>`
+        : '';
+      return `<tr>
+        <td>${formatTime12h(g.time)}</td>
+        ${showFieldCol ? `<td>${esc(g.field_name)}<div style="font-size:10px;color:#94a3b8">${esc(g.field_address || '')}${mapLink}</div></td>` : ''}
+        <td><span class="field-div-badge">${esc(divNames[g.division_id] || g.division_id)}</span></td>
+        <td class="team-cell home">${esc(g.home_team_name)}</td>
+        <td style="color:#94a3b8;font-size:11px">vs</td>
+        <td class="team-cell away">${esc(g.away_team_name)}</td>
+      </tr>`;
+    }).join('');
+    return `<div class="field-date-group">
+      <div class="field-date-header">
+        <span><span class="${dayClass}">${dateGames[0].day}</span> ${formatDate(date)} — Week ${dateGames[0].week}</span>
+        <span class="field-date-count">${dateGames.length} game${dateGames.length !== 1 ? 's' : ''}</span>
+      </div>
+      <table class="field-games-table">
+        <thead><tr><th>Time</th>${showFieldCol ? '<th>Field</th>' : ''}<th>Division</th><th>Home</th><th></th><th>Away</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+
+  wrapper.innerHTML = utilHtml + groups;
+}
+
+document.getElementById('admin-field-select').addEventListener('change', () => {
+  if (activeView === 'fields') renderAdminFieldsView();
+});
+
+document.getElementById('admin-field-export-btn').addEventListener('click', () => {
+  const filterField = document.getElementById('admin-field-select').value;
+  const games = [...(scheduleData?.games || [])]
+    .filter(g => !filterField || g.field_name === filterField)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+  const divNames = Object.fromEntries((seasonData?.divisions || []).map(d => [d.id, d.name || d.label || d.id]));
+  const rows = [['Date','Day','Time','Division','Home Team','Away Team','Field','Address']];
+  for (const g of games) {
+    rows.push([formatDate(g.date), g.day, formatTime12h(g.time), divNames[g.division_id] || g.division_id,
+      g.home_team_name, g.away_team_name, g.field_name, g.field_address || '']);
+  }
+  const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `field-schedule${filterField ? '-' + filterField.replace(/[^a-z0-9]/gi,'-').toLowerCase() : ''}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
 
 function getDivTeams(divId) {
   if (!seasonData) return [];
