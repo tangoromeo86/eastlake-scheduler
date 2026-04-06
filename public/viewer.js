@@ -609,6 +609,7 @@ function renderFieldsView() {
         <td class="g-home">${esc(g.home_team_name)}</td>
         <td style="color:#94a3b8;font-size:11px">vs</td>
         <td class="g-away">${esc(g.away_team_name)}</td>
+        <td style="color:#94a3b8;font-size:11px;white-space:nowrap">#${g.game_id}</td>
       </tr>`).join('');
     return `<div class="field-date-group">
       <div class="field-date-header">
@@ -616,7 +617,7 @@ function renderFieldsView() {
         <span class="field-date-count">${dateGames.length} game${dateGames.length !== 1 ? 's' : ''}</span>
       </div>
       <table class="field-games-table">
-        <thead><tr><th>Time</th>${showFieldCol ? '<th>Field</th>' : ''}<th>Division</th><th>Home</th><th></th><th>Away</th></tr></thead>
+        <thead><tr><th>Time</th>${showFieldCol ? '<th>Field</th>' : ''}<th>Division</th><th>Home</th><th></th><th>Away</th><th>#</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
