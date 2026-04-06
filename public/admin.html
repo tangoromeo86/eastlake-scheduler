@@ -153,12 +153,17 @@
       <div class="field-form-inner">
         <h3 id="field-form-title">Add Field</h3>
         <div class="field-form-row">
-          <label>Weekday Field Name *<input id="ffe-name" type="text" placeholder="e.g. Eastlake Middle School"></label>
-          <label>Weekday Address<input id="ffe-address" type="text" placeholder="e.g. 2375 Schoolhouse Way, Chula Vista"></label>
+          <label>Venue Name *<input id="ffe-name" type="text" placeholder="e.g. Mel Harder Park"></label>
+          <label>Sub-field <span class="field-form-hint">(optional — e.g. U10, Field #3)</span><input id="ffe-subfield" type="text" placeholder="Leave blank if single surface"></label>
         </div>
         <div class="field-form-row">
-          <label>Weekend Venue Name <span class="field-form-hint">(if different)</span><input id="ffe-wknd-name" type="text" placeholder="Leave blank if same as weekday"></label>
-          <label>Weekend Address <span class="field-form-hint">(if different)</span><input id="ffe-wknd-addr" type="text" placeholder="Leave blank if same as weekday"></label>
+          <label>Address<input id="ffe-address" type="text" placeholder="e.g. 12519 Chardon Windsor Rd, Chardon OH"></label>
+        </div>
+        <div class="field-form-row">
+          <label style="flex:1">Notes <span class="field-form-hint">(parking, entrance, directions)</span><input id="ffe-notes" type="text" placeholder="e.g. Field is behind the school, park in rear lot"></label>
+        </div>
+        <div class="field-form-row">
+          <label>Coordinates <span class="field-form-hint">(paste from Google Maps, e.g. 41.535017, -81.461610)</span><input id="ffe-coords" type="text" placeholder="41.535017, -81.461610"></label>
         </div>
         <div class="field-form-actions">
           <button id="ffe-cancel" class="btn btn-secondary">Cancel</button>

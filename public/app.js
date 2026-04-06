@@ -525,7 +525,7 @@ function renderTeamsPage() {
   }
 
   const fieldMap = {};
-  (seasonData.fields || []).forEach(f => { fieldMap[f.id] = f.name || f.id; });
+  (seasonData.fields || []).forEach(f => { fieldMap[f.id] = fieldDisplayName(f); });
 
   const html = seasonData.divisions.map(div => {
     const divTeams = (seasonData.teams || []).filter(t => t.division_id === div.id);
@@ -607,14 +607,14 @@ async function openEditModal(gameId) {
   // Time
   document.getElementById('edit-time').value = game.time || '';
 
-  // Fields eligible for this division
-  const fields = (seasonData.fields || []).filter(f => !f.division_id || f.division_id === game.division_id);
+  // All fields in directory (no division filter needed)
+  const fields = seasonData.fields || [];
   const fieldSelect = document.getElementById('edit-field');
   fieldSelect.innerHTML = '';
   for (const f of fields) {
     const opt = document.createElement('option');
     opt.value = f.id;
-    opt.textContent = f.name || f.id;
+    opt.textContent = fieldDisplayName(f);
     if (f.id === game.field_id) opt.selected = true;
     fieldSelect.appendChild(opt);
   }
@@ -911,7 +911,7 @@ function renderSeasonEditor() {
   }
 
   const fieldOptions = (seasonData.fields || [])
-    .map(f => `<option value="${esc(f.id)}">${esc(f.name || f.id)} (${esc(f.id)})</option>`)
+    .map(f => `<option value="${esc(f.id)}">${esc(fieldDisplayName(f))}</option>`)
     .join('');
 
   const html = seasonData.divisions.map(div => {
@@ -946,7 +946,8 @@ function renderSeasonEditor() {
 function buildTeamEditorRow(team, fieldOptions) {
   const id = team.id;
   const name = teamLabel(team);
-  const fieldName = (seasonData.fields || []).find(f => f.id === team.home_field_id)?.name || team.home_field_id || '—';
+  const fieldObj  = (seasonData.fields || []).find(f => f.id === team.home_field_id);
+  const fieldName = fieldObj ? fieldDisplayName(fieldObj) : (team.home_field_id || '—');
   const confirmedBadge = team.confirmed !== false
     ? '<span class="confirmed-badge">Confirmed</span>'
     : '<span class="unconfirmed-badge">Unconfirmed</span>';
@@ -975,14 +976,8 @@ function buildTeamEditorRow(team, fieldOptions) {
         <label class="editor-label">Email
           <input type="text" id="ef-email-${id}" value="${esc(team.email || '')}">
         </label>
-        <label class="editor-label">Home Field (Weekday)
+        <label class="editor-label">Home Field
           <select id="ef-field-${id}">
-            ${fieldOptions}
-          </select>
-        </label>
-        <label class="editor-label">Home Field (Saturday, optional)
-          <select id="ef-sat-field-${id}">
-            <option value="">— same as weekday —</option>
             ${fieldOptions}
           </select>
         </label>
@@ -1031,8 +1026,6 @@ function toggleTeamForm(teamId) {
     if (team) {
       const fieldSel = document.getElementById(`ef-field-${teamId}`);
       if (fieldSel) fieldSel.value = team.home_field_id || '';
-      const satSel = document.getElementById(`ef-sat-field-${teamId}`);
-      if (satSel) satSel.value = team.home_field_saturday_id || '';
     }
   }
 }
@@ -1046,8 +1039,7 @@ async function saveTeamForm(teamId) {
   const coach      = document.getElementById(`ef-coach-${teamId}`)?.value.trim();
   const phone      = document.getElementById(`ef-phone-${teamId}`)?.value.trim();
   const email      = document.getElementById(`ef-email-${teamId}`)?.value.trim();
-  const home_field_id          = document.getElementById(`ef-field-${teamId}`)?.value;
-  const home_field_saturday_id = document.getElementById(`ef-sat-field-${teamId}`)?.value || '';
+  const home_field_id = document.getElementById(`ef-field-${teamId}`)?.value;
   const confirmed  = document.getElementById(`ef-confirmed-${teamId}`)?.checked;
   const blackoutRaw = document.getElementById(`ef-blackouts-${teamId}`)?.value || '';
   const blackout_dates = blackoutRaw.split('\n').map(s => s.trim()).filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
@@ -1056,7 +1048,7 @@ async function saveTeamForm(teamId) {
     const res = await fetch(`api/team/${teamId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label, coach, phone, email, home_field_id, home_field_saturday_id, confirmed, blackout_dates }),
+      body: JSON.stringify({ label, coach, phone, email, home_field_id, confirmed, blackout_dates }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -1274,17 +1266,23 @@ document.getElementById('btn-clear-changes').addEventListener('click', async () 
 // ── FIELDS PAGE ───────────────────────────────────────────────────────────────
 let editingFieldId = null;
 
+function fieldDisplayName(f) {
+  return f.sub_field ? `${f.name} – ${f.sub_field}` : f.name;
+}
+
+function fieldMapLink(f, label) {
+  if (!f?.coordinates) return '';
+  const url = `https://www.google.com/maps?q=${f.coordinates}&t=k`;
+  return `<a href="${url}" target="_blank" rel="noopener" class="map-link">${label || '📍 Map'}</a>`;
+}
+
 function renderFieldsPage() {
   const fields = seasonData?.fields || [];
   const teams  = seasonData?.teams  || [];
   const list = document.getElementById('fields-list');
 
-  // Count how many teams use each field
   const usageCount = {};
-  teams.forEach(t => {
-    if (t.home_field_id) usageCount[t.home_field_id] = (usageCount[t.home_field_id] || 0) + 1;
-    if (t.home_field_saturday_id) usageCount[t.home_field_saturday_id] = (usageCount[t.home_field_saturday_id] || 0) + 1;
-  });
+  teams.forEach(t => { if (t.home_field_id) usageCount[t.home_field_id] = (usageCount[t.home_field_id] || 0) + 1; });
 
   if (!fields.length) {
     list.innerHTML = '<p style="color:#94a3b8;padding:24px">No fields defined. Add one above.</p>';
@@ -1293,24 +1291,23 @@ function renderFieldsPage() {
 
   list.innerHTML = `<table class="fields-table">
     <thead><tr>
-      <th>ID</th><th>Weekday Name</th><th>Weekday Address</th>
-      <th>Weekend Override</th><th>Used By</th><th></th>
+      <th>Field</th><th>Address</th><th>Notes</th><th>Map</th><th>Used By</th><th></th>
     </tr></thead>
     <tbody>
     ${fields.map(f => {
       const usage = usageCount[f.id] || 0;
-      const hasWeekend = f.weekend_venue || f.weekend_address;
       return `<tr>
-        <td style="color:#94a3b8;font-size:11px">${esc(String(f.id))}</td>
-        <td><strong>${esc(f.name)}</strong></td>
+        <td>
+          <strong>${esc(f.name)}</strong>
+          ${f.sub_field ? `<span class="field-subfield-badge">${esc(f.sub_field)}</span>` : ''}
+        </td>
         <td>${esc(f.address || '—')}</td>
-        <td>${hasWeekend
-          ? `<span class="field-wknd-badge">Weekend</span> ${esc(f.weekend_venue || f.name)}`
-          : '<span style="color:#cbd5e1">—</span>'}</td>
+        <td style="font-size:12px;color:#94a3b8">${esc(f.notes || '—')}</td>
+        <td>${fieldMapLink(f, '📍 View') || '<span style="color:#cbd5e1">—</span>'}</td>
         <td>${usage ? `<span class="field-used-badge">${usage} team${usage !== 1 ? 's' : ''}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
         <td><div class="field-row-actions">
           <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteField('${String(f.id)}','${esc(f.name)}')">Delete</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteField('${String(f.id)}','${esc(fieldDisplayName(f))}')">Delete</button>
         </div></td>
       </tr>`;
     }).join('')}
@@ -1322,9 +1319,10 @@ function openFieldAdd() {
   editingFieldId = null;
   document.getElementById('field-form-title').textContent = 'Add Field';
   document.getElementById('ffe-name').value = '';
+  document.getElementById('ffe-subfield').value = '';
   document.getElementById('ffe-address').value = '';
-  document.getElementById('ffe-wknd-name').value = '';
-  document.getElementById('ffe-wknd-addr').value = '';
+  document.getElementById('ffe-notes').value = '';
+  document.getElementById('ffe-coords').value = '';
   document.getElementById('ffe-error').classList.add('hidden');
   document.getElementById('field-editor-form').classList.remove('hidden');
   document.getElementById('ffe-name').focus();
@@ -1336,9 +1334,10 @@ function openFieldEdit(fieldId) {
   editingFieldId = fieldId;
   document.getElementById('field-form-title').textContent = 'Edit Field';
   document.getElementById('ffe-name').value = field.name || '';
+  document.getElementById('ffe-subfield').value = field.sub_field || '';
   document.getElementById('ffe-address').value = field.address || '';
-  document.getElementById('ffe-wknd-name').value = field.weekend_venue || '';
-  document.getElementById('ffe-wknd-addr').value = field.weekend_address || '';
+  document.getElementById('ffe-notes').value = field.notes || '';
+  document.getElementById('ffe-coords').value = field.coordinates ? field.coordinates.replace(',', ', ') : '';
   document.getElementById('ffe-error').classList.add('hidden');
   document.getElementById('field-editor-form').classList.remove('hidden');
   document.getElementById('ffe-name').focus();
@@ -1354,12 +1353,13 @@ document.getElementById('ffe-save').addEventListener('click', async () => {
   const errEl = document.getElementById('ffe-error');
   errEl.classList.add('hidden');
   const body = {
-    name:            document.getElementById('ffe-name').value.trim(),
-    address:         document.getElementById('ffe-address').value.trim(),
-    weekend_venue:   document.getElementById('ffe-wknd-name').value.trim(),
-    weekend_address: document.getElementById('ffe-wknd-addr').value.trim(),
+    name:        document.getElementById('ffe-name').value.trim(),
+    sub_field:   document.getElementById('ffe-subfield').value.trim(),
+    address:     document.getElementById('ffe-address').value.trim(),
+    notes:       document.getElementById('ffe-notes').value.trim(),
+    coordinates: document.getElementById('ffe-coords').value.trim(),
   };
-  if (!body.name) { errEl.textContent = 'Field name is required.'; errEl.classList.remove('hidden'); return; }
+  if (!body.name) { errEl.textContent = 'Venue name is required.'; errEl.classList.remove('hidden'); return; }
   const url    = editingFieldId ? `api/season/fields/${editingFieldId}` : 'api/season/fields';
   const method = editingFieldId ? 'PUT' : 'POST';
   try {

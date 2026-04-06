@@ -283,7 +283,7 @@ function renderGames(divGames) {
       <td class="g-home">${esc(g.home_team_name)}</td>
       <td class="g-away">${esc(g.away_team_name)}</td>
       <td>${esc(g.field_name)}</td>
-      <td class="g-addr">${esc(g.field_address)}</td>
+      <td class="g-addr">${esc(g.field_address)}${fieldMapLink(g.field_id)}</td>
       ${session ? `<td><button class="req-btn" data-gid="${g.game_id}">Request Change</button></td>` : ''}
     </tr>
   `).join('');
@@ -300,7 +300,7 @@ function renderGames(divGames) {
         <span class="vs">vs</span>
         <span class="away">${esc(g.away_team_name)}</span>
       </div>
-      <div class="game-card-field">📍 ${esc(g.field_name)}${g.field_address ? ' — ' + esc(g.field_address) : ''}</div>
+      <div class="game-card-field">📍 ${esc(g.field_name)}${g.field_address ? ' — ' + esc(g.field_address) : ''}${fieldMapLink(g.field_id)}</div>
       ${session ? `<div class="game-card-req"><button class="req-btn" data-gid="${g.game_id}">Request Change</button></div>` : ''}
     </div>
   `).join('');
@@ -604,7 +604,7 @@ function renderFieldsView() {
     const rows = dateGames.map(g => `
       <tr>
         <td>${formatTime12h(g.time)}</td>
-        ${showFieldCol ? `<td>${esc(g.field_name)}<div style="font-size:10px;color:#94a3b8">${esc(g.field_address)}</div></td>` : ''}
+        ${showFieldCol ? `<td>${esc(g.field_name)}<div style="font-size:10px;color:#94a3b8">${esc(g.field_address)}${fieldMapLink(g.field_id)}</div></td>` : ''}
         <td><span class="field-div-badge">${esc(divNames[g.division_id] || g.division_id)}</span></td>
         <td class="g-home">${esc(g.home_team_name)}</td>
         <td style="color:#94a3b8;font-size:11px">vs</td>
@@ -1127,6 +1127,13 @@ function formatTime12h(t) {
 }
 function esc(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function fieldMapLink(fieldId) {
+  const f = (seasonData?.fields || []).find(f => f.id === fieldId);
+  if (!f?.coordinates) return '';
+  const url = `https://www.google.com/maps?q=${f.coordinates}&t=k`;
+  return ` <a href="${url}" target="_blank" rel="noopener" class="map-link">Map</a>`;
 }
 
 init();

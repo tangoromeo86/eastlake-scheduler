@@ -489,9 +489,8 @@ app.put('/api/game/:id', requireAdmin, (req, res) => {
   const homeTeam = (seasonData.teams || []).find(t => t.id === home_team_id);
   const awayTeam = (seasonData.teams || []).find(t => t.id === away_team_id);
 
-  const isSat = dayName(date) === 'Saturday';
-  const resolvedFieldName    = fieldObj ? (isSat ? (fieldObj.weekend_venue    || fieldObj.name    || field_id) : (fieldObj.name    || field_id)) : field_id;
-  const resolvedFieldAddress = fieldObj ? (isSat ? (fieldObj.weekend_address  || fieldObj.address || '')       : (fieldObj.address || ''))       : '';
+  const resolvedFieldName    = fieldObj ? (fieldObj.sub_field ? `${fieldObj.name} – ${fieldObj.sub_field}` : (fieldObj.name || field_id)) : field_id;
+  const resolvedFieldAddress = fieldObj ? (fieldObj.address || '') : '';
 
   const updatedGame = {
     ...existingGame,
@@ -559,13 +558,12 @@ app.patch('/api/team/:id', requireAdmin, (req, res) => {
   if (teamIdx === -1) return res.status(404).json({ error: `Team ${teamId} not found` });
 
   const team = { ...seasonData.teams[teamIdx] };
-  const allowed = ['label', 'name', 'coach', 'phone', 'email', 'home_field_id', 'home_field_saturday_id', 'confirmed', 'blackout_dates'];
+  const allowed = ['label', 'name', 'coach', 'phone', 'email', 'home_field_id', 'confirmed', 'blackout_dates'];
   for (const field of allowed) {
     if (!(field in req.body)) continue;
-    const val = req.body[field];
-    if (field === 'home_field_saturday_id' && (val === '' || val === null)) delete team.home_field_saturday_id;
-    else team[field] = val;
+    team[field] = req.body[field];
   }
+  delete team.home_field_saturday_id;
   seasonData.teams[teamIdx] = team;
 
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
@@ -682,11 +680,12 @@ app.post('/api/season/fields', requireAdmin, (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
-  const { name, address, weekend_venue, weekend_address } = req.body;
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Field name is required' });
+  const { name, sub_field, address, notes, coordinates } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Venue name is required' });
   const f = { id: 'field-' + Date.now(), name: name.trim(), address: (address || '').trim() };
-  if (weekend_venue?.trim()) f.weekend_venue = weekend_venue.trim();
-  if (weekend_address?.trim()) f.weekend_address = weekend_address.trim();
+  if (sub_field?.trim()) f.sub_field = sub_field.trim();
+  if (notes?.trim()) f.notes = notes.trim();
+  if (coordinates?.trim()) f.coordinates = coordinates.replace(/\s/g, '');
   data.fields = [...(data.fields || []), f];
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
   fs.copyFileSync(SEASON_FILE, backup);
@@ -701,13 +700,13 @@ app.put('/api/season/fields/:id', requireAdmin, (req, res) => {
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
   const idx = (data.fields || []).findIndex(f => String(f.id) === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Field not found' });
-  const { name, address, weekend_venue, weekend_address } = req.body;
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Field name is required' });
+  const { name, sub_field, address, notes, coordinates } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Venue name is required' });
   const updated = { ...data.fields[idx], name: name.trim(), address: (address || '').trim() };
-  if (weekend_venue?.trim()) updated.weekend_venue = weekend_venue.trim();
-  else delete updated.weekend_venue;
-  if (weekend_address?.trim()) updated.weekend_address = weekend_address.trim();
-  else delete updated.weekend_address;
+  if (sub_field?.trim()) updated.sub_field = sub_field.trim(); else delete updated.sub_field;
+  if (notes?.trim()) updated.notes = notes.trim(); else delete updated.notes;
+  if (coordinates?.trim()) updated.coordinates = coordinates.replace(/\s/g, ''); else delete updated.coordinates;
+  delete updated.weekend_venue; delete updated.weekend_address;
   data.fields[idx] = updated;
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
   fs.copyFileSync(SEASON_FILE, backup);
@@ -721,9 +720,8 @@ app.put('/api/season/fields/:id', requireAdmin, (req, res) => {
       let changed = false;
       for (const g of sched.games || []) {
         if (String(g.field_id) === req.params.id) {
-          const isSat = g.day === 'Saturday';
-          g.field_name    = isSat ? (updated.weekend_venue    || updated.name    || g.field_id) : (updated.name    || g.field_id);
-          g.field_address = isSat ? (updated.weekend_address  || updated.address || '')          : (updated.address || '');
+          g.field_name    = updated.sub_field ? `${updated.name} – ${updated.sub_field}` : (updated.name || g.field_id);
+          g.field_address = updated.address || '';
           changed = true;
         }
       }
