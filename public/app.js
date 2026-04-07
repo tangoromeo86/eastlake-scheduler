@@ -453,22 +453,23 @@ function renderAdminCityView() {
 
 function adminExportCityCSV(clubId) {
   const teams = seasonData?.teams || [];
-  const clubTeamIds = new Set(teams.filter(t => t.club_id === clubId).map(t => t.id));
+  const clubTeamIds = clubId ? new Set(teams.filter(t => t.club_id === clubId).map(t => t.id)) : null;
   const divNames = Object.fromEntries((seasonData?.divisions || []).map(d => [d.id, d.name || d.label || d.id]));
   const games = [...(scheduleData?.games || [])]
-    .filter(g => clubTeamIds.has(g.home_team_id) || clubTeamIds.has(g.away_team_id))
+    .filter(g => !clubTeamIds || clubTeamIds.has(g.home_team_id) || clubTeamIds.has(g.away_team_id))
     .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
   const rows = [['Date','Day','Time','Home/Away','Division','Home Team','Away Team','Field','Address','Game #']];
   for (const g of games) {
-    const isHome = clubTeamIds.has(g.home_team_id);
-    rows.push([formatDate(g.date), g.day, formatTime12h(g.time), isHome ? 'Home' : 'Away',
+    const isHome = clubTeamIds ? clubTeamIds.has(g.home_team_id) : null;
+    rows.push([formatDate(g.date), g.day, formatTime12h(g.time), isHome === null ? '' : isHome ? 'Home' : 'Away',
       divNames[g.division_id] || g.division_id, g.home_team_name, g.away_team_name,
       g.field_name, g.field_address || '', '#' + g.game_id]);
   }
   const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = `${adminClubName(clubId).replace(/[^a-z0-9]/gi,'-').toLowerCase()}-schedule.csv`; a.click(); URL.revokeObjectURL(a.href);
+  const filename = clubId ? `${adminClubName(clubId).replace(/[^a-z0-9]/gi,'-').toLowerCase()}-schedule.csv` : 'all-cities-schedule.csv';
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
 }
 
 document.getElementById('admin-field-select').addEventListener('change', () => {
