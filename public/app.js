@@ -858,7 +858,7 @@ async function openEditModal(gameId) {
   document.getElementById('edit-time').value = game.time || '';
 
   // All fields in directory (no division filter needed)
-  const fields = seasonData.fields || [];
+  const fields = [...(seasonData.fields || [])].sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
   const fieldSelect = document.getElementById('edit-field');
   fieldSelect.innerHTML = '';
   for (const f of fields) {
@@ -1160,7 +1160,8 @@ function renderSeasonEditor() {
     return;
   }
 
-  const fieldOptions = (seasonData.fields || [])
+  const fieldOptions = [...(seasonData.fields || [])]
+    .sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)))
     .map(f => `<option value="${esc(f.id)}">${esc(fieldDisplayName(f))}</option>`)
     .join('');
 
@@ -1317,7 +1318,8 @@ async function saveTeamForm(teamId) {
     // Refresh the team row summary
     const teamEl = document.getElementById(`editor-team-${teamId}`);
     if (teamEl) {
-      const allFieldOptions = (seasonData.fields || [])
+      const allFieldOptions = [...(seasonData.fields || [])]
+        .sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)))
         .map(f => `<option value="${esc(f.id)}">${esc(f.name || f.id)} (${esc(f.id)})</option>`)
         .join('');
       teamEl.outerHTML = buildTeamEditorRow(data.team, allFieldOptions);
@@ -1527,7 +1529,7 @@ function fieldMapLink(f, label) {
 }
 
 function renderFieldsPage() {
-  const fields = seasonData?.fields || [];
+  const fields = [...(seasonData?.fields || [])].sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
   const teams  = seasonData?.teams  || [];
   const list = document.getElementById('fields-list');
 
