@@ -210,7 +210,12 @@
       </div>
       <div id="modal-body-fields" class="modal-body">
         <div class="modal-row">
-          <label>Date<select id="edit-date"></select></label>
+          <label>Date
+            <div class="date-suggest-row">
+              <select id="edit-date"></select>
+              <button id="btn-suggest-dates" class="btn-suggest-dates" title="Find available dates for both teams">&#128197; Suggest</button>
+            </div>
+          </label>
           <label>Time<input id="edit-time" type="text" placeholder="HH:MM"></label>
         </div>
         <div class="modal-row">
@@ -221,6 +226,7 @@
           <label>Away Team<select id="edit-away"></select></label>
         </div>
       </div>
+      <div id="suggest-panel" class="suggest-panel hidden"></div>
       <div id="edit-violations" class="edit-violations hidden"></div>
 
       <!-- Shown after a successful save -->

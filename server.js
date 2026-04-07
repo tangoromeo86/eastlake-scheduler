@@ -355,6 +355,96 @@ app.get('/api/season/slots', requireAuth, (req, res) => {
   res.json(result);
 });
 
+function adjacentDateStr(dateStr, delta) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+app.get('/api/game/:id/suggest-dates', requireAdmin, (req, res) => {
+  const gameId = parseInt(req.params.id, 10);
+
+  let schedData, seasonData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` }); }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
+
+  const game = schedData.games.find(g => g.game_id === gameId);
+  if (!game) return res.status(404).json({ error: `Game ${gameId} not found` });
+
+  // Allow caller to pass updated team IDs (in case editor changed them before clicking)
+  const rawHomeId = req.query.home_team_id;
+  const rawAwayId = req.query.away_team_id;
+  const home_team_id = rawHomeId ? (isNaN(parseInt(rawHomeId, 10)) ? rawHomeId : parseInt(rawHomeId, 10)) : game.home_team_id;
+  const away_team_id = rawAwayId ? (isNaN(parseInt(rawAwayId, 10)) ? rawAwayId : parseInt(rawAwayId, 10)) : game.away_team_id;
+
+  const teams = seasonData.teams || [];
+  const homeTeam = teams.find(t => t.id === home_team_id);
+  const awayTeam = teams.find(t => t.id === away_team_id);
+
+  // Global blackouts
+  const season = seasonData.season || {};
+  const globalBlackouts = new Set(season.blackout_dates || []);
+  for (const weekend of (season.blackout_weekends || [])) {
+    if (weekend.saturday) globalBlackouts.add(weekend.saturday);
+    if (weekend.sunday)   globalBlackouts.add(weekend.sunday);
+    if (Array.isArray(weekend.dates)) for (const d of weekend.dates) globalBlackouts.add(d);
+  }
+
+  // Team-level blackouts
+  const homeBlackouts = new Set(homeTeam?.blackout_dates || []);
+  const awayBlackouts = new Set(awayTeam?.blackout_dates || []);
+
+  // Dates each team already has a game (excluding the game being edited)
+  const otherGames = schedData.games.filter(g => g.game_id !== gameId);
+  const homeDates = new Set(otherGames
+    .filter(g => g.home_team_id === home_team_id || g.away_team_id === home_team_id)
+    .map(g => g.date));
+  const awayDates = new Set(otherGames
+    .filter(g => g.home_team_id === away_team_id || g.away_team_id === away_team_id)
+    .map(g => g.date));
+
+  // Home team's home field for schedule preview
+  const homeFieldId = homeTeam?.home_field_id ?? null;
+  const fields = seasonData.fields || [];
+  const homeFieldObj = homeFieldId ? fields.find(f => f.id === homeFieldId) : null;
+  const homeFieldName = homeFieldObj
+    ? (homeFieldObj.sub_field ? `${homeFieldObj.name} – ${homeFieldObj.sub_field}` : homeFieldObj.name)
+    : null;
+
+  const suggestions = [];
+  for (const wk of SEASON_WEEKS) {
+    const slots = wk.weekdays.map(d => ({ date: d, day: dayName(d), type: 'weekday' }));
+    if (wk.saturday) slots.push({ date: wk.saturday, day: 'Saturday', type: 'saturday' });
+
+    for (const { date, day, type } of slots) {
+      if (globalBlackouts.has(date)) continue;
+      if (homeBlackouts.has(date)) continue;
+      if (awayBlackouts.has(date)) continue;
+      if (homeDates.has(date)) continue;
+      if (awayDates.has(date)) continue;
+
+      const prevDay = adjacentDateStr(date, -1);
+      const nextDay = adjacentDateStr(date, +1);
+      if (homeDates.has(prevDay) || homeDates.has(nextDay)) continue;
+      if (awayDates.has(prevDay) || awayDates.has(nextDay)) continue;
+
+      // Collect other games at the home field on this date
+      const fieldGames = homeFieldId
+        ? otherGames
+            .filter(g => g.field_id === homeFieldId && g.date === date)
+            .map(g => ({ game_id: g.game_id, time: g.time || '', home: g.home_team_name, away: g.away_team_name }))
+            .sort((a, b) => a.time.localeCompare(b.time))
+        : [];
+
+      suggestions.push({ date, day, week: wk.week, type, field_games: fieldGames });
+    }
+  }
+
+  res.json({ suggestions, home_field_name: homeFieldName });
+});
+
 app.get('/api/export/csv', requireAuth, (req, res) => {
   if (!fs.existsSync(SCHEDULE_FILE)) return res.status(404).json({ error: 'No schedule generated yet' });
   let data;

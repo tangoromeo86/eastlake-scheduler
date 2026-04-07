@@ -904,6 +904,7 @@ function closeEditModal() {
   document.getElementById('edit-violations').classList.add('hidden');
   document.getElementById('edit-violations').innerHTML = '';
   document.getElementById('edit-force').classList.add('hidden');
+  document.getElementById('suggest-panel').classList.add('hidden');
   // Reset notify panel
   document.getElementById('notify-panel').classList.add('hidden');
   document.getElementById('notify-email-btn').classList.add('hidden');
@@ -991,6 +992,92 @@ document.getElementById('edit-force').addEventListener('click', () => saveGame(t
 document.getElementById('game-edit-modal').addEventListener('click', (e) => {
   if (e.target === document.getElementById('game-edit-modal')) closeEditModal();
 });
+document.getElementById('btn-suggest-dates').addEventListener('click', suggestDates);
+
+// ── Date Suggestions ──────────────────────────────────────────────────────────
+async function suggestDates() {
+  if (editingGameId === null) return;
+  const homeId = document.getElementById('edit-home').value;
+  const awayId = document.getElementById('edit-away').value;
+  const panel  = document.getElementById('suggest-panel');
+
+  panel.innerHTML = '<p class="suggest-loading">Finding available dates&hellip;</p>';
+  panel.classList.remove('hidden');
+
+  try {
+    const params = new URLSearchParams({ home_team_id: homeId, away_team_id: awayId });
+    const data = await fetchJSON(`api/game/${editingGameId}/suggest-dates?${params}`);
+    renderSuggestions(data.suggestions, data.home_field_name);
+  } catch (e) {
+    panel.innerHTML = `<p class="suggest-empty">Error: ${esc(e.message)}</p>`;
+  }
+}
+
+function renderSuggestions(suggestions, homeFieldName) {
+  const panel = document.getElementById('suggest-panel');
+
+  if (!suggestions.length) {
+    panel.innerHTML = `
+      <div class="suggest-panel-header">
+        <span>No available dates found for these two teams</span>
+        <button class="suggest-close-btn">&times;</button>
+      </div>`;
+    panel.querySelector('.suggest-close-btn').addEventListener('click', () => panel.classList.add('hidden'));
+    return;
+  }
+
+  const headerNote = homeFieldName ? ` &middot; ${esc(homeFieldName)} field usage shown` : '';
+  let html = `<div class="suggest-panel-header">
+    <span>${suggestions.length} available date${suggestions.length !== 1 ? 's' : ''}${headerNote}</span>
+    <button class="suggest-close-btn">&times;</button>
+  </div><div class="suggest-slots">`;
+
+  let lastWeek = null;
+  for (const s of suggestions) {
+    if (s.week !== lastWeek) {
+      html += `<div class="suggest-week-label">Week ${s.week}</div>`;
+      lastWeek = s.week;
+    }
+    let fieldHtml = '';
+    if (homeFieldName) {
+      if (s.field_games.length === 0) {
+        fieldHtml = `<span class="suggest-field-free">Field open</span>`;
+      } else {
+        const gameList = s.field_games.map(g =>
+          `${g.time ? formatTime12h(g.time) + '\u00a0' : ''}${esc(g.home)} vs ${esc(g.away)}`
+        ).join(', ');
+        fieldHtml = `<span class="suggest-field-busy">${s.field_games.length} game${s.field_games.length !== 1 ? 's' : ''}: ${gameList}</span>`;
+      }
+    }
+    html += `<button class="suggest-slot" data-date="${s.date}">
+      <span class="suggest-slot-date">${esc(s.day)} ${formatDate(s.date)}</span>
+      ${fieldHtml}
+    </button>`;
+  }
+
+  html += '</div>';
+  panel.innerHTML = html;
+  panel.classList.remove('hidden');
+
+  panel.querySelector('.suggest-close-btn').addEventListener('click', () => panel.classList.add('hidden'));
+
+  panel.querySelectorAll('.suggest-slot').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const date = btn.dataset.date;
+      const sel  = document.getElementById('edit-date');
+      const opt  = [...sel.options].find(o => o.value === date);
+      if (opt) {
+        sel.value = date;
+        // Clear any violations since user picked a clean date
+        const viol = document.getElementById('edit-violations');
+        viol.classList.add('hidden');
+        viol.innerHTML = '';
+        document.getElementById('edit-force').classList.add('hidden');
+      }
+      panel.classList.add('hidden');
+    });
+  });
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function formatDate(d) {
