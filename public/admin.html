@@ -91,6 +91,7 @@
           </select>
         </label>
         <span id="game-count-label" class="game-count"></span>
+        <button id="btn-add-game" class="btn btn-primary" style="padding:4px 10px;font-size:12px">+ Add Game</button>
       </div>
     </div>
 
@@ -215,6 +216,9 @@
         <button id="modal-close" class="modal-close">&times;</button>
       </div>
       <div id="modal-body-fields" class="modal-body">
+        <div class="modal-row hidden" id="add-game-division-row">
+          <label>Division<select id="edit-division"></select></label>
+        </div>
         <div class="modal-row">
           <label>Date
             <div class="date-suggest-row">

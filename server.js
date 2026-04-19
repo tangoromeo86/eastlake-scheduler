@@ -541,6 +541,88 @@ app.post('/api/upload-season', requireAdmin, (req, res) => {
   });
 });
 
+app.post('/api/game', requireAdmin, (req, res) => {
+  const { division_id, date, time, field_id, home_team_id, away_team_id, force } = req.body;
+  if (!division_id || !date || !time || !field_id || home_team_id == null || away_team_id == null)
+    return res.status(400).json({ error: 'division_id, date, time, field_id, home_team_id, and away_team_id are required' });
+
+  let schedData, seasonData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` }); }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
+
+  const home_team_id_p = isNaN(parseInt(home_team_id, 10)) ? home_team_id : parseInt(home_team_id, 10);
+  const away_team_id_p = isNaN(parseInt(away_team_id, 10)) ? away_team_id : parseInt(away_team_id, 10);
+  const field_id_p = isNaN(parseInt(field_id, 10)) ? field_id : parseInt(field_id, 10);
+
+  const gameId = Math.max(0, ...schedData.games.map(g => g.game_id || 0)) + 1;
+
+  const gameForValidation = { id: gameId, date, time, field_id: field_id_p, home_team_id: home_team_id_p, away_team_id: away_team_id_p, division_id, week: null };
+  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [] };
+  const violations = validateGameEdit(gameForValidation, schedData.games, seasonForValidation);
+  if (violations.length && !force) return res.status(409).json({ violations });
+
+  let newWeek = null;
+  for (const wk of SEASON_WEEKS) {
+    if (wk.weekdays.includes(date) || wk.saturday === date) { newWeek = wk.week; break; }
+  }
+
+  const fieldObj = (seasonData.fields || []).find(f => f.id === field_id_p || f.id === field_id);
+  const homeTeam = (seasonData.teams || []).find(t => t.id === home_team_id_p);
+  const awayTeam = (seasonData.teams || []).find(t => t.id === away_team_id_p);
+
+  const resolvedFieldName    = fieldObj ? (fieldObj.sub_field ? `${fieldObj.name} – ${fieldObj.sub_field}` : (fieldObj.name || field_id)) : field_id;
+  const resolvedFieldAddress = fieldObj ? (fieldObj.address || '') : '';
+
+  const newGame = {
+    game_id: gameId, division_id, week: newWeek,
+    date, day: dayName(date), time,
+    field_id: field_id_p, field_name: resolvedFieldName, field_address: resolvedFieldAddress,
+    home_team_id: home_team_id_p, home_team_name: homeTeam ? teamName(homeTeam) : String(home_team_id_p),
+    away_team_id: away_team_id_p, away_team_name: awayTeam ? teamName(awayTeam) : String(away_team_id_p),
+    is_rematch: false,
+  };
+
+  schedData.games.push(newGame);
+  schedData.games.sort((a, b) => (a.date > b.date ? 1 : a.date < b.date ? -1 : 0));
+  schedData.total_games = schedData.games.length;
+  schedData.generated_at = new Date().toISOString();
+
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
+
+  function teamContact(t) {
+    if (!t) return null;
+    return { id: t.id, name: teamName(t), coach: t.coach || '', email: t.email || '', phone: t.phone || '' };
+  }
+
+  const changeRecord = {
+    id: Date.now(),
+    timestamp: new Date().toISOString(),
+    type: 'addition',
+    game_id: gameId,
+    division_id,
+    division_name: (() => {
+      const d = (seasonData.divisions || []).find(d => d.id === division_id);
+      return d ? (d.name || d.label || d.id) : division_id;
+    })(),
+    before: null,
+    after: { ...newGame },
+    changed_fields: [],
+    home_team: teamContact(homeTeam),
+    away_team: teamContact(awayTeam),
+    forced: !!force,
+  };
+
+  let allChanges = [];
+  try { if (fs.existsSync(CHANGES_FILE)) allChanges = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
+  allChanges.push(changeRecord);
+  try { fs.writeFileSync(CHANGES_FILE, JSON.stringify(allChanges, null, 2)); } catch {}
+
+  res.json({ ok: true, game: newGame, violations, change: changeRecord });
+});
+
 app.put('/api/game/:id', requireAdmin, (req, res) => {
   const gameId = parseInt(req.params.id, 10);
   const { date, time, field_id, home_team_id, away_team_id, force } = req.body;
@@ -714,6 +796,35 @@ app.post('/api/notify-deletion', requireAdmin, async (req, res) => {
     '', 'Please update your calendars accordingly.', '', '— Eastlake League Admin',
   ];
   const result = await sendEmail({ to: emails, subject: `Game Cancelled: Game #${change.game_id} — ${divName}`, text: lines.join('\n') });
+  if (!result.ok) return res.status(500).json({ error: result.reason });
+  res.json({ ok: true, sent_to: emails });
+});
+
+app.post('/api/notify-addition', requireAdmin, async (req, res) => {
+  const { change_id } = req.body;
+  let changes = [];
+  try { changes = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
+  const change = changes.find(c => c.id === change_id);
+  if (!change) return res.status(404).json({ error: 'Change not found' });
+
+  const emails = [change.home_team?.email, change.away_team?.email].filter(Boolean);
+  if (!emails.length) return res.status(400).json({ error: 'No email on file for either team' });
+
+  const divName = change.division_name || change.division_id;
+  const game = change.after || {};
+  const lines = [
+    'Hi coaches,', '',
+    'A new game has been added to the schedule:', '',
+    `Game #${change.game_id} — ${divName}`,
+    `${change.home_team?.name || 'Home'} (H) vs ${change.away_team?.name || 'Away'} (A)`, '',
+    'Game details:',
+    `  Date: ${game.day || ''} ${game.date || ''}`,
+    `  Time: ${game.time || ''}`,
+    `  Field: ${game.field_name || ''}`,
+    `  Address: ${game.field_address || ''}`,
+    '', 'Please add this game to your calendars.', '', '— Eastlake League Admin',
+  ];
+  const result = await sendEmail({ to: emails, subject: `New Game Added: Game #${change.game_id} — ${divName}`, text: lines.join('\n') });
   if (!result.ok) return res.status(500).json({ error: result.reason });
   res.json({ ok: true, sent_to: emails });
 });

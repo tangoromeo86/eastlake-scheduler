@@ -9,6 +9,7 @@ let lastGames    = null;
 let currentPage = 'schedule';
 let seasonSlots = null;
 let editingGameId = null;
+let isAddingGame = false;
 
 // ── Top-level page switching ──────────────────────────────────────────────────
 document.querySelectorAll('.top-nav-btn').forEach(btn => {
@@ -854,6 +855,11 @@ async function openEditModal(gameId) {
   if (!game) return;
 
   editingGameId = gameId;
+  isAddingGame = false;
+  document.getElementById('add-game-division-row').classList.add('hidden');
+  document.getElementById('edit-delete').classList.remove('hidden');
+  document.getElementById('btn-suggest-dates').classList.remove('hidden');
+  document.getElementById('edit-save').textContent = 'Save Changes';
 
   // Fetch slots once
   if (!seasonSlots) {
@@ -957,11 +963,105 @@ function closeEditModal() {
   document.getElementById('edit-cancel').classList.remove('hidden');
   document.getElementById('edit-save').classList.remove('hidden');
   document.getElementById('modal-body-fields').classList.remove('hidden');
+  document.getElementById('add-game-division-row').classList.add('hidden');
+  document.getElementById('btn-suggest-dates').classList.remove('hidden');
+  document.getElementById('edit-save').textContent = 'Save Changes';
   editingGameId = null;
+  isAddingGame = false;
+}
+
+async function openAddModal() {
+  if (!scheduleData || !seasonData) return;
+
+  isAddingGame = true;
+  editingGameId = null;
+
+  if (!seasonSlots) {
+    try { seasonSlots = await fetchJSON('api/season/slots'); }
+    catch (e) { showBanner('Could not load season slots: ' + e.message, 'error'); isAddingGame = false; return; }
+  }
+
+  // Division select — default to active division
+  const divSelect = document.getElementById('edit-division');
+  divSelect.innerHTML = '';
+  for (const d of (seasonData.divisions || [])) {
+    const opt = document.createElement('option');
+    opt.value = d.id;
+    opt.textContent = d.name || d.label || d.id;
+    if (d.id === activeDivision) opt.selected = true;
+    divSelect.appendChild(opt);
+  }
+  document.getElementById('add-game-division-row').classList.remove('hidden');
+
+  // Date select
+  const dateSelect = document.getElementById('edit-date');
+  dateSelect.innerHTML = '';
+  for (const wk of seasonSlots) {
+    const grp = document.createElement('optgroup');
+    grp.label = `Week ${wk.week}`;
+    for (const slot of wk.dates) {
+      const opt = document.createElement('option');
+      opt.value = slot.date;
+      opt.textContent = `${slot.day} ${formatDate(slot.date)}`;
+      grp.appendChild(opt);
+    }
+    dateSelect.appendChild(grp);
+  }
+
+  // Time
+  document.getElementById('edit-time').value = '';
+
+  // Fields
+  const fields = [...(seasonData.fields || [])].sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
+  const fieldSelect = document.getElementById('edit-field');
+  fieldSelect.innerHTML = '';
+  for (const f of fields) {
+    const opt = document.createElement('option');
+    opt.value = f.id;
+    opt.textContent = fieldDisplayName(f);
+    fieldSelect.appendChild(opt);
+  }
+
+  // Teams for selected division
+  populateAddModalTeams(divSelect.value);
+
+  // Hide delete and suggest (N/A when adding)
+  document.getElementById('edit-delete').classList.add('hidden');
+  document.getElementById('btn-suggest-dates').classList.add('hidden');
+
+  document.getElementById('modal-title').textContent = 'Add Game';
+  document.getElementById('edit-save').textContent = 'Add Game';
+
+  const violDiv = document.getElementById('edit-violations');
+  violDiv.classList.add('hidden');
+  violDiv.innerHTML = '';
+  document.getElementById('edit-force').classList.add('hidden');
+
+  document.getElementById('game-edit-modal').classList.remove('hidden');
+}
+
+function populateAddModalTeams(divId) {
+  const divTeams = (seasonData?.teams || [])
+    .filter(t => t.division_id === divId && t.confirmed !== false)
+    .sort((a, b) => teamLabel(a).localeCompare(teamLabel(b)));
+  const homeSelect = document.getElementById('edit-home');
+  const awaySelect = document.getElementById('edit-away');
+  homeSelect.innerHTML = '';
+  awaySelect.innerHTML = '';
+  for (const t of divTeams) {
+    const label = teamLabel(t);
+    const optH = document.createElement('option');
+    optH.value = t.id; optH.textContent = label;
+    homeSelect.appendChild(optH);
+    const optA = document.createElement('option');
+    optA.value = t.id; optA.textContent = label;
+    awaySelect.appendChild(optA);
+  }
+  if (awaySelect.options.length > 1) awaySelect.selectedIndex = 1;
 }
 
 async function saveGame(force) {
-  if (editingGameId === null) return;
+  if (!isAddingGame && editingGameId === null) return;
 
   const date = document.getElementById('edit-date').value;
   const time = document.getElementById('edit-time').value.trim();
@@ -976,6 +1076,30 @@ async function saveGame(force) {
 
   if (home_team_id === away_team_id) {
     showViolations(['Home team and away team cannot be the same.']);
+    return;
+  }
+
+  if (isAddingGame) {
+    const division_id = document.getElementById('edit-division').value;
+    try {
+      const res = await fetch('api/game', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ division_id, date, time, field_id: field_id_parsed, home_team_id, away_team_id, force: !!force }),
+      });
+      const data = await res.json();
+      if (res.status === 409) { showViolations(data.violations || ['Unknown conflict.']); return; }
+      if (!res.ok) { showBanner(data.error || 'Save failed.', 'error'); return; }
+      scheduleData.games.push(data.game);
+      scheduleData.games.sort((a, b) => (a.date > b.date ? 1 : a.date < b.date ? -1 : 0));
+      scheduleData.total_games = scheduleData.games.length;
+      renderCurrentView();
+      updateChangesBadge();
+      if (data.change) showAddedPanel(data.change);
+      else { closeEditModal(); showBanner('Game added successfully.', 'success'); }
+    } catch (err) {
+      showBanner('Save error: ' + err.message, 'error');
+    }
     return;
   }
 
@@ -1038,6 +1162,10 @@ document.getElementById('game-edit-modal').addEventListener('click', (e) => {
   if (e.target === document.getElementById('game-edit-modal')) closeEditModal();
 });
 document.getElementById('btn-suggest-dates').addEventListener('click', suggestDates);
+document.getElementById('btn-add-game').addEventListener('click', openAddModal);
+document.getElementById('edit-division').addEventListener('change', (e) => {
+  if (isAddingGame) populateAddModalTeams(e.target.value);
+});
 
 // Delete game
 document.getElementById('edit-delete').addEventListener('click', () => {
@@ -1663,6 +1791,64 @@ function showDeletedPanel(change) {
   document.getElementById('notify-done-btn').classList.remove('hidden');
 }
 
+function showAddedPanel(change) {
+  document.getElementById('modal-body-fields').classList.add('hidden');
+  document.getElementById('edit-violations').classList.add('hidden');
+  document.getElementById('edit-cancel').classList.add('hidden');
+  document.getElementById('edit-save').classList.add('hidden');
+  document.getElementById('edit-force').classList.add('hidden');
+
+  const banner = document.getElementById('notify-saved-banner');
+  banner.innerHTML = `&#10133; Game #${change.game_id} added`;
+  banner.style.background = '#f0fdf4';
+  banner.style.borderColor = '#bbf7d0';
+  banner.style.color = '#15803d';
+
+  const g = change.after || {};
+  document.getElementById('notify-changes-list').innerHTML = `
+    <div class="notify-change-row"><span class="notify-change-field">Date</span><span style="color:#64748b">${esc(formatDate(g.date) || '—')}</span></div>
+    <div class="notify-change-row"><span class="notify-change-field">Time</span><span style="color:#64748b">${esc(formatTime12h(g.time) || '—')}</span></div>
+    <div class="notify-change-row"><span class="notify-change-field">Field</span><span style="color:#64748b">${esc(g.field_name || '—')}</span></div>`;
+
+  const cards = [
+    { role: 'Home Team', t: change.home_team },
+    { role: 'Away Team', t: change.away_team },
+  ].map(({ role, t }) => {
+    if (!t) return `<div class="notify-team-card"><div class="notify-team-role">${role}</div><div class="notify-no-contact">No contact info</div></div>`;
+    return `<div class="notify-team-card">
+      <div class="notify-team-role">${role}</div>
+      <div class="notify-team-name">${esc(t.name)}</div>
+      <div class="notify-team-contact">
+        ${t.coach ? `<span>&#128100; ${esc(t.coach)}</span>` : ''}
+        ${t.email ? `<span>&#9993; <a href="mailto:${esc(t.email)}">${esc(t.email)}</a></span>` : '<span style="color:#94a3b8">No email on file</span>'}
+        ${t.phone ? `<span>&#128222; ${esc(t.phone)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('notify-team-cards').innerHTML = cards;
+
+  const emails = [change.home_team?.email, change.away_team?.email].filter(Boolean);
+  const emailBtn = document.getElementById('notify-email-btn');
+  if (emails.length) {
+    emailBtn.innerHTML = '&#9993; Email Both Coaches';
+    emailBtn.onclick = async (e) => {
+      e.preventDefault();
+      emailBtn.textContent = 'Sending…';
+      emailBtn.style.pointerEvents = 'none';
+      try {
+        const r = await fetch('api/notify-addition', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ change_id: change.id }) });
+        const d = await r.json();
+        if (d.ok) { emailBtn.textContent = '✓ Sent'; emailBtn.style.background = '#16a34a'; }
+        else { emailBtn.textContent = '✗ Failed — ' + (d.error || 'error'); emailBtn.style.pointerEvents = ''; }
+      } catch { emailBtn.textContent = '✗ Network error'; emailBtn.style.pointerEvents = ''; }
+    };
+    emailBtn.classList.remove('hidden');
+  }
+
+  document.getElementById('notify-panel').classList.remove('hidden');
+  document.getElementById('notify-done-btn').classList.remove('hidden');
+}
+
 function fieldLabel(field) {
   return { date: 'Date', time: 'Time', field: 'Field', home_team: 'Home Team', away_team: 'Away Team' }[field] || field;
 }
@@ -1701,12 +1887,17 @@ async function renderChangesPage() {
     const ts = new Date(c.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     const forcedBadge = c.forced ? '<span class="change-forced-badge">Overridden</span>' : '';
     const isDeletion = c.type === 'deletion';
+    const isAddition = c.type === 'addition';
     const deletionBadge = isDeletion ? '<span class="change-forced-badge" style="background:#fef2f2;color:#991b1b;border-color:#fecaca">Deleted</span>' : '';
+    const additionBadge = isAddition ? '<span class="change-forced-badge" style="background:#f0fdf4;color:#15803d;border-color:#bbf7d0">Added</span>' : '';
 
     let pills;
     if (isDeletion) {
       const g = c.before || {};
       pills = `<span class="change-field-pill" style="color:#991b1b">&#128465; Game removed — ${esc(formatDate(g.date) || '')} ${esc(g.time ? formatTime12h(g.time) : '')} · ${esc(g.field_name || '')}</span>`;
+    } else if (isAddition) {
+      const g = c.after || {};
+      pills = `<span class="change-field-pill" style="color:#15803d">&#10133; Game added — ${esc(formatDate(g.date) || '')} ${esc(g.time ? formatTime12h(g.time) : '')} · ${esc(g.field_name || '')}</span>`;
     } else {
       pills = (c.changed_fields || []).map(f =>
         `<span class="change-field-pill"><strong>${fieldLabel(f.field)}:</strong> <span class="pill-from">${esc(formatFieldValue(f.field, f.from))}</span> → <span class="pill-to">${esc(formatFieldValue(f.field, f.to))}</span></span>`
@@ -1720,14 +1911,14 @@ async function renderChangesPage() {
     };
 
     const emails = [c.home_team?.email, c.away_team?.email].filter(Boolean);
-    const notifyEndpoint = isDeletion ? 'api/notify-deletion' : 'api/notify-change';
+    const notifyEndpoint = isDeletion ? 'api/notify-deletion' : isAddition ? 'api/notify-addition' : 'api/notify-change';
 
     return `<div class="change-entry">
       <div class="change-entry-header">
         <span class="change-ts">${ts}</span>
         <span class="change-game-badge">Game #${c.game_id}</span>
         <span class="change-div-badge">${esc(c.division_name || c.division_id)}</span>
-        ${deletionBadge}${forcedBadge}
+        ${deletionBadge}${additionBadge}${forcedBadge}
       </div>
       <div class="change-fields">${pills}</div>
       <div class="change-teams">${teamCard(c.home_team, 'H')}${teamCard(c.away_team, 'A')}</div>
