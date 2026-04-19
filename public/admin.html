@@ -11,6 +11,12 @@
     <h1>Eastlake League Scheduler</h1>
     <div class="header-actions">
       <button id="btn-run" class="btn btn-primary">&#9654; Run Scheduler</button>
+      <span id="run-confirm-box" style="display:none;align-items:center;gap:6px">
+        <input id="run-confirm-input" type="text" placeholder='type "run" to confirm' autocomplete="off"
+          style="font-size:13px;padding:4px 8px;border:1px solid #f59e0b;border-radius:6px;outline:none;width:170px">
+        <button id="run-confirm-ok" class="btn" style="background:#b45309;color:#fff;border-color:#92400e;padding:4px 10px;font-size:13px">Go</button>
+        <button id="run-confirm-cancel" class="btn btn-secondary" style="padding:4px 10px;font-size:13px">✕</button>
+      </span>
       <button id="btn-upload" class="btn btn-secondary">&#8593; Upload season.json</button>
       <a id="btn-csv" class="btn btn-secondary" href="api/export/csv" download>&#8595; Export CSV</a>
       <button id="btn-import-csv" class="btn btn-secondary">&#8593; Import CSV</button>
@@ -229,7 +235,12 @@
       <div id="suggest-panel" class="suggest-panel hidden"></div>
       <div id="edit-violations" class="edit-violations hidden"></div>
 
-      <!-- Shown after a successful save -->
+      <!-- Shown when delete is clicked — asks for confirmation -->
+      <div id="delete-confirm-panel" class="delete-confirm-panel hidden">
+        <p id="delete-confirm-msg" class="delete-confirm-msg"></p>
+      </div>
+
+      <!-- Shown after a successful save or deletion -->
       <div id="notify-panel" class="notify-panel hidden">
         <div id="notify-saved-banner" class="notify-saved-banner"></div>
         <div id="notify-changes-list" class="notify-changes-list"></div>
@@ -237,9 +248,11 @@
       </div>
 
       <div class="modal-footer">
+        <button id="edit-delete" class="btn btn-danger" style="margin-right:auto">&#128465; Delete Game</button>
         <button id="edit-cancel" class="btn btn-secondary">Cancel</button>
         <button id="edit-save" class="btn btn-primary">Save Changes</button>
         <button id="edit-force" class="btn btn-warn hidden">Save Anyway</button>
+        <button id="confirm-delete-btn" class="btn btn-danger hidden">Confirm Delete</button>
         <a id="notify-email-btn" class="btn btn-primary hidden" href="#" target="_blank">&#9993; Email Both Coaches</a>
         <button id="notify-done-btn" class="btn btn-secondary hidden">Done</button>
       </div>

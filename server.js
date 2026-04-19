@@ -636,6 +636,88 @@ app.put('/api/game/:id', requireAdmin, (req, res) => {
   res.json({ ok: true, game: updatedGame, violations, change: changeRecord });
 });
 
+app.delete('/api/game/:id', requireAdmin, (req, res) => {
+  const gameId = parseInt(req.params.id, 10);
+
+  let schedData, seasonData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` }); }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
+
+  const gameIdx = schedData.games.findIndex(g => g.game_id === gameId);
+  if (gameIdx === -1) return res.status(404).json({ error: `Game ${gameId} not found` });
+
+  const game = schedData.games[gameIdx];
+  const homeTeam = (seasonData.teams || []).find(t => t.id === game.home_team_id);
+  const awayTeam = (seasonData.teams || []).find(t => t.id === game.away_team_id);
+
+  function teamContact(t) {
+    if (!t) return null;
+    return { id: t.id, name: teamName(t), coach: t.coach || '', email: t.email || '', phone: t.phone || '' };
+  }
+
+  const changeRecord = {
+    id: Date.now(),
+    timestamp: new Date().toISOString(),
+    type: 'deletion',
+    game_id: gameId,
+    division_id: game.division_id,
+    division_name: (() => {
+      const d = (seasonData.divisions || []).find(d => d.id === game.division_id);
+      return d ? (d.name || d.label || d.id) : game.division_id;
+    })(),
+    before: { ...game },
+    after: null,
+    changed_fields: [],
+    home_team: teamContact(homeTeam),
+    away_team: teamContact(awayTeam),
+    forced: false,
+  };
+
+  schedData.games.splice(gameIdx, 1);
+  schedData.total_games = schedData.games.length;
+  schedData.generated_at = new Date().toISOString();
+
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
+
+  let allChanges = [];
+  try { if (fs.existsSync(CHANGES_FILE)) allChanges = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
+  allChanges.push(changeRecord);
+  try { fs.writeFileSync(CHANGES_FILE, JSON.stringify(allChanges, null, 2)); } catch {}
+
+  res.json({ ok: true, change: changeRecord });
+});
+
+app.post('/api/notify-deletion', requireAdmin, async (req, res) => {
+  const { change_id } = req.body;
+  let changes = [];
+  try { changes = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
+  const change = changes.find(c => c.id === change_id);
+  if (!change) return res.status(404).json({ error: 'Change not found' });
+
+  const emails = [change.home_team?.email, change.away_team?.email].filter(Boolean);
+  if (!emails.length) return res.status(400).json({ error: 'No email on file for either team' });
+
+  const divName = change.division_name || change.division_id;
+  const game = change.before || {};
+  const lines = [
+    'Hi coaches,', '',
+    'The following game has been removed from the schedule:', '',
+    `Game #${change.game_id} — ${divName}`,
+    `${change.home_team?.name || 'Home'} (H) vs ${change.away_team?.name || 'Away'} (A)`, '',
+    'Game details:',
+    `  Date: ${game.day || ''} ${game.date || ''}`,
+    `  Time: ${game.time || ''}`,
+    `  Field: ${game.field_name || ''}`,
+    '', 'Please update your calendars accordingly.', '', '— Eastlake League Admin',
+  ];
+  const result = await sendEmail({ to: emails, subject: `Game Cancelled: Game #${change.game_id} — ${divName}`, text: lines.join('\n') });
+  if (!result.ok) return res.status(500).json({ error: result.reason });
+  res.json({ ok: true, sent_to: emails });
+});
+
 app.patch('/api/team/:id', requireAdmin, (req, res) => {
   const rawId = req.params.id;
   const teamId = isNaN(parseInt(rawId, 10)) ? rawId : parseInt(rawId, 10);

@@ -818,6 +818,29 @@ header h1 {
   color: #fff;
   border: none;
 }
+.btn-danger {
+  background: #dc2626;
+  color: #fff;
+  border: none;
+}
+.btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+.delete-confirm-panel {
+  padding: 20px;
+  display: flex;
+  align-items: flex-start;
+}
+.delete-confirm-msg {
+  font-size: 14px;
+  color: #1e293b;
+  line-height: 1.5;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 14px 16px;
+  width: 100%;
+}
 
 /* ── Notify panel (shown in modal after successful save) ─────────────────── */
 .notify-panel { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }

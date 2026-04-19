@@ -163,13 +163,26 @@ document.getElementById('season-file-input').addEventListener('change', async (e
 });
 
 // ── Run scheduler ─────────────────────────────────────────────────────────────
-document.getElementById('btn-run').addEventListener('click', async () => {
+function _showRunConfirm() {
+  const box = document.getElementById('run-confirm-box');
+  const inp = document.getElementById('run-confirm-input');
+  box.style.display = 'inline-flex';
+  inp.value = '';
+  inp.focus();
+}
+
+function _hideRunConfirm() {
+  document.getElementById('run-confirm-box').style.display = 'none';
+  document.getElementById('run-confirm-input').value = '';
+}
+
+async function _executeRun() {
+  _hideRunConfirm();
   const btn = document.getElementById('btn-run');
   btn.disabled = true;
   show('loading');
   hide('conflict-section');
   hide('success-banner');
-
   try {
     const res = await fetch('api/run', { method: 'POST' });
     if (!res.ok) { showBanner((await res.json()).error || 'Scheduler error.', 'error'); return; }
@@ -182,6 +195,25 @@ document.getElementById('btn-run').addEventListener('click', async () => {
     btn.disabled = false;
     hide('loading');
   }
+}
+
+document.getElementById('btn-run').addEventListener('click', _showRunConfirm);
+
+document.getElementById('run-confirm-ok').addEventListener('click', () => {
+  if (document.getElementById('run-confirm-input').value.trim().toLowerCase() === 'run') {
+    _executeRun();
+  } else {
+    document.getElementById('run-confirm-input').focus();
+    document.getElementById('run-confirm-input').style.borderColor = '#dc2626';
+    setTimeout(() => { document.getElementById('run-confirm-input').style.borderColor = '#f59e0b'; }, 600);
+  }
+});
+
+document.getElementById('run-confirm-cancel').addEventListener('click', _hideRunConfirm);
+
+document.getElementById('run-confirm-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('run-confirm-ok').click();
+  if (e.key === 'Escape') _hideRunConfirm();
 });
 
 // ── Apply schedule ────────────────────────────────────────────────────────────
@@ -245,6 +277,7 @@ document.querySelectorAll('.admin-top-view-btn').forEach(btn => {
       document.getElementById('city-controls').classList.toggle('hidden', mode !== 'city');
       if (mode === 'fields') populateAdminFieldSelect();
       if (mode === 'city')   populateAdminCitySelect();
+      renderCurrentView();
     }
   });
 });
@@ -473,10 +506,10 @@ function adminExportCityCSV(clubId) {
 }
 
 document.getElementById('admin-field-select').addEventListener('change', () => {
-  if (activeTopView === 'fields') renderAdminFieldsView();
+  if (activeTopView === 'fields') renderCurrentView();
 });
 document.getElementById('admin-city-select').addEventListener('change', () => {
-  if (activeTopView === 'city') renderAdminCityView();
+  if (activeTopView === 'city') renderCurrentView();
 });
 document.getElementById('admin-field-export-btn').addEventListener('click', () => {
   adminExportFieldCSV(document.getElementById('admin-field-select').value);
@@ -905,9 +938,21 @@ function closeEditModal() {
   document.getElementById('edit-violations').innerHTML = '';
   document.getElementById('edit-force').classList.add('hidden');
   document.getElementById('suggest-panel').classList.add('hidden');
+  // Reset delete confirm
+  document.getElementById('delete-confirm-panel').classList.add('hidden');
+  document.getElementById('confirm-delete-btn').classList.add('hidden');
+  document.getElementById('edit-delete').classList.remove('hidden');
   // Reset notify panel
   document.getElementById('notify-panel').classList.add('hidden');
-  document.getElementById('notify-email-btn').classList.add('hidden');
+  const _banner = document.getElementById('notify-saved-banner');
+  _banner.style.background = '';
+  _banner.style.borderColor = '';
+  _banner.style.color = '';
+  const _emailBtn = document.getElementById('notify-email-btn');
+  _emailBtn.classList.add('hidden');
+  _emailBtn.style.pointerEvents = '';
+  _emailBtn.style.background = '';
+  _emailBtn.innerHTML = '&#9993; Email Both Coaches';
   document.getElementById('notify-done-btn').classList.add('hidden');
   document.getElementById('edit-cancel').classList.remove('hidden');
   document.getElementById('edit-save').classList.remove('hidden');
@@ -993,6 +1038,52 @@ document.getElementById('game-edit-modal').addEventListener('click', (e) => {
   if (e.target === document.getElementById('game-edit-modal')) closeEditModal();
 });
 document.getElementById('btn-suggest-dates').addEventListener('click', suggestDates);
+
+// Delete game
+document.getElementById('edit-delete').addEventListener('click', () => {
+  if (editingGameId === null) return;
+  const game = scheduleData?.games.find(g => g.game_id === editingGameId);
+  const desc = game ? `${game.home_team_name} vs ${game.away_team_name} on ${formatDate(game.date)}` : `Game #${editingGameId}`;
+  document.getElementById('delete-confirm-msg').textContent =
+    `Delete Game #${editingGameId} (${desc})? This cannot be undone. You'll have the option to notify both coaches.`;
+  document.getElementById('modal-body-fields').classList.add('hidden');
+  document.getElementById('edit-violations').classList.add('hidden');
+  document.getElementById('suggest-panel').classList.add('hidden');
+  document.getElementById('delete-confirm-panel').classList.remove('hidden');
+  document.getElementById('edit-save').classList.add('hidden');
+  document.getElementById('edit-force').classList.add('hidden');
+  document.getElementById('edit-delete').classList.add('hidden');
+  document.getElementById('confirm-delete-btn').classList.remove('hidden');
+});
+
+document.getElementById('confirm-delete-btn').addEventListener('click', async () => {
+  if (editingGameId === null) return;
+  const btn = document.getElementById('confirm-delete-btn');
+  btn.disabled = true;
+  btn.textContent = 'Deleting…';
+  try {
+    const res = await fetch(`api/game/${editingGameId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) {
+      showBanner(data.error || 'Delete failed.', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Confirm Delete';
+      return;
+    }
+    // Remove from in-memory schedule
+    if (scheduleData) {
+      scheduleData.games = scheduleData.games.filter(g => g.game_id !== editingGameId);
+      scheduleData.total_games = scheduleData.games.length;
+    }
+    renderCurrentView();
+    updateChangesBadge();
+    showDeletedPanel(data.change);
+  } catch (err) {
+    showBanner('Delete error: ' + err.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Confirm Delete';
+  }
+});
 
 // ── Date Suggestions ──────────────────────────────────────────────────────────
 async function suggestDates() {
@@ -1512,6 +1603,66 @@ function showNotifyPanel(change) {
   document.getElementById('notify-done-btn').classList.remove('hidden');
 }
 
+function showDeletedPanel(change) {
+  document.getElementById('delete-confirm-panel').classList.add('hidden');
+  document.getElementById('confirm-delete-btn').classList.add('hidden');
+  document.getElementById('edit-cancel').classList.add('hidden');
+  document.getElementById('edit-delete').classList.add('hidden');
+
+  document.getElementById('notify-saved-banner').innerHTML =
+    `&#128465; Game #${change.game_id} deleted`;
+  document.getElementById('notify-saved-banner').style.background = '#fef2f2';
+  document.getElementById('notify-saved-banner').style.borderColor = '#fecaca';
+  document.getElementById('notify-saved-banner').style.color = '#991b1b';
+
+  // Show game details that were deleted
+  const g = change.before || {};
+  document.getElementById('notify-changes-list').innerHTML = `
+    <div class="notify-change-row"><span class="notify-change-field">Date</span><span style="color:#64748b">${esc(formatDate(g.date) || '—')}</span></div>
+    <div class="notify-change-row"><span class="notify-change-field">Time</span><span style="color:#64748b">${esc(formatTime12h(g.time) || '—')}</span></div>
+    <div class="notify-change-row"><span class="notify-change-field">Field</span><span style="color:#64748b">${esc(g.field_name || '—')}</span></div>`;
+
+  // Team cards
+  const cards = [
+    { role: 'Home Team', t: change.home_team },
+    { role: 'Away Team', t: change.away_team },
+  ].map(({ role, t }) => {
+    if (!t) return `<div class="notify-team-card"><div class="notify-team-role">${role}</div><div class="notify-no-contact">No contact info</div></div>`;
+    return `<div class="notify-team-card">
+      <div class="notify-team-role">${role}</div>
+      <div class="notify-team-name">${esc(t.name)}</div>
+      <div class="notify-team-contact">
+        ${t.coach ? `<span>&#128100; ${esc(t.coach)}</span>` : ''}
+        ${t.email ? `<span>&#9993; <a href="mailto:${esc(t.email)}">${esc(t.email)}</a></span>` : '<span style="color:#94a3b8">No email on file</span>'}
+        ${t.phone ? `<span>&#128222; ${esc(t.phone)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('notify-team-cards').innerHTML = cards;
+
+  // Wire up send button
+  const emails = [change.home_team?.email, change.away_team?.email].filter(Boolean);
+  const emailBtn = document.getElementById('notify-email-btn');
+  if (emails.length) {
+    emailBtn.innerHTML = '&#9993; Email Both Coaches';
+    emailBtn.onclick = async (e) => {
+      e.preventDefault();
+      emailBtn.textContent = 'Sending…';
+      emailBtn.style.pointerEvents = 'none';
+      try {
+        const r = await fetch('api/notify-deletion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ change_id: change.id }) });
+        const d = await r.json();
+        if (d.ok) { emailBtn.textContent = '✓ Sent'; emailBtn.style.background = '#16a34a'; }
+        else { emailBtn.textContent = '✗ Failed — ' + (d.error || 'error'); emailBtn.style.pointerEvents = ''; }
+      } catch { emailBtn.textContent = '✗ Network error'; emailBtn.style.pointerEvents = ''; }
+    };
+    emailBtn.classList.remove('hidden');
+  }
+
+  document.getElementById('notify-panel').classList.remove('hidden');
+  document.getElementById('notify-done-btn').classList.remove('hidden');
+}
+
 function fieldLabel(field) {
   return { date: 'Date', time: 'Time', field: 'Field', home_team: 'Home Team', away_team: 'Away Team' }[field] || field;
 }
@@ -1523,8 +1674,10 @@ function formatFieldValue(field, val) {
 }
 
 document.getElementById('notify-done-btn').addEventListener('click', () => {
+  const banner = document.getElementById('notify-saved-banner');
+  const isDeleted = banner.innerHTML.includes('deleted');
   closeEditModal();
-  showBanner('Game updated.', 'success');
+  showBanner(isDeleted ? 'Game deleted.' : 'Game updated.', 'success');
 });
 
 // ── Changes page ──────────────────────────────────────────────────────────────
@@ -1547,9 +1700,18 @@ async function renderChangesPage() {
   container.innerHTML = changes.map(c => {
     const ts = new Date(c.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     const forcedBadge = c.forced ? '<span class="change-forced-badge">Overridden</span>' : '';
-    const pills = (c.changed_fields || []).map(f =>
-      `<span class="change-field-pill"><strong>${fieldLabel(f.field)}:</strong> <span class="pill-from">${esc(formatFieldValue(f.field, f.from))}</span> → <span class="pill-to">${esc(formatFieldValue(f.field, f.to))}</span></span>`
-    ).join('') || '<span class="change-field-pill" style="color:#94a3b8">No fields changed</span>';
+    const isDeletion = c.type === 'deletion';
+    const deletionBadge = isDeletion ? '<span class="change-forced-badge" style="background:#fef2f2;color:#991b1b;border-color:#fecaca">Deleted</span>' : '';
+
+    let pills;
+    if (isDeletion) {
+      const g = c.before || {};
+      pills = `<span class="change-field-pill" style="color:#991b1b">&#128465; Game removed — ${esc(formatDate(g.date) || '')} ${esc(g.time ? formatTime12h(g.time) : '')} · ${esc(g.field_name || '')}</span>`;
+    } else {
+      pills = (c.changed_fields || []).map(f =>
+        `<span class="change-field-pill"><strong>${fieldLabel(f.field)}:</strong> <span class="pill-from">${esc(formatFieldValue(f.field, f.from))}</span> → <span class="pill-to">${esc(formatFieldValue(f.field, f.to))}</span></span>`
+      ).join('') || '<span class="change-field-pill" style="color:#94a3b8">No fields changed</span>';
+    }
 
     const teamCard = (t, role) => {
       if (!t) return '';
@@ -1558,17 +1720,18 @@ async function renderChangesPage() {
     };
 
     const emails = [c.home_team?.email, c.away_team?.email].filter(Boolean);
+    const notifyEndpoint = isDeletion ? 'api/notify-deletion' : 'api/notify-change';
 
     return `<div class="change-entry">
       <div class="change-entry-header">
         <span class="change-ts">${ts}</span>
         <span class="change-game-badge">Game #${c.game_id}</span>
         <span class="change-div-badge">${esc(c.division_name || c.division_id)}</span>
-        ${forcedBadge}
+        ${deletionBadge}${forcedBadge}
       </div>
       <div class="change-fields">${pills}</div>
       <div class="change-teams">${teamCard(c.home_team, 'H')}${teamCard(c.away_team, 'A')}</div>
-      ${emails.length ? `<div class="change-entry-actions"><button class="change-resend" data-change-id="${c.id}">&#9993; Notify Coaches</button></div>` : ''}
+      ${emails.length ? `<div class="change-entry-actions"><button class="change-resend" data-change-id="${c.id}" data-notify-endpoint="${notifyEndpoint}">&#9993; Notify Coaches</button></div>` : ''}
     </div>`;
   }).join('');
 }
@@ -1578,10 +1741,11 @@ document.getElementById('changes-content').addEventListener('click', async (e) =
   const btn = e.target.closest('.change-resend[data-change-id]');
   if (!btn) return;
   const changeId = parseInt(btn.dataset.changeId, 10);
+  const endpoint = btn.dataset.notifyEndpoint || 'api/notify-change';
   btn.textContent = 'Sending…';
   btn.disabled = true;
   try {
-    const r = await fetch('api/notify-change', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ change_id: changeId }) });
+    const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ change_id: changeId }) });
     const d = await r.json();
     if (d.ok) { btn.textContent = '✓ Sent'; btn.style.color = '#16a34a'; btn.style.borderColor = '#16a34a'; }
     else { btn.textContent = '✗ ' + (d.error || 'Failed'); btn.disabled = false; }
