@@ -348,6 +348,7 @@ function openTeamAdd() {
   document.getElementById('tfe-coach').value = '';
   document.getElementById('tfe-email').value = '';
   document.getElementById('tfe-phone').value = '';
+  document.getElementById('tfe-target').value = '';
   populateDivisionSelect();
   populateFieldSelect();
   renderAvailabilityGrid('tfe-availability', null, seasonSlots);
@@ -365,6 +366,7 @@ function openTeamEdit(teamId) {
   document.getElementById('tfe-coach').value = team.coach || '';
   document.getElementById('tfe-email').value = team.email || '';
   document.getElementById('tfe-phone').value = team.phone || '';
+  document.getElementById('tfe-target').value = team.target_games || '';
   populateDivisionSelect();
   populateFieldSelect();
   document.getElementById('tfe-division').value = String(team.division_id || '');
@@ -390,6 +392,7 @@ document.getElementById('tfe-save').addEventListener('click', async () => {
     phone:         document.getElementById('tfe-phone').value.trim(),
     division_id:   document.getElementById('tfe-division').value,
     home_field_id: document.getElementById('tfe-field').value || null,
+    target_games:  document.getElementById('tfe-target').value || undefined,
     availability:  readAvailabilityGrid('tfe-availability'),
   };
   if (!body.label) { errEl.textContent = 'Team name is required.'; errEl.classList.remove('hidden'); return; }

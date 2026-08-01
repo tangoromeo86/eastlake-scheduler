@@ -45,6 +45,7 @@ async function init() {
   document.getElementById('mte-coach').value = myTeam.coach || '';
   document.getElementById('mte-email').value = myTeam.email || '';
   document.getElementById('mte-phone').value = myTeam.phone || '';
+  document.getElementById('mte-target').value = myTeam.target_games || '';
   populateFieldSelect();
   renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots);
 
@@ -288,6 +289,7 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     email:         document.getElementById('mte-email').value.trim(),
     phone:         document.getElementById('mte-phone').value.trim(),
     home_field_id: document.getElementById('mte-field').value || null,
+    target_games:  document.getElementById('mte-target').value || undefined,
     availability:  readAvailabilityGrid('mte-availability'),
   };
   if (!body.label) { errEl.textContent = 'Team name is required.'; errEl.classList.remove('hidden'); return; }

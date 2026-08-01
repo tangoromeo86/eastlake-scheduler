@@ -1072,7 +1072,7 @@ app.patch('/api/team/:id', requireAdmin, async (req, res) => {
   const team = { ...seasonData.teams[teamIdx] };
   // `email` is deliberately absent — it goes through the confirm-at-new-address
   // flow below rather than being written directly, same as every other route.
-  const allowed = ['label', 'name', 'coach', 'phone', 'home_field_id', 'confirmed', 'blackout_dates', 'program_id', 'availability'];
+  const allowed = ['label', 'name', 'coach', 'phone', 'home_field_id', 'confirmed', 'blackout_dates', 'program_id', 'availability', 'target_games'];
   for (const field of allowed) {
     if (!(field in req.body)) continue;
     team[field] = req.body[field];
@@ -1852,7 +1852,7 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
   const s = getSession(req);
-  const { label, coach, email, phone, division_id, home_field_id, program_id } = req.body;
+  const { label, coach, email, phone, division_id, home_field_id, program_id, target_games } = req.body;
   if (!label || !label.trim()) return res.status(400).json({ error: 'Team name is required' });
   if (!division_id || !(data.divisions || []).some(d => String(d.id) === String(division_id))) {
     return res.status(400).json({ error: 'A valid division_id is required' });
@@ -1876,6 +1876,7 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
     home_field_id: home_field_id || null,
     program_id: teamProgramId,
     confirmed: true,
+    ...(target_games ? { target_games: Math.max(1, Math.min(20, Number(target_games) || 0)) } : {}),
   };
   data.teams = [...(data.teams || []), t];
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
@@ -1892,7 +1893,7 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   if (idx === -1) return res.status(404).json({ error: 'Team not found' });
   const existing = data.teams[idx];
   if (!canEditTeam(s, existing)) return res.status(403).json({ error: 'You can only edit your own team' });
-  const { label, coach, email, phone, home_field_id, availability } = req.body;
+  const { label, coach, email, phone, home_field_id, availability, target_games } = req.body;
   // Coaches can't move their own team to a different division — only a director/admin can.
   const division_id = s.role === 'coach' ? existing.division_id : req.body.division_id;
   if (!label || !label.trim()) return res.status(400).json({ error: 'Team name is required' });
@@ -1919,6 +1920,9 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
     division_id,
     home_field_id: home_field_id || null,
     ...(availability && typeof availability === 'object' ? { availability } : {}),
+    ...(target_games !== undefined
+        ? { target_games: Math.max(1, Math.min(20, Number(target_games) || 0)) || undefined }
+        : {}),
     // email is intentionally left as-is here — see confirm-email flow below
   };
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
