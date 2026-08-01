@@ -21,6 +21,7 @@
       <button id="btn-upload" class="btn btn-secondary">&#8593; Upload season.json</button>
       <a id="btn-csv" class="btn btn-secondary" href="api/export/csv" download>&#8595; Export CSV</a>
       <button id="btn-import-csv" class="btn btn-secondary">&#8593; Import CSV</button>
+      <a href="guide.html" class="btn btn-secondary">? Guide</a>
     </div>
   </header>
   <input type="file" id="schedule-csv-input" accept=".csv,text/csv" style="display:none">
@@ -71,11 +72,11 @@
     <div id="admin-cross-div-bar" class="view-bar hidden">
       <div id="fields-controls" class="view-controls hidden">
         <label>Field: <select id="admin-field-select"><option value="">All fields</option></select></label>
-        <button id="admin-field-export-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">&#8595; CSV</button>
+        <button id="admin-field-export-btn" class="btn btn-secondary btn-sm">&#8595; CSV</button>
       </div>
       <div id="program-controls" class="view-controls hidden">
         <label>Program: <select id="admin-program-select"></select></label>
-        <button id="admin-program-export-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">&#8595; CSV</button>
+        <button id="admin-program-export-btn" class="btn btn-secondary btn-sm">&#8595; CSV</button>
       </div>
     </div>
 
@@ -240,7 +241,7 @@
     </div>
     <div id="programs-list"></div>
 
-    <div class="changes-toolbar" style="margin-top:32px">
+    <div class="changes-toolbar" class="section-gap">
       <span class="changes-toolbar-title">&#128100; Directors</span>
       <button id="btn-add-director" class="btn btn-primary">+ Add Director</button>
     </div>
@@ -292,7 +293,7 @@
       </div>
     </div>
 
-    <div class="changes-toolbar" style="margin-top:32px">
+    <div class="changes-toolbar" class="section-gap">
       <span class="changes-toolbar-title">&#127942; Divisions</span>
       <button id="btn-add-division" class="btn btn-primary">+ Add Division</button>
     </div>
@@ -312,7 +313,7 @@
     </div>
     <div id="divisions-list"></div>
 
-    <div class="changes-toolbar" style="margin-top:32px">
+    <div class="changes-toolbar" class="section-gap">
       <span class="changes-toolbar-title">&#127807; Start a New Season</span>
     </div>
     <div class="field-editor-form">
@@ -401,6 +402,7 @@
     </div>
   </div>
 
+  <script src="ui.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

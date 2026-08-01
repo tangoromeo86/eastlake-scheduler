@@ -1998,7 +1998,9 @@ function updateChangesBadge() {
 }
 
 document.getElementById('btn-clear-changes').addEventListener('click', async () => {
-  if (!confirm('Clear the entire change log?')) return;
+  const ok = await confirmTyped('Clear change log',
+    'This erases the admin action history. Game change requests and restore points are not affected.', 'clear');
+  if (!ok) return;
   await fetch('api/changes', { method: 'DELETE' });
   document.getElementById('nav-changes').textContent = '📋 Changes';
   renderChangesPage();
@@ -2026,11 +2028,11 @@ function renderFieldsPage() {
   teams.forEach(t => { if (t.home_field_id) usageCount[t.home_field_id] = (usageCount[t.home_field_id] || 0) + 1; });
 
   if (!fields.length) {
-    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No fields defined. Add one above.</p>';
+    list.innerHTML = '<p class="empty-note">No fields defined. Add one above.</p>';
     return;
   }
 
-  list.innerHTML = `<table class="fields-table">
+  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr>
       <th>Field</th><th>Address</th><th>Notes</th><th>Map</th><th>Used By</th><th></th>
     </tr></thead>
@@ -2046,14 +2048,14 @@ function renderFieldsPage() {
         <td style="font-size:12px;color:#94a3b8">${esc(f.notes || '—')}</td>
         <td>${fieldMapLink(f, '📍 View') || '<span style="color:#cbd5e1">—</span>'}</td>
         <td>${usage ? `<span class="field-used-badge">${usage} team${usage !== 1 ? 's' : ''}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
-        <td><div class="field-row-actions">
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteField('${String(f.id)}','${esc(fieldDisplayName(f))}')">Delete</button>
+        <td><div class="row-actions">
+          <button class="btn btn-secondary btn-sm" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteField('${String(f.id)}','${esc(fieldDisplayName(f))}')">Delete</button>
         </div></td>
       </tr>`;
     }).join('')}
     </tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function openFieldAdd() {
@@ -2115,14 +2117,16 @@ document.getElementById('ffe-save').addEventListener('click', async () => {
 });
 
 async function deleteField(fieldId, fieldName) {
-  if (!confirm(`Delete field "${fieldName}"? This cannot be undone.`)) return;
+  const ok = await confirmTyped('Delete field',
+    `This removes <strong>${esc(fieldName)}</strong> and cannot be undone.`, 'delete');
+  if (!ok) return;
   try {
     const res  = await fetch(`api/season/fields/${fieldId}`, { method: 'DELETE' });
     const data = await res.json();
-    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    if (!data.ok) { toast(data.error || 'Delete failed.', 'bad'); return; }
     seasonData = await fetchJSON('api/season');
     renderFieldsPage();
-  } catch (e) { alert('Network error. Try again.'); }
+  } catch (e) { toast('Network error. Try again.', 'bad'); }
 }
 
 // ── Programs & Directors ────────────────────────────────────────────────────────
@@ -2142,26 +2146,26 @@ function renderProgramsList() {
   const list = document.getElementById('programs-list');
 
   if (!programs.length) {
-    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No programs defined. Add one above.</p>';
+    list.innerHTML = '<p class="empty-note">No programs defined. Add one above.</p>';
     return;
   }
 
   const dirCount = {};
   directors.forEach(d => { dirCount[d.program_id] = (dirCount[d.program_id] || 0) + 1; });
 
-  list.innerHTML = `<table class="fields-table">
+  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>Program</th><th>Directors</th><th></th></tr></thead>
     <tbody>
     ${programs.map(p => `<tr>
         <td><strong>${esc(p.name)}</strong></td>
         <td>${dirCount[p.id] ? `<span class="field-used-badge">${dirCount[p.id]} director${dirCount[p.id] !== 1 ? 's' : ''}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
-        <td><div class="field-row-actions">
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openProgramEdit('${String(p.id)}')">Edit</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteProgram('${String(p.id)}','${esc(p.name)}')">Delete</button>
+        <td><div class="row-actions">
+          <button class="btn btn-secondary btn-sm" onclick="openProgramEdit('${String(p.id)}')">Edit</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteProgram('${String(p.id)}','${esc(p.name)}')">Delete</button>
         </div></td>
       </tr>`).join('')}
     </tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function openProgramAdd() {
@@ -2208,14 +2212,16 @@ document.getElementById('pfe-save').addEventListener('click', async () => {
 });
 
 async function deleteProgram(programId, programName) {
-  if (!confirm(`Delete program "${programName}"? This cannot be undone.`)) return;
+  const ok = await confirmTyped('Delete program',
+    `This removes <strong>${esc(programName)}</strong> and cannot be undone.`, 'delete');
+  if (!ok) return;
   try {
     const res  = await fetch(`api/season/programs/${programId}`, { method: 'DELETE' });
     const data = await res.json();
-    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    if (!data.ok) { toast(data.error || 'Delete failed.', 'bad'); return; }
     seasonData = await fetchJSON('api/season');
     renderProgramsPage();
-  } catch (e) { alert('Network error. Try again.'); }
+  } catch (e) { toast('Network error. Try again.', 'bad'); }
 }
 
 function populateDirectorProgramSelect() {
@@ -2233,11 +2239,11 @@ function renderDirectorsList() {
   const list = document.getElementById('directors-list');
 
   if (!directors.length) {
-    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No directors defined. Add one above.</p>';
+    list.innerHTML = '<p class="empty-note">No directors defined. Add one above.</p>';
     return;
   }
 
-  list.innerHTML = `<table class="fields-table">
+  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>Name</th><th>Program</th><th>Email</th><th>Phone</th><th>Status</th><th></th></tr></thead>
     <tbody>
     ${directors.map(d => `<tr>
@@ -2246,17 +2252,17 @@ function renderDirectorsList() {
         <td>${esc(d.email)}</td>
         <td>${esc(d.phone || '—')}</td>
         <td>${d.active === false ? '<span style="color:#dc2626">Inactive</span>' : '<span style="color:#16a34a">Active</span>'}</td>
-        <td><div class="field-row-actions">
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openDirectorEdit('${String(d.id)}')">Edit</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteDirector('${String(d.id)}','${esc(d.name)}')">Delete</button>
+        <td><div class="row-actions">
+          <button class="btn btn-secondary btn-sm" onclick="openDirectorEdit('${String(d.id)}')">Edit</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteDirector('${String(d.id)}','${esc(d.name)}')">Delete</button>
         </div></td>
       </tr>`).join('')}
     </tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function openDirectorAdd() {
-  if (!(seasonData?.programs || []).length) { alert('Add a program first.'); return; }
+  if (!(seasonData?.programs || []).length) { toast('Add a program first.', 'bad'); return; }
   editingDirectorId = null;
   document.getElementById('director-form-title').textContent = 'Add Director';
   document.getElementById('dfe-name').value = '';
@@ -2313,14 +2319,16 @@ document.getElementById('dfe-save').addEventListener('click', async () => {
 });
 
 async function deleteDirector(directorId, directorName) {
-  if (!confirm(`Delete director "${directorName}"? This cannot be undone.`)) return;
+  const ok = await confirmTyped('Delete director',
+    `This removes <strong>${esc(directorName)}</strong> and cannot be undone.`, 'delete');
+  if (!ok) return;
   try {
     const res  = await fetch(`api/season/directors/${directorId}`, { method: 'DELETE' });
     const data = await res.json();
-    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    if (!data.ok) { toast(data.error || 'Delete failed.', 'bad'); return; }
     seasonData = await fetchJSON('api/season');
     renderProgramsPage();
-  } catch (e) { alert('Network error. Try again.'); }
+  } catch (e) { toast('Network error. Try again.', 'bad'); }
 }
 
 // ── Verify-email banner (view vs. act) ───────────────────────────────────────────
@@ -2334,7 +2342,7 @@ async function initVerifyBanner() {
   banner.id = 'verify-banner';
   banner.style.cssText = 'background:#fef3c7;border-bottom:1px solid #f59e0b;color:#92400e;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px;justify-content:center';
   banner.innerHTML = `<span>Verify your email to make schedule changes.</span>
-    <button id="verify-banner-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">Send verification link</button>`;
+    <button id="verify-banner-btn" class="btn btn-secondary btn-sm">Send verification link</button>`;
   document.body.prepend(banner);
 
   document.getElementById('verify-banner-btn').addEventListener('click', async (e) => {
@@ -2377,7 +2385,7 @@ async function renderRequestsPage() {
   };
 
   const sorted = [...list].sort((a, b) => (b.submitted_at || '').localeCompare(a.submitted_at || ''));
-  container.innerHTML = `<table class="fields-table">
+  container.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>Game</th><th>Started by</th><th>Round</th><th>Waiting on</th><th>Due</th><th>On the table</th><th>Status</th><th>Escalation</th></tr></thead>
     <tbody>
     ${sorted.map(cr => {
@@ -2406,19 +2414,21 @@ async function renderRequestsPage() {
       </tr>`;
     }).join('')}
     </tbody>
-  </table>`;
+  </table></div>`;
 }
 
 document.getElementById('btn-finalize').addEventListener('click', async () => {
-  if (!confirm('Finalize all Scheduled and Confirmed games? Games with a change request still in progress (Pending) are left alone.')) return;
+  const ok = await confirmTyped('Finalize games',
+    'Finalizes every Scheduled and Confirmed game, locking them against further change requests. Games mid-negotiation (Pending) are left alone.', 'finalize');
+  if (!ok) return;
   try {
     const res = await fetch('api/finalize-games', { method: 'POST' });
     const data = await res.json();
-    if (!data.ok) { alert(data.error || 'Finalize failed.'); return; }
+    if (!data.ok) { toast(data.error || 'Finalize failed.', 'bad'); return; }
     let msg = `Finalized ${data.finalized} game${data.finalized !== 1 ? 's' : ''}.`;
-    if (data.skipped_pending?.length) msg += ` ${data.skipped_pending.length} game(s) still pending a change request were left alone: #${data.skipped_pending.join(', #')}.`;
-    alert(msg);
-  } catch (e) { alert('Network error. Try again.'); }
+    if (data.skipped_pending?.length) msg += ` ${data.skipped_pending.length} left pending: #${data.skipped_pending.join(', #')}.`;
+    toast(msg, 'good');
+  } catch (e) { toast('Network error. Try again.', 'bad'); }
 });
 
 
@@ -2426,11 +2436,11 @@ document.getElementById('btn-finalize').addEventListener('click', async () => {
 
 function renderCalendarPreview(calendar) {
   const el = document.getElementById('sc-calendar');
-  if (!calendar?.length) { el.innerHTML = '<p style="color:#94a3b8;padding:8px">Set a start date to see the season calendar.</p>'; return; }
-  el.innerHTML = `<table class="fields-table">
+  if (!calendar?.length) { el.innerHTML = '<p class="muted">Set a start date to see the season calendar.</p>'; return; }
+  el.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>Week</th><th>Starts (Mon)</th><th>Saturday</th></tr></thead>
     <tbody>${calendar.map(w => `<tr><td>${w.week}</td><td>${esc(w.first)}</td><td>${esc(w.saturday || '—')}</td></tr>`).join('')}</tbody>
-  </table>`;
+  </table></div>`;
 }
 
 async function renderSeasonPage() {
@@ -2469,8 +2479,8 @@ document.getElementById('sc-save').addEventListener('click', async () => {
 let editingDivisionId = null;
 function renderDivisionsList(divisions) {
   const el = document.getElementById('divisions-list');
-  if (!divisions.length) { el.innerHTML = '<p style="color:#94a3b8;padding:24px">No divisions yet. Add one above.</p>'; return; }
-  el.innerHTML = `<table class="fields-table">
+  if (!divisions.length) { el.innerHTML = '<p class="empty-note">No divisions yet. Add one above.</p>'; return; }
+  el.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>ID</th><th>Name</th><th>Games</th><th>Teams</th><th></th></tr></thead>
     <tbody>${divisions.map(d => {
       const n = (seasonData?.teams || []).filter(t => String(t.division_id) === String(d.id)).length;
@@ -2479,11 +2489,11 @@ function renderDivisionsList(divisions) {
         <td><strong>${esc(d.name)}</strong></td>
         <td>${d.target_games || '—'}</td>
         <td>${n || '—'}</td>
-        <td><div class="field-row-actions">
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openDivisionEdit('${esc(d.id)}','${esc(d.name)}',${d.target_games || 0})">Edit</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteDivision('${esc(d.id)}')">Delete</button>
+        <td><div class="row-actions">
+          <button class="btn btn-secondary btn-sm" onclick="openDivisionEdit('${esc(d.id)}','${esc(d.name)}',${d.target_games || 0})">Edit</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteDivision('${esc(d.id)}')">Delete</button>
         </div></td></tr>`;
-    }).join('')}</tbody></table>`;
+    }).join('')}</tbody></table></div>`;
 }
 
 function openDivisionAdd() {
@@ -2527,14 +2537,16 @@ document.getElementById('dv-save').addEventListener('click', async () => {
 });
 
 async function deleteDivision(id) {
-  if (!confirm(`Delete division "${id}"?`)) return;
+  const ok = await confirmTyped('Delete division',
+    `This removes division <strong>${esc(id)}</strong>. It must have no teams in it.`, 'delete');
+  if (!ok) return;
   try {
     const res = await fetch(`api/season/divisions/${id}`, { method: 'DELETE' });
     const data = await res.json();
-    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    if (!data.ok) { toast(data.error || 'Delete failed.', 'bad'); return; }
     seasonData = await fetchJSON('api/season');
     renderSeasonPage();
-  } catch { alert('Network error. Try again.'); }
+  } catch { toast('Network error. Try again.', 'bad'); }
 }
 
 document.getElementById('ns-go').addEventListener('click', async () => {
@@ -2553,8 +2565,13 @@ document.getElementById('ns-go').addEventListener('click', async () => {
     const res = await fetch('api/season/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json();
     if (!data.ok) { errEl.textContent = data.error || 'Could not start new season.'; errEl.classList.remove('hidden'); return; }
-    alert(`New season started.\n\nArchived as restore point ${data.archived_snapshot}.\nKept ${data.kept.programs} programs, ${data.kept.directors} directors, ${data.kept.fields} fields, ${data.kept.divisions} divisions.\nTeams and schedule cleared for registration.`);
-    location.reload();
+    openPanel('New season started', `
+      <p class="notice notice-good">Archived as restore point <code>${esc(data.archived_snapshot)}</code>.</p>
+      <p style="font-size:14px;margin-top:12px">Carried over: <strong>${data.kept.programs}</strong> programs,
+        <strong>${data.kept.directors}</strong> directors, <strong>${data.kept.fields}</strong> fields,
+        <strong>${data.kept.divisions}</strong> divisions.</p>
+      <p style="font-size:14px;margin-top:8px">Teams, schedule and open change requests were cleared, ready for registration.</p>
+      <div class="field-form-actions"><button class="btn btn-primary" onclick="location.reload()">Reload</button></div>`);
   } catch { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
 });
 
@@ -2566,18 +2583,18 @@ async function renderBackupsPage() {
   let data;
   try { data = await fetchJSON('api/snapshots'); }
   catch (e) { el.innerHTML = `<p style="color:#dc2626;padding:24px">Could not load snapshots: ${esc(e.message)}</p>`; return; }
-  if (!data.snapshots.length) { el.innerHTML = '<p style="color:#94a3b8;padding:24px">No restore points yet. One is taken automatically before any destructive action.</p>'; return; }
-  el.innerHTML = `<table class="fields-table">
+  if (!data.snapshots.length) { el.innerHTML = '<p class="empty-note">No restore points yet. One is taken automatically before any destructive action.</p>'; return; }
+  el.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>When</th><th>Label</th><th>Type</th><th>Contents</th><th></th></tr></thead>
     <tbody>${data.snapshots.map(s => `<tr>
       <td>${new Date(s.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
       <td><strong>${esc(s.label)}</strong></td>
       <td>${s.kind === 'manual' ? '<span class="confirmed-badge">Manual</span>' : '<span style="color:#94a3b8">Auto</span>'}</td>
       <td style="font-size:12px;color:#64748b">${s.summary.teams} teams · ${s.summary.games} games · ${s.summary.programs} programs${s.summary.open_requests ? ` · ${s.summary.open_requests} open request(s)` : ''}</td>
-      <td><div class="field-row-actions">
-        <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="restoreSnapshot('${s.id}','${esc(s.label)}')">Restore</button>
-        <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteSnapshot('${s.id}')">Delete</button>
-      </div></td></tr>`).join('')}</tbody></table>`;
+      <td><div class="row-actions">
+        <button class="btn btn-secondary btn-sm" onclick="restoreSnapshot('${s.id}','${esc(s.label)}')">Restore</button>
+        <button class="btn btn-secondary btn-sm danger-text" onclick="deleteSnapshot('${s.id}')">Delete</button>
+      </div></td></tr>`).join('')}</tbody></table></div>`;
 }
 
 document.getElementById('btn-snapshot').addEventListener('click', async () => {
@@ -2585,32 +2602,36 @@ document.getElementById('btn-snapshot').addEventListener('click', async () => {
   try {
     const res = await fetch('api/snapshots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
     const data = await res.json();
-    if (!data.ok) { alert(data.error || 'Could not take snapshot.'); return; }
+    if (!data.ok) { toast(data.error || 'Could not take snapshot.', 'bad'); return; }
     document.getElementById('snap-label').value = '';
     renderBackupsPage();
-  } catch { alert('Network error. Try again.'); }
+  } catch { toast('Network error. Try again.', 'bad'); }
 });
 
 async function restoreSnapshot(id, label) {
-  const typed = prompt(`Restore "${label}"?\n\nThis replaces the current season, roster, schedule and change requests.\nThe current state is snapshotted first, so this can be undone.\n\nType "restore" to confirm:`);
-  if ((typed || '').trim().toLowerCase() !== 'restore') return;
+  const ok = await confirmTyped('Restore this backup',
+    `This replaces the current season, roster, schedule and change requests with <strong>${esc(label)}</strong>.<br><br>` +
+    'The current state is snapshotted first, so this itself can be undone.', 'restore');
+  if (!ok) return;
   try {
     const res = await fetch(`api/snapshots/${id}/restore`, { method: 'POST' });
     const data = await res.json();
-    if (!data.ok) { alert(data.error || 'Restore failed.'); return; }
-    alert(`Restored "${data.restored.label}".\n${data.summary.teams} teams · ${data.summary.games} games.`);
-    location.reload();
-  } catch { alert('Network error. Try again.'); }
+    if (!data.ok) { toast(data.error || 'Restore failed.', 'bad'); return; }
+    toast(`Restored "${data.restored.label}" — ${data.summary.teams} teams, ${data.summary.games} games.`, 'good');
+    setTimeout(() => location.reload(), 900);
+  } catch { toast('Network error. Try again.', 'bad'); }
 }
 
 async function deleteSnapshot(id) {
-  if (!confirm('Delete this restore point? This cannot be undone.')) return;
+  const ok = await confirmTyped('Delete restore point',
+    'This permanently removes this backup. Other restore points are unaffected.', 'delete');
+  if (!ok) return;
   try {
     const res = await fetch(`api/snapshots/${id}`, { method: 'DELETE' });
     const data = await res.json();
-    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    if (!data.ok) { toast(data.error || 'Delete failed.', 'bad'); return; }
     renderBackupsPage();
-  } catch { alert('Network error. Try again.'); }
+  } catch { toast('Network error. Try again.', 'bad'); }
 }
 
 

@@ -316,6 +316,9 @@ function loginPage(next) {
       <button class="btn" id="signin-btn">Sign In</button>
     </div>
   </div>
+  <p style="margin-top:16px;font-size:13px;color:#94a3b8">
+    New here? <a href="guide.html" style="color:#2d6cf0;text-decoration:none">Read the guide</a>
+  </p>
 
   <script>
     const NEXT = ${JSON.stringify(next || '')};
@@ -406,6 +409,8 @@ app.get('/admin/', (req, res) => res.redirect((BASE_PATH || '') + '/admin'));
 
 app.get('/director', requireDirector, (req, res) => res.sendFile(path.join(__dirname, 'public', 'director.html')));
 app.get('/director/', (req, res) => res.redirect((BASE_PATH || '') + '/director'));
+
+app.get('/guide', (req, res) => res.sendFile(path.join(__dirname, 'public', 'guide.html')));
 
 app.get('/my-team', requireAuth, (req, res) => {
   const s = getSession(req);

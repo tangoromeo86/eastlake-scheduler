@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>User Guide — Eastlake League Scheduler</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .guide { max-width: 820px; margin: 0 auto; padding: 24px 20px 80px; }
+    .guide h2 { font-size: 1.4rem; margin: 40px 0 6px; color: #1a1a2e; padding-top: 14px; border-top: 2px solid #e2e8f0; }
+    .guide h2:first-of-type { border-top: none; padding-top: 0; margin-top: 24px; }
+    .guide h3 { font-size: 1.05rem; margin: 26px 0 8px; color: #1a1a2e; }
+    .guide h4 { font-size: .95rem; margin: 18px 0 6px; color: #334155; }
+    .guide p, .guide li { font-size: 14.5px; line-height: 1.65; color: #334155; }
+    .guide ul, .guide ol { margin: 8px 0 8px 22px; }
+    .guide li { margin-bottom: 5px; }
+    .guide code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+    .guide strong { color: #1a1a2e; }
+    .lede { font-size: 15.5px; color: #475569; line-height: 1.6; }
+    .role-nav { display: flex; gap: 10px; flex-wrap: wrap; margin: 20px 0 8px; }
+    .role-nav a { flex: 1; min-width: 190px; text-decoration: none; background: #fff; border: 1.5px solid #e2e8f0;
+                  border-radius: 10px; padding: 14px 16px; transition: border-color .15s; }
+    .role-nav a:hover { border-color: #2d6cf0; }
+    .role-nav .who { font-weight: 700; color: #1a1a2e; font-size: 15px; }
+    .role-nav .what { font-size: 13px; color: #64748b; margin-top: 3px; }
+    .callout { border-left: 3px solid #2d6cf0; background: #f8fafc; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+    .callout.warn { border-left-color: #f59e0b; background: #fffbeb; }
+    .callout.key { border-left-color: #16a34a; background: #f0fdf4; }
+    .callout p { margin: 0; font-size: 14px; }
+    .callout p + p { margin-top: 8px; }
+    .steps { counter-reset: s; list-style: none; margin-left: 0; }
+    .steps > li { counter-increment: s; position: relative; padding-left: 38px; margin-bottom: 14px; }
+    .steps > li::before { content: counter(s); position: absolute; left: 0; top: -1px; width: 26px; height: 26px;
+      background: #2d6cf0; color: #fff; border-radius: 50%; display: flex; align-items: center;
+      justify-content: center; font-size: 13px; font-weight: 700; }
+    .gtable { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
+    .gtable th, .gtable td { border: 1px solid #e2e8f0; padding: 8px 11px; text-align: left; vertical-align: top; }
+    .gtable th { background: #f8fafc; font-weight: 700; color: #334155; }
+    .toc { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; margin: 18px 0; }
+    .toc a { color: #2d6cf0; text-decoration: none; font-size: 14px; }
+    .toc a:hover { text-decoration: underline; }
+    .toc li { margin-bottom: 3px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Eastlake League Scheduler — User Guide</h1>
+    <div class="header-actions"><a href="./" class="btn btn-secondary">&#8592; Back to schedule</a></div>
+  </header>
+
+  <div class="guide">
+    <p class="lede">This tool builds and maintains the league schedule. It exists so that the work sits with
+      the people closest to it: coaches enter their own availability, directors run their own program, and
+      changes get sorted between coaches without every message routing through the league admin.</p>
+
+    <div class="role-nav">
+      <a href="#admin"><div class="who">League Admin</div><div class="what">Set up the season, generate and finalise the schedule</div></a>
+      <a href="#director"><div class="who">Program Director</div><div class="what">Manage your fields, teams and coaches</div></a>
+      <a href="#coach"><div class="who">Coach</div><div class="what">Set availability and sort out game changes</div></a>
+    </div>
+
+    <h3>How signing in works (everyone)</h3>
+    <p>Your <strong>email address is your login</strong> — there's no password for coaches or directors.
+      There are two levels, deliberately:</p>
+    <ul>
+      <li><strong>Enter your email</strong> and you're straight in to <em>look</em> at anything.</li>
+      <li><strong>To change anything</strong>, you click a one-time link we email you. That proves the address
+        is really yours.</li>
+    </ul>
+    <p>You'll see a yellow banner offering to send that link whenever you need it. It expires after 15 minutes;
+      just request another if it lapses.</p>
+
+    <div class="callout warn">
+      <p><strong>Changing your email address is special.</strong> Because email <em>is</em> your login, a new
+        address only takes effect once you click a confirmation link sent <em>to the new address</em>. Until
+        then your old email keeps working. This stops a typo locking you out.</p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════════ -->
+    <h2 id="admin">League Admin</h2>
+    <p class="lede">Your job is the start and end of the season. The middle mostly runs itself.</p>
+
+    <div class="toc"><strong>In order:</strong>
+      <ul>
+        <li><a href="#a1">1. Set up the season</a></li>
+        <li><a href="#a2">2. Add programs and directors</a></li>
+        <li><a href="#a3">3. Let registration happen</a></li>
+        <li><a href="#a4">4. Generate the schedule</a></li>
+        <li><a href="#a5">5. During the season</a></li>
+        <li><a href="#a6">6. Finalise</a></li>
+        <li><a href="#a7">Backups and restore</a></li>
+        <li><a href="#a8">Starting next season</a></li>
+      </ul>
+    </div>
+
+    <h3 id="a1">1. Set up the season</h3>
+    <p>Go to <strong>Season</strong>. Set:</p>
+    <ul>
+      <li><strong>Season start</strong> — any date in your first week; it snaps back to that week's Monday.</li>
+      <li><strong>Number of weeks</strong> — typically 10–12.</li>
+      <li><strong>Games per team</strong> — the league default. Individual teams can ask for a different number.</li>
+      <li><strong>Blackout dates</strong> — holidays and anything league-wide, one date per line as <code>YYYY-MM-DD</code>.</li>
+    </ul>
+    <p>The <strong>Resulting Calendar</strong> below updates as you save, so you can see exactly which weeks
+      and Saturdays you've created before anyone relies on them.</p>
+    <p>Then add your <strong>divisions</strong> (e.g. U10 Boys, U12 Girls). A division can't be deleted while
+      teams are still in it.</p>
+
+    <div class="callout">
+      <p><strong>Kickoff times are fixed, not per-team.</strong> Weekday games start at <strong>6:30pm</strong>;
+        Saturday slots are <strong>10:00, 12:00 and 2:00</strong>. Coaches don't pick times when setting
+        availability — they only say whether they can play. The exact time gets nudged later, by the two coaches,
+        when a game actually needs to move.</p>
+    </div>
+
+    <h3 id="a2">2. Add programs and directors</h3>
+    <p>Go to <strong>Programs</strong>. Add a program per city or club, then add one director per program with
+      their name, email and phone.</p>
+    <p>That's the last thing you have to do for that program's setup — the director takes it from here.</p>
+
+    <h3 id="a3">3. Let registration happen</h3>
+    <p>Directors add their own fields and teams, and coaches fill in their own availability. You don't need to
+      chase this in the tool; check the <strong>Teams</strong> tab to see how it's filling in.</p>
+
+    <h3 id="a4">4. Generate the schedule</h3>
+    <p>Click <strong>Run Scheduler</strong> in the header and type <code>run</code> to confirm. A backup is taken
+      automatically first, so this is always reversible.</p>
+    <p>The scheduler will:</p>
+    <ul>
+      <li>Put games on <strong>Saturdays wherever possible</strong> — a weekday is only ever used when no Saturday
+        slot could take that matchup</li>
+      <li>Give every team its requested number of games</li>
+      <li>Keep home and away <strong>within one of each other</strong> for every team</li>
+      <li>Respect every team's and field's availability, including single-date exceptions</li>
+      <li>Balance <strong>travel miles</strong> as far as geography allows</li>
+    </ul>
+    <p>Any matchup it couldn't place is reported at the top of the page. It will still schedule everything else —
+      one awkward pairing never costs you the rest of the division.</p>
+    <p>Check the <strong>Stats</strong> view for games, home/away split and travel miles per team.</p>
+
+    <h3 id="a5">5. During the season</h3>
+    <p>Coaches sort changes out between themselves. You only get pulled in when something stalls:</p>
+    <ul>
+      <li>A coach doesn't respond by their deadline → <strong>their director</strong> is emailed</li>
+      <li>Still nothing two days later → <strong>you</strong> are emailed</li>
+      <li>The two coaches keep swapping proposals without agreeing → <strong>both directors</strong> are looped in</li>
+    </ul>
+    <p><strong>Change Requests</strong> shows every live negotiation: which round it's on, whose turn it is, the
+      deadline (overdue ones in red) and what's on the table. Click <strong>History</strong> on any game for the
+      full story — who asked for what, when, and every escalation that fired.</p>
+
+    <h3 id="a6">6. Finalise</h3>
+    <p><strong>Finalize Games</strong> locks the schedule. Finalised games can't receive change requests at all.
+      Games still mid-negotiation are deliberately left alone and reported back, so resolve those first.</p>
+
+    <h3 id="a7">Backups and restore</h3>
+    <p><strong>Backups</strong> lists your restore points. One is taken automatically before anything destructive
+      (running the scheduler, uploading a season, importing a CSV, finalising, starting a new season), and you
+      can take your own labelled one at any time.</p>
+    <p>Each restore point contains the season, roster, schedule <em>and</em> change requests together, so
+      restoring always gives you a consistent league — never a schedule referring to teams that no longer exist.</p>
+    <div class="callout key">
+      <p><strong>Restoring is itself undoable.</strong> The current state is snapshotted before any restore, so
+        if you roll back to the wrong point you can roll straight forward again.</p>
+    </div>
+
+    <h3 id="a8">Starting next season</h3>
+    <p><strong>Season → Start a New Season</strong>. It archives everything as a labelled restore point, keeps
+      your programs, directors, fields and divisions (they carry over year to year), and clears teams, the
+      schedule and any open change requests ready for fresh registration.</p>
+
+    <!-- ══════════════════════════════════════════════════════════════════ -->
+    <h2 id="director">Program Director</h2>
+    <p class="lede">You run your program: your fields, your teams, your coaches. Everything you do is scoped to
+      your own program — you can't affect anyone else's, and they can't affect yours.</p>
+
+    <ol class="steps">
+      <li><strong>Sign in.</strong> Enter your email at the login page. You'll land on your program page. To make
+        changes, click <em>Send verification link</em> in the yellow banner and click the link in your email.</li>
+      <li><strong>Add your fields first.</strong> Teams pick their home field from this list, so it has to exist
+        before you add teams. For each field give the name, address, and — importantly — the
+        <strong>coordinates</strong> (paste them straight from Google Maps). Coordinates are what let the
+        scheduler balance travel fairly.</li>
+      <li><strong>Set field availability.</strong> First the weekly pattern: which days and Saturday slots this
+        field is open to host. Then, if you need to, open a day and close individual dates — a one-off tournament
+        or maintenance closure.</li>
+      <li><strong>Add your teams.</strong> Name, division, home field, and the coach's name, email and phone. The
+        coach's account is created automatically from that email — they never sign up separately.</li>
+      <li><strong>Check availability is in.</strong> Coaches fill in their own, but you can set or correct it for
+        any team in your program.</li>
+    </ol>
+
+    <h3>Keeping an eye on things</h3>
+    <p>The <strong>Games</strong> section lists every game involving your teams. Any game mid-negotiation shows
+      the live state inline — the round, what's been proposed, whose turn it is and when their response is due
+      (red if overdue). Click <strong>History</strong> for the full timeline.</p>
+    <div class="callout">
+      <p>You don't have to wait for an escalation email to find out what's going on. If a coach mentions a game
+        is being moved, you can look it up straight away.</p>
+    </div>
+
+    <h3>Acting for a coach</h3>
+    <p>You can edit any team in your program and request changes on their behalf — useful when a coach has gone
+      quiet. If you change a coach's email, the new address still has to confirm it before it takes effect.</p>
+
+    <h3>Games per team</h3>
+    <p>Each team can ask for a different number of games. Leave it blank to use the league default, or set it per
+      team — your coaches can also set their own.</p>
+
+    <!-- ══════════════════════════════════════════════════════════════════ -->
+    <h2 id="coach">Coach</h2>
+    <p class="lede">Two jobs: tell us when you can play, and sort out changes with the other coach when a game
+      doesn't work.</p>
+
+    <ol class="steps">
+      <li><strong>Sign in</strong> with the email your director registered for you — no password, no sign-up.
+        You'll land on your team page.</li>
+      <li><strong>Check your details</strong> — team name, your name, phone. The other coach needs your phone
+        number if a game has to change at short notice.</li>
+      <li><strong>Set your availability.</strong> This is the important bit — see below.</li>
+      <li><strong>Choose how many games</strong> you want, or leave it blank for the league default.</li>
+      <li><strong>Save.</strong> If you're not verified yet, click the banner and click the emailed link first.</li>
+    </ol>
+
+    <h3>Setting availability — two stages</h3>
+    <p><strong>Stage one: your usual week.</strong> For Monday–Thursday and each of the three Saturday slots,
+      pick one of:</p>
+    <table class="gtable">
+      <tr><th>Available for both</th><td>You can host or travel. Gives the scheduler the most to work with.</td></tr>
+      <tr><th>Available to host</th><td>You can play, but only at home.</td></tr>
+      <tr><th>Available to travel</th><td>You can play, but only away.</td></tr>
+      <tr><th>Not available</th><td>You can't play then at all.</td></tr>
+    </table>
+    <p><strong>Stage two: specific dates.</strong> Open any day (e.g. <em>All Tuesdays</em>) and you'll see every
+      one of those dates in the season. Each starts on <em>Use pattern</em>, so you only touch the exceptions —
+      knock out the Tuesday you're away, or open up a single Monday that happens to work even though Mondays
+      normally don't.</p>
+
+    <div class="callout key">
+      <p><strong>You never pick a kickoff time here.</strong> Weekday games are 6:30pm and Saturdays are 10:00,
+        12:00 or 2:00. You're only telling us whether you can play. The exact time is something you and the other
+        coach can adjust later if a game needs to move.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Keep this honest and current.</strong> Everything downstream depends on it. If you mark yourself
+        available for times that don't really work, you'll end up requesting changes all season — and the options
+        the tool offers you will keep looking wrong.</p>
+    </div>
+
+    <h3>Requesting a change</h3>
+    <p>Find the game under <strong>Upcoming Games</strong> and click <strong>Request Change</strong>. You'll be
+      shown <em>only times that genuinely work for both teams</em> — already checked against both sets of
+      availability and the field's opening hours. Pick one, adjust the kickoff time if you want, add a short
+      reason, and send.</p>
+    <ol class="steps">
+      <li>We email <strong>you</strong> first to check you meant it. Nothing reaches the other coach until you
+        confirm — so a mis-click costs nobody anything.</li>
+      <li>The other coach gets your proposal with <strong>Approve</strong> and <strong>Suggest another time</strong>.</li>
+      <li>If they approve, the game moves and you're both told. Done.</li>
+      <li>If it doesn't work for them, they pick a different time from the same list and it comes back to you.
+        That continues until one of you accepts.</li>
+    </ol>
+    <div class="callout key">
+      <p><strong>The game does not move until you both agree.</strong> It stays exactly where it is, flagged
+        "change in progress", so nobody turns up at the wrong field mid-discussion.</p>
+    </div>
+
+    <h3>How long you have to reply</h3>
+    <p>Every request email states the date you need to respond by. The window tightens as the conversation goes
+      on, because by then you're both already engaged:</p>
+    <table class="gtable">
+      <tr><th>First proposal</th><td>3 days</td></tr>
+      <tr><th>Second</th><td>2 days</td></tr>
+      <tr><th>Third onwards</th><td>1 day</td></tr>
+    </table>
+    <p>Miss it and your director gets a nudge; keep missing it and the league admin hears. Nothing is cancelled —
+      it just stops being only your problem.</p>
+
+    <h3>Changes inside 7 days</h3>
+    <p>Too close to the game for email back-and-forth. The tool shows you the other coach's <strong>phone
+      number</strong> instead — call or text them, agree it directly, then record it with
+      <strong>Manual Override</strong>. You'll be asked who you spoke to and how. That change applies
+      immediately, and the other coach plus both directors are notified.</p>
+
+    <h3>Seeing what happened</h3>
+    <p>Click <strong>History</strong> on any game for the full record: who asked for what, when, who agreed, and
+      anything that got escalated.</p>
+
+    <p style="margin-top:40px;color:#94a3b8;font-size:13px">Stuck on something this guide doesn't cover?
+      Coaches — ask your program director. Directors — ask the league admin.</p>
+  </div>
+</body>
+</html>

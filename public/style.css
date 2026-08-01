@@ -1126,3 +1126,93 @@ header h1 {
 .field-games-table tr:last-child td { border-bottom: none; }
 .field-games-table tbody tr:hover { background: #f8fafc; }
 .field-div-badge { display: inline-block; background: #e0e7ff; color: #3730a3; font-size: 10px; font-weight: 700; border-radius: 3px; padding: 1px 5px; white-space: nowrap; }
+
+/* ── Shared UI additions ──────────────────────────────────────────────────
+   Classes replacing the inline styles that accumulated across the coach,
+   director and admin pages, plus the mobile handling those pages lacked. */
+
+/* Tables must scroll inside their own box on narrow screens rather than
+   forcing the page sideways — coaches are usually on a phone. */
+.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-wrap > table { min-width: 460px; }
+
+.page-wrap { max-width: 1000px; margin: 0 auto; padding: 24px; }
+.page-wrap.narrow { max-width: 680px; }
+
+.muted { color: #94a3b8; }
+.empty-note { color: #94a3b8; padding: 24px; text-align: center; font-size: 14px; }
+.danger-text { color: #dc2626; }
+.section-gap { margin-top: 32px; }
+
+/* Status pills, previously hand-rolled inline on every page. */
+.pill { display: inline-block; border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pill-neutral { background: #f1f5f9; color: #475569; }
+.pill-wait    { background: #fef3c7; color: #92400e; }
+.pill-good    { background: #dcfce7; color: #166534; }
+.pill-bad     { background: #fef2f2; color: #991b1b; }
+
+.row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+
+/* Inline feedback, replacing alert() for anything that isn't destructive. */
+.notice { border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 10px; border: 1px solid transparent; }
+.notice-info { background: #eff6ff; border-color: #bfdbfe; color: #1e40af; }
+.notice-good { background: #dcfce7; border-color: #86efac; color: #166534; }
+.notice-warn { background: #fef3c7; border-color: #fcd34d; color: #92400e; }
+.notice-bad  { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+
+/* Toast for transient confirmations. */
+#toast-host { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 9999;
+              display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+.toast { background: #1a1a2e; color: #fff; padding: 11px 18px; border-radius: 8px; font-size: 14px;
+         box-shadow: 0 6px 24px rgba(0,0,0,.22); max-width: 90vw; animation: toast-in .18s ease-out; }
+.toast.good { background: #166534; } .toast.bad { background: #991b1b; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* Slide-over panel — used for game history, which was previously an alert(). */
+.panel-overlay { position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 9998;
+                 display: flex; justify-content: flex-end; }
+.panel { background: #f8fafc; width: 100%; max-width: 520px; height: 100%; overflow-y: auto;
+         box-shadow: -8px 0 30px rgba(0,0,0,.18); animation: panel-in .18s ease-out; }
+@keyframes panel-in { from { transform: translateX(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+.panel-head { position: sticky; top: 0; background: #1a1a2e; color: #fff; padding: 16px 20px;
+              display: flex; align-items: center; justify-content: space-between; }
+.panel-head h2 { font-size: 1rem; font-weight: 700; }
+.panel-close { background: none; border: none; color: #fff; font-size: 22px; cursor: pointer; line-height: 1; padding: 0 4px; }
+.panel-body { padding: 18px 20px; }
+
+/* Timeline for game history. */
+.tl { list-style: none; position: relative; padding-left: 20px; }
+.tl::before { content: ''; position: absolute; left: 5px; top: 4px; bottom: 4px; width: 2px; background: #e2e8f0; }
+.tl li { position: relative; padding: 0 0 16px 6px; }
+.tl li::before { content: ''; position: absolute; left: -19px; top: 4px; width: 10px; height: 10px;
+                 border-radius: 50%; background: #cbd5e1; border: 2px solid #f8fafc; }
+.tl li.is-agreed::before   { background: #16a34a; }
+.tl li.is-escalated::before{ background: #dc2626; }
+.tl li.is-proposed::before { background: #2d6cf0; }
+.tl-when { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: .04em; }
+.tl-what { font-size: 14px; color: #1a1a2e; margin-top: 2px; }
+.tl-detail { font-size: 13px; color: #64748b; margin-top: 3px; font-style: italic; }
+
+.live-box { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 10px; padding: 12px 14px; margin-bottom: 18px; }
+.live-box h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #92400e; margin-bottom: 6px; }
+.live-box p { font-size: 14px; color: #1a1a2e; }
+.live-box .due { font-size: 13px; color: #92400e; margin-top: 6px; }
+
+/* Availability drill-down: keep the long date lists scannable. */
+.av-group { border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; margin: 8px 0; overflow: hidden; }
+.av-group > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: 14px; background: #f8fafc; list-style: none; }
+.av-group > summary::-webkit-details-marker { display: none; }
+.av-group > summary::before { content: '▸ '; color: #94a3b8; }
+.av-group[open] > summary::before { content: '▾ '; }
+.av-group[open] > summary { border-bottom: 1px solid #e2e8f0; }
+.av-set { color: #2d6cf0; font-weight: 700; }
+
+@media (max-width: 720px) {
+  header { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .header-actions { flex-wrap: wrap; }
+  .page-wrap { padding: 16px 12px; }
+  #top-nav { overflow-x: auto; white-space: nowrap; }
+  .changes-toolbar { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .panel { max-width: 100%; }
+}

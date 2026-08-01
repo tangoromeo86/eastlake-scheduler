@@ -105,14 +105,14 @@ function crSlotLabel(s) {
 async function loadChangeSlots(gameId) {
   const box = document.getElementById('cr-slots');
   const submitBtn = document.getElementById('cr-submit');
-  box.innerHTML = '<p style="color:#94a3b8;padding:8px">Finding times that work for both teams…</p>';
+  box.innerHTML = '<p class="muted">Finding times that work for both teams…</p>';
   submitBtn.disabled = true;
   try {
     const params = new URLSearchParams({ game_id: gameId });
     if (crTeamId) params.set('team_id', crTeamId);
     const data = await fetchJSON('api/change-requests/options?' + params.toString());
     if (!data.slots.length) {
-      box.innerHTML = '<p style="color:#dc2626;padding:8px">No other time fits both teams\' availability. You may need to adjust a team\'s availability or open up a field.</p>';
+      box.innerHTML = '<p class="danger-text">No other time fits both teams\' availability. You may need to adjust a team\'s availability or open up a field.</p>';
       return;
     }
     box.innerHTML = data.slots.map((s, i) => `
@@ -130,23 +130,12 @@ async function loadChangeSlots(gameId) {
       });
     });
   } catch (e) {
-    box.innerHTML = '<p style="color:#dc2626;padding:8px">Could not load available times. Try again.</p>';
+    box.innerHTML = '<p class="danger-text">Could not load available times. Try again.</p>';
   }
 }
 
 
-// ── Game history / live negotiation status ───────────────────────────────────
-function fmtWhen(iso) {
-  if (!iso) return '';
-  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
-function fmtDue(iso) {
-  if (!iso) return '';
-  return new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-}
-
-// Compact one-liner so an in-flight negotiation is visible at a glance in the
-// games list, without having to open anything.
+// Compact inline summary for the games list. Full history lives in ui.js.
 function liveStatusHtml(active) {
   if (!active) return '';
   const overdue = active.response_due_at && new Date(active.response_due_at) < new Date();
@@ -154,7 +143,7 @@ function liveStatusHtml(active) {
   if (active.round) bits.push(`Round ${active.round}`);
   if (active.proposed_by && active.proposal) bits.push(`${esc(active.proposed_by)} proposed ${esc(active.proposal.date)} ${esc(active.proposal.time)}`);
   if (active.awaiting) bits.push(`waiting on <strong>${esc(active.awaiting)}</strong>`);
-  if (active.response_due_at) bits.push(`${overdue ? 'was due' : 'due'} ${esc(fmtDue(active.response_due_at))}`);
+  if (active.response_due_at) bits.push(`${overdue ? 'was due' : 'due'} ${esc(uiDue(active.response_due_at))}`);
   const flags = [];
   if (active.escalated?.director) flags.push('director notified');
   if (active.escalated?.admin) flags.push('admin notified');
@@ -163,26 +152,14 @@ function liveStatusHtml(active) {
     ${bits.join(' · ')}${flags.length ? ` <em>(${flags.join(', ')})</em>` : ''}</div>`;
 }
 
-async function showGameHistory(gameId) {
-  let data;
-  try { data = await fetchJSON(`api/games/${gameId}/history`); }
-  catch { alert('Could not load history for this game.'); return; }
-  const lines = (data.timeline || []).map(e =>
-    `${fmtWhen(e.at)} — ${e.summary}${e.detail ? `\n      ${e.detail}` : ''}`).join('\n');
-  const head = data.active
-    ? `IN PROGRESS: ${data.active.summary}${data.active.response_due_at ? `\nResponse due ${fmtDue(data.active.response_due_at)}` : ''}\n\n`
-    : '';
-  alert(`Game #${gameId} history\n\n${head}${lines || 'No changes recorded yet.'}`);
-}
-
 function renderGamesList() {
   const games = myProgramGames();
   const list = document.getElementById('games-list');
   if (!games.length) {
-    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No games scheduled yet.</p>';
+    list.innerHTML = '<p class="empty-note">No games scheduled yet.</p>';
     return;
   }
-  list.innerHTML = `<table class="fields-table">
+  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>Date</th><th>Home</th><th>Away</th><th>Status</th><th></th></tr></thead>
     <tbody>
     ${games.map(g => {
@@ -198,14 +175,14 @@ function renderGamesList() {
         <td>${esc(g.home_team_name)}</td>
         <td>${esc(g.away_team_name)}</td>
         <td>${statusBadge}${liveStatusHtml(activeByGame[g.game_id])}</td>
-        <td><div class="field-row-actions">
-          ${canRequest ? `<button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openChangeRequest(${g.game_id},'${String(myTeamId)}')">Request Change</button>` : ''}
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="showGameHistory(${g.game_id})">History</button>
+        <td><div class="row-actions">
+          ${canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id},'${String(myTeamId)}')">Request Change</button>` : ''}
+          <button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>
         </div></td>
       </tr>`;
     }).join('')}
     </tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function populateCrFieldSelects() {
@@ -261,7 +238,7 @@ document.getElementById('cr-submit').addEventListener('click', async () => {
     const data = await res.json();
     if (!data.ok) { errEl.textContent = data.error || 'Could not submit request.'; errEl.classList.remove('hidden'); return; }
     document.getElementById('cr-form').classList.add('hidden');
-    alert("Check the coach's email to confirm this request before it goes to the other coach.");
+    toast("Check the coach's email to confirm this request before it reaches the other coach.", 'good');
   } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
 });
 
@@ -317,11 +294,11 @@ function renderTeamsList() {
   const list = document.getElementById('teams-list');
 
   if (!teams.length) {
-    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No teams yet. Add one above.</p>';
+    list.innerHTML = '<p class="empty-note">No teams yet. Add one above.</p>';
     return;
   }
 
-  list.innerHTML = `<table class="fields-table">
+  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>Team</th><th>Division</th><th>Coach</th><th>Email</th><th>Phone</th><th>Home Field</th><th></th></tr></thead>
     <tbody>
     ${teams.map(t => `<tr>
@@ -331,17 +308,17 @@ function renderTeamsList() {
         <td>${esc(t.email || '—')}</td>
         <td>${esc(t.phone || '—')}</td>
         <td>${esc(fieldName(t.home_field_id))}</td>
-        <td><div class="field-row-actions">
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openTeamEdit('${String(t.id)}')">Edit</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteTeam('${String(t.id)}','${esc(teamLabel(t))}')">Delete</button>
+        <td><div class="row-actions">
+          <button class="btn btn-secondary btn-sm" onclick="openTeamEdit('${String(t.id)}')">Edit</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteTeam('${String(t.id)}','${esc(teamLabel(t))}')">Delete</button>
         </div></td>
       </tr>`).join('')}
     </tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function openTeamAdd() {
-  if (!(seasonData?.divisions || []).length) { alert('No divisions exist yet — ask the admin to set them up first.'); return; }
+  if (!(seasonData?.divisions || []).length) { toast('No divisions exist yet — ask the admin to set them up first.', 'bad'); return; }
   editingTeamId = null;
   document.getElementById('team-form-title').textContent = 'Add Team';
   document.getElementById('tfe-label').value = '';
@@ -406,23 +383,26 @@ document.getElementById('tfe-save').addEventListener('click', async () => {
     document.getElementById('team-editor-form').classList.add('hidden');
     renderTeamsList();
     if (data.email_change_pending) {
-      alert(data.email_change_sent
-        ? `Saved. The coach's email hasn't changed yet — ${data.pending_email} needs to click the confirmation link sent to it.`
-        : `Saved, but the confirmation email couldn't be sent. The coach's email hasn't changed yet — try again shortly.`);
+      toast(data.email_change_sent
+        ? `Saved. Email unchanged until ${data.pending_email} clicks the confirmation link.`
+        : `Saved, but the confirmation email failed to send — the email is unchanged.`,
+        data.email_change_sent ? 'good' : 'bad');
     }
   } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
 });
 
 async function deleteTeam(teamId, teamName) {
-  if (!confirm(`Delete team "${teamName}"? This cannot be undone.`)) return;
+  const ok = await confirmTyped('Delete team',
+    `This removes <strong>${esc(teamName)}</strong> and cannot be undone. Any games already scheduled for them will need regenerating.`, 'delete');
+  if (!ok) return;
   try {
     const res  = await fetch(`api/teams/${teamId}`, { method: 'DELETE' });
     const data = await res.json();
-    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    if (!data.ok) { toast(data.error || 'Delete failed.', 'bad'); return; }
     seasonData = await fetchJSON('api/season');
     renderTeamsList();
     populateFieldSelect();
-  } catch (e) { alert('Network error. Try again.'); }
+  } catch (e) { toast('Network error. Try again.', 'bad'); }
 }
 
 // ── Fields ────────────────────────────────────────────────────────────────────
@@ -436,11 +416,11 @@ function renderFieldsList() {
   teams.forEach(t => { if (t.home_field_id) usageCount[t.home_field_id] = (usageCount[t.home_field_id] || 0) + 1; });
 
   if (!fields.length) {
-    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No fields defined. Add one above.</p>';
+    list.innerHTML = '<p class="empty-note">No fields defined. Add one above.</p>';
     return;
   }
 
-  list.innerHTML = `<table class="fields-table">
+  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>Field</th><th>Address</th><th>Used By</th><th></th></tr></thead>
     <tbody>
     ${fields.map(f => {
@@ -449,14 +429,14 @@ function renderFieldsList() {
         <td><strong>${esc(f.name)}</strong>${f.sub_field ? `<span class="field-subfield-badge">${esc(f.sub_field)}</span>` : ''}</td>
         <td>${esc(f.address || '—')}</td>
         <td>${usage ? `<span class="field-used-badge">${usage} team${usage !== 1 ? 's' : ''}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
-        <td><div class="field-row-actions">
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteField('${String(f.id)}','${esc(fieldDisplayName(f))}')">Delete</button>
+        <td><div class="row-actions">
+          <button class="btn btn-secondary btn-sm" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteField('${String(f.id)}','${esc(fieldDisplayName(f))}')">Delete</button>
         </div></td>
       </tr>`;
     }).join('')}
     </tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function openFieldAdd() {
@@ -520,15 +500,17 @@ document.getElementById('ffe-save').addEventListener('click', async () => {
 });
 
 async function deleteField(fieldId, fieldName) {
-  if (!confirm(`Delete field "${fieldName}"? This cannot be undone.`)) return;
+  const ok = await confirmTyped('Delete field',
+    `This removes <strong>${esc(fieldName)}</strong> and cannot be undone. Teams using it as their home field will need a new one.`, 'delete');
+  if (!ok) return;
   try {
     const res  = await fetch(`api/season/fields/${fieldId}`, { method: 'DELETE' });
     const data = await res.json();
-    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    if (!data.ok) { toast(data.error || 'Delete failed.', 'bad'); return; }
     seasonData = await fetchJSON('api/season');
     renderFieldsList();
     populateFieldSelect();
-  } catch (e) { alert('Network error. Try again.'); }
+  } catch (e) { toast('Network error. Try again.', 'bad'); }
 }
 
 // ── Verify-email banner ──────────────────────────────────────────────────────
@@ -539,7 +521,7 @@ function initVerifyBanner() {
   banner.id = 'verify-banner';
   banner.style.cssText = 'background:#fef3c7;border-bottom:1px solid #f59e0b;color:#92400e;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px;justify-content:center';
   banner.innerHTML = `<span>Verify your email to add or edit teams and fields.</span>
-    <button id="verify-banner-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">Send verification link</button>`;
+    <button id="verify-banner-btn" class="btn btn-secondary btn-sm">Send verification link</button>`;
   document.body.prepend(banner);
 
   document.getElementById('verify-banner-btn').addEventListener('click', async (e) => {

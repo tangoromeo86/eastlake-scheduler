@@ -79,8 +79,8 @@ function renderAvailabilityGrid(containerId, availability, seasonSlots) {
     const head = label === 'Saturday'
       ? `<tr><th>Date</th>${AV_SAT_SLOTS.map(([, t]) => `<th>${t}</th>`).join('')}</tr>`
       : '<tr><th>Date</th><th colspan="3">Status</th></tr>';
-    return `<details style="margin:6px 0"><summary style="cursor:pointer;padding:6px 0;font-weight:600">All ${label}s <span style="color:#94a3b8;font-weight:400">(${list.length})</span></summary>
-      <table class="fields-table"><thead>${head}</thead><tbody>${rows}</tbody></table></details>`;
+    return `<details class="av-group"><summary>All ${label}s <span class="muted">(${list.length})</span></summary>
+      <div class="table-wrap"><table class="fields-table"><thead>${head}</thead><tbody>${rows}</tbody></table></div></details>`;
   }).join('');
 
   document.getElementById(containerId).innerHTML = `
@@ -146,8 +146,8 @@ function renderFieldAvailabilityGrid(containerId, availability, seasonSlots) {
     const head = label === 'Saturday'
       ? `<tr><th>Date</th>${AV_SAT_SLOTS.map(([, t]) => `<th>${t}</th>`).join('')}</tr>`
       : '<tr><th>Date</th><th colspan="3">Open to host</th></tr>';
-    return `<details style="margin:6px 0"><summary style="cursor:pointer;padding:6px 0;font-weight:600">All ${label}s <span style="color:#94a3b8;font-weight:400">(${list.length})</span></summary>
-      <table class="fields-table"><thead>${head}</thead><tbody>${rows}</tbody></table></details>`;
+    return `<details class="av-group"><summary>All ${label}s <span class="muted">(${list.length})</span></summary>
+      <div class="table-wrap"><table class="fields-table"><thead>${head}</thead><tbody>${rows}</tbody></table></div></details>`;
   }).join('');
 
   document.getElementById(containerId).innerHTML = `

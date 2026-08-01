@@ -87,14 +87,14 @@ function crSlotLabel(s) {
 async function loadChangeSlots(gameId) {
   const box = document.getElementById('cr-slots');
   const submitBtn = document.getElementById('cr-submit');
-  box.innerHTML = '<p style="color:#94a3b8;padding:8px">Finding times that work for both teams…</p>';
+  box.innerHTML = '<p class="muted">Finding times that work for both teams…</p>';
   submitBtn.disabled = true;
   try {
     const params = new URLSearchParams({ game_id: gameId });
     if (typeof crTeamId !== 'undefined' && crTeamId) params.set('team_id', crTeamId);
     const data = await fetchJSON('api/change-requests/options?' + params.toString());
     if (!data.slots.length) {
-      box.innerHTML = '<p style="color:#dc2626;padding:8px">No other time fits both teams\'  availability right now. Ask your director for help — they can adjust availability or free up a field.</p>';
+      box.innerHTML = '<p class="danger-text">No other time fits both teams\'  availability right now. Ask your director for help — they can adjust availability or free up a field.</p>';
       return;
     }
     box.innerHTML = data.slots.map((s, i) => `
@@ -112,23 +112,12 @@ async function loadChangeSlots(gameId) {
       });
     });
   } catch (e) {
-    box.innerHTML = '<p style="color:#dc2626;padding:8px">Could not load available times. Try again.</p>';
+    box.innerHTML = '<p class="danger-text">Could not load available times. Try again.</p>';
   }
 }
 
 
-// ── Game history / live negotiation status ───────────────────────────────────
-function fmtWhen(iso) {
-  if (!iso) return '';
-  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
-function fmtDue(iso) {
-  if (!iso) return '';
-  return new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-}
-
-// Compact one-liner so an in-flight negotiation is visible at a glance in the
-// games list, without having to open anything.
+// Compact inline summary for the games list. Full history lives in ui.js.
 function liveStatusHtml(active) {
   if (!active) return '';
   const overdue = active.response_due_at && new Date(active.response_due_at) < new Date();
@@ -136,7 +125,7 @@ function liveStatusHtml(active) {
   if (active.round) bits.push(`Round ${active.round}`);
   if (active.proposed_by && active.proposal) bits.push(`${esc(active.proposed_by)} proposed ${esc(active.proposal.date)} ${esc(active.proposal.time)}`);
   if (active.awaiting) bits.push(`waiting on <strong>${esc(active.awaiting)}</strong>`);
-  if (active.response_due_at) bits.push(`${overdue ? 'was due' : 'due'} ${esc(fmtDue(active.response_due_at))}`);
+  if (active.response_due_at) bits.push(`${overdue ? 'was due' : 'due'} ${esc(uiDue(active.response_due_at))}`);
   const flags = [];
   if (active.escalated?.director) flags.push('director notified');
   if (active.escalated?.admin) flags.push('admin notified');
@@ -145,26 +134,14 @@ function liveStatusHtml(active) {
     ${bits.join(' · ')}${flags.length ? ` <em>(${flags.join(', ')})</em>` : ''}</div>`;
 }
 
-async function showGameHistory(gameId) {
-  let data;
-  try { data = await fetchJSON(`api/games/${gameId}/history`); }
-  catch { alert('Could not load history for this game.'); return; }
-  const lines = (data.timeline || []).map(e =>
-    `${fmtWhen(e.at)} — ${e.summary}${e.detail ? `\n      ${e.detail}` : ''}`).join('\n');
-  const head = data.active
-    ? `IN PROGRESS: ${data.active.summary}${data.active.response_due_at ? `\nResponse due ${fmtDue(data.active.response_due_at)}` : ''}\n\n`
-    : '';
-  alert(`Game #${gameId} history\n\n${head}${lines || 'No changes recorded yet.'}`);
-}
-
 function renderGamesList() {
   const games = myGames();
   const list = document.getElementById('games-list');
   if (!games.length) {
-    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No games scheduled yet.</p>';
+    list.innerHTML = '<p class="empty-note">No games scheduled yet.</p>';
     return;
   }
-  list.innerHTML = `<table class="fields-table">
+  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>Date</th><th>Opponent</th><th>H/A</th><th>Status</th><th></th></tr></thead>
     <tbody>
     ${games.map(g => {
@@ -180,14 +157,14 @@ function renderGamesList() {
         <td>${esc(opp ? (opp.label || opp.name) : '—')}</td>
         <td>${isHome ? 'Home' : 'Away'}</td>
         <td>${statusBadge}</td>
-        <td><div class="field-row-actions">
-          ${canRequest ? `<button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openChangeRequest(${g.game_id})">Request Change</button>` : ''}
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="showGameHistory(${g.game_id})">History</button>
+        <td><div class="row-actions">
+          ${canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id})">Request Change</button>` : ''}
+          <button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>
         </div></td>
       </tr>`;
     }).join('')}
     </tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function populateCrFieldSelects() {
@@ -241,7 +218,7 @@ document.getElementById('cr-submit').addEventListener('click', async () => {
     const data = await res.json();
     if (!data.ok) { errEl.textContent = data.error || 'Could not submit request.'; errEl.classList.remove('hidden'); return; }
     document.getElementById('cr-form').classList.add('hidden');
-    alert('Check your email to confirm this request before it goes to the other coach.');
+    toast('Check your email to confirm this request before it reaches the other coach.', 'good');
   } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
 });
 
@@ -319,7 +296,7 @@ function initVerifyBanner() {
   banner.id = 'verify-banner';
   banner.style.cssText = 'background:#fef3c7;border-bottom:1px solid #f59e0b;color:#92400e;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px;justify-content:center';
   banner.innerHTML = `<span>Verify your email to save changes to your team.</span>
-    <button id="verify-banner-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">Send verification link</button>`;
+    <button id="verify-banner-btn" class="btn btn-secondary btn-sm">Send verification link</button>`;
   document.body.prepend(banner);
 
   document.getElementById('verify-banner-btn').addEventListener('click', async (e) => {

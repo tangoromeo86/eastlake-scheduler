@@ -10,12 +10,13 @@
   <header>
     <h1 id="team-title">My Team</h1>
     <div class="header-actions">
+      <a href="guide.html" class="btn btn-secondary">? Guide</a>
       <a href="./" class="btn btn-secondary">&#8592; Schedule</a>
       <a href="logout" class="btn btn-secondary">Sign out</a>
     </div>
   </header>
 
-  <div id="my-team-page" style="max-width:640px;margin:0 auto;padding:24px">
+  <div id="my-team-page" class="page-wrap narrow">
     <div id="pending-email-note" class="field-form-error hidden" style="background:#fef3c7;border-color:#f59e0b;color:#92400e"></div>
 
     <div class="field-editor-form">
@@ -43,7 +44,7 @@
       </div>
     </div>
 
-    <h3 style="margin-top:32px">Upcoming Games</h3>
+    <h3 class="section-gap">Upcoming Games</h3>
     <div id="games-list"></div>
 
     <div id="cr-form" class="field-editor-form hidden">
@@ -90,6 +91,7 @@
   </div>
 
   <script src="availability-editor.js"></script>
+  <script src="ui.js"></script>
   <script src="my-team.js"></script>
 </body>
 </html>
