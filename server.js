@@ -126,6 +126,70 @@ function redeemEmailChangeToken(token) {
 // ── Game change requests (persisted — these links must stay valid for up to
 // a week, so unlike the short-lived tokens above they live on the record
 // itself in change_requests.json, not the in-memory Map, and survive restarts.
+// ── Snapshots (real, restorable backups) ─────────────────────────────────────
+// A snapshot captures season + schedule + change requests *together*, so a
+// restore can never leave a schedule referencing teams that no longer exist.
+// This replaces the old scattered `.backup-<ts>.json` files, which were written
+// on nearly every edit and had no restore path at all.
+const SNAPSHOT_DIR = path.join(__dirname, 'snapshots');
+const MAX_AUTO_SNAPSHOTS = 20;
+
+function readJsonSafe(file, fallback) {
+  try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : fallback; }
+  catch { return fallback; }
+}
+
+function createSnapshot(label, kind = 'auto') {
+  try {
+    if (!fs.existsSync(SNAPSHOT_DIR)) fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    const season = readJsonSafe(SEASON_FILE, null);
+    const schedule = readJsonSafe(SCHEDULE_FILE, null);
+    const changeRequests = readJsonSafe(CHANGE_REQUESTS_FILE, []);
+    const id = `snap-${Date.now()}`;
+    const snap = {
+      id, label: label || 'Snapshot', kind,
+      created_at: new Date().toISOString(),
+      summary: {
+        teams: season?.teams?.length || 0,
+        games: schedule?.games?.length || 0,
+        programs: season?.programs?.length || 0,
+        open_requests: changeRequests.filter(c => String(c.status || '').startsWith('awaiting')).length,
+      },
+      season, schedule, change_requests: changeRequests,
+    };
+    fs.writeFileSync(path.join(SNAPSHOT_DIR, `${id}.json`), JSON.stringify(snap, null, 2));
+    pruneAutoSnapshots();
+    return snap;
+  } catch (err) {
+    console.error('Snapshot failed:', err.message);
+    return null;
+  }
+}
+
+// Manual snapshots are kept forever — Ted took those deliberately. Automatic
+// ones are capped so the directory doesn't grow without bound.
+function pruneAutoSnapshots() {
+  try {
+    const autos = listSnapshots().filter(s => s.kind === 'auto');
+    for (const old of autos.slice(MAX_AUTO_SNAPSHOTS)) {
+      fs.unlinkSync(path.join(SNAPSHOT_DIR, `${old.id}.json`));
+    }
+  } catch {}
+}
+
+// Newest first. Metadata only — the payload can be large.
+function listSnapshots() {
+  if (!fs.existsSync(SNAPSHOT_DIR)) return [];
+  return fs.readdirSync(SNAPSHOT_DIR)
+    .filter(f => f.endsWith('.json'))
+    .map(f => {
+      const d = readJsonSafe(path.join(SNAPSHOT_DIR, f), null);
+      return d ? { id: d.id, label: d.label, kind: d.kind, created_at: d.created_at, summary: d.summary } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+}
+
 function readChangeRequests() {
   if (!fs.existsSync(CHANGE_REQUESTS_FILE)) return [];
   try { return JSON.parse(fs.readFileSync(CHANGE_REQUESTS_FILE, 'utf8')); }
@@ -653,6 +717,7 @@ app.delete('/api/changes', requireAdmin, (req, res) => {
 });
 
 app.post('/api/run', requireAdmin, (req, res) => {
+  createSnapshot('Before running scheduler', 'auto');
   let seasonData;
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
@@ -668,6 +733,7 @@ app.post('/api/run', requireAdmin, (req, res) => {
 });
 
 app.post('/api/upload-season', requireAdmin, (req, res) => {
+  createSnapshot('Before uploading season.json', 'auto');
   const data = req.body;
   const missing = ['season', 'programs', 'divisions', 'fields', 'teams'].filter(k => !data[k]);
   if (missing.length) return res.status(400).json({ error: `Missing required keys: ${missing.join(', ')}` });
@@ -681,8 +747,6 @@ app.post('/api/upload-season', requireAdmin, (req, res) => {
   });
 
   if (fs.existsSync(SEASON_FILE)) {
-    const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-    fs.copyFileSync(SEASON_FILE, backup);
   }
   if (fs.existsSync(SCHEDULE_FILE)) fs.unlinkSync(SCHEDULE_FILE);
 
@@ -1017,8 +1081,6 @@ app.patch('/api/team/:id', requireAdmin, async (req, res) => {
   delete team.home_field_saturday_id;
   seasonData.teams[teamIdx] = team;
 
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(seasonData, null, 2)); }
   catch (err) { return res.status(500).json({ error: `Could not write season.json: ${err.message}` }); }
 
@@ -1044,8 +1106,6 @@ app.patch('/api/division/:id', requireAdmin, (req, res) => {
   for (const field of allowed) { if (field in req.body) div[field] = req.body[field]; }
   seasonData.divisions[divIdx] = div;
 
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(seasonData, null, 2)); }
   catch (err) { return res.status(500).json({ error: `Could not write season.json: ${err.message}` }); }
   res.json({ ok: true, division: div });
@@ -1074,6 +1134,27 @@ function resolveRequestingTeam(session, game, bodyTeamId, teams) {
 const CHANGE_REQUEST_MIN_DAYS = 7;
 // Rounds of back-and-forth before both directors are looped in to break the tie.
 const STALEMATE_ROUND_LIMIT = 3;
+
+// The first ask arrives cold and gets the most time; once it's an active
+// dialogue the window tightens, because both coaches are already engaged.
+function responseDeadlineDays(round) {
+  if ((round || 1) <= 1) return 3;
+  if (round === 2) return 2;
+  return 1;
+}
+// Admin is looped in a fixed two days after the director, so round 1 keeps the
+// original day-3 / day-5 behaviour and later rounds accelerate along with it.
+const ADMIN_ESCALATION_GRACE_DAYS = 2;
+
+function addDaysIso(iso, days) {
+  const d = new Date(iso);
+  d.setDate(d.getDate() + days);
+  return d.toISOString();
+}
+// "Thu, Sep 10" — a date a coach can act on, not a raw timestamp.
+function formatDeadline(iso) {
+  return new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
 
 // Loads schedule + season and resolves the caller's side of a game. Shared by
 // every coach-facing change-request route so the permission logic lives once.
@@ -1135,6 +1216,7 @@ function advanceRound(cr, proposingTeamId, awaitingTeamId, proposal) {
   cr.status = 'awaiting_response';
   cr.tokens = newRoundTokens();
   cr.round_started_at = new Date().toISOString();
+  cr.response_due_at = addDaysIso(cr.round_started_at, responseDeadlineDays(cr.round));
   cr.director_notified_at = null;
   cr.admin_notified_at = null;
 }
@@ -1168,7 +1250,7 @@ async function notifyTurn(req, cr, seasonData) {
       `Works for us — approve it: ${base}/approve?token=${cr.tokens.approve}`,
       `Doesn't work — suggest another time: ${base}/counter?token=${cr.tokens.counter}`,
       '',
-      `Please respond within 2 days. If we don't hear from you, your director will be looped in to help move things along.`,
+      `Please respond by ${formatDeadline(cr.response_due_at)}. If we don't hear from you by then, your director will be looped in to help move things along.`,
       '', '— Eastlake Scheduler',
     ].filter(l => l !== null).join('\n'),
   });
@@ -1396,8 +1478,6 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   }
 
   const updatedGame = applyChangeRequestToGame(cr, schedData, seasonData);
-  const backup = SCHEDULE_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  if (fs.existsSync(SCHEDULE_FILE)) fs.copyFileSync(SCHEDULE_FILE, backup);
   try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
 
   cr.status = 'confirmed';
@@ -1540,8 +1620,6 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
 
   const updatedGame = applyChangeRequestToGame(cr, schedData, seasonData);
   if (!updatedGame) return res.status(404).json({ error: 'Game not found' });
-  const backup = SCHEDULE_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SCHEDULE_FILE, backup);
   try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write schedule.json' }); }
 
@@ -1659,8 +1737,6 @@ app.post('/api/season/fields', requireDirector, requireVerified, (req, res) => {
   if (coordinates?.trim()) f.coordinates = coordinates.replace(/\s/g, '');
   if (availability && typeof availability === 'object') f.availability = availability;
   data.fields = [...(data.fields || []), f];
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true, field: f });
@@ -1683,8 +1759,6 @@ app.put('/api/season/fields/:id', requireDirector, requireVerified, (req, res) =
   if (availability && typeof availability === 'object') updated.availability = availability;
   delete updated.weekend_venue; delete updated.weekend_address;
   data.fields[idx] = updated;
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
 
@@ -1718,8 +1792,6 @@ app.delete('/api/season/fields/:id', requireDirector, requireVerified, (req, res
   const before = (data.fields || []).length;
   data.fields = (data.fields || []).filter(f => String(f.id) !== req.params.id);
   if (data.fields.length === before) return res.status(404).json({ error: 'Field not found' });
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true });
@@ -1760,8 +1832,6 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
     confirmed: true,
   };
   data.teams = [...(data.teams || []), t];
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true, team: t });
@@ -1805,8 +1875,6 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
     ...(availability && typeof availability === 'object' ? { availability } : {}),
     // email is intentionally left as-is here — see confirm-email flow below
   };
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
 
@@ -1831,8 +1899,6 @@ app.get('/api/teams/:id/confirm-email', (req, res) => {
   const idx = (data.teams || []).findIndex(t => String(t.id) === req.params.id);
   if (idx === -1) return res.status(404).send('Team not found.');
   data.teams[idx] = { ...data.teams[idx], email: result.newEmail };
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).send('Could not write season.json'); }
   res.send(`Email confirmed! ${data.teams[idx].label}'s contact email is now ${result.newEmail}. You can close this page.`);
@@ -1847,8 +1913,6 @@ app.delete('/api/teams/:id', requireDirector, requireVerified, (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Team not found' });
   if (!canManageProgram(s, existing.program_id)) return res.status(403).json({ error: 'You can only delete teams in your own program' });
   data.teams = (data.teams || []).filter(t => String(t.id) !== req.params.id);
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true });
@@ -1864,8 +1928,6 @@ app.post('/api/season/programs', requireAdmin, (req, res) => {
   if (!name || !name.trim()) return res.status(400).json({ error: 'Program name is required' });
   const p = { id: 'program-' + Date.now(), name: name.trim(), created_at: new Date().toISOString() };
   data.programs = [...(data.programs || []), p];
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true, program: p });
@@ -1880,8 +1942,6 @@ app.put('/api/season/programs/:id', requireAdmin, (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Program name is required' });
   data.programs[idx] = { ...data.programs[idx], name: name.trim() };
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true, program: data.programs[idx] });
@@ -1906,8 +1966,6 @@ app.delete('/api/season/programs/:id', requireAdmin, (req, res) => {
   const before = (data.programs || []).length;
   data.programs = (data.programs || []).filter(p => String(p.id) !== req.params.id);
   if (data.programs.length === before) return res.status(404).json({ error: 'Program not found' });
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true });
@@ -1939,8 +1997,6 @@ app.post('/api/season/directors', requireAdmin, (req, res) => {
     created_at: new Date().toISOString(),
   };
   data.directors = [...(data.directors || []), d];
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true, director: d });
@@ -1970,8 +2026,6 @@ app.put('/api/season/directors/:id', requireAdmin, (req, res) => {
     program_id,
     active: active !== false,
   };
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true, director: data.directors[idx] });
@@ -1984,8 +2038,6 @@ app.delete('/api/season/directors/:id', requireAdmin, (req, res) => {
   const before = (data.directors || []).length;
   data.directors = (data.directors || []).filter(d => String(d.id) !== req.params.id);
   if (data.directors.length === before) return res.status(404).json({ error: 'Director not found' });
-  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
-  fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true });
@@ -2114,10 +2166,7 @@ app.post('/api/import-schedule', requireAdmin, express.text({ type: '*/*', limit
 
   if (!games.length) return res.status(400).json({ error: 'No valid game rows found in CSV.' });
 
-  if (fs.existsSync(SCHEDULE_FILE)) {
-    const backup = SCHEDULE_FILE.replace('.json', `.backup-${Date.now()}.json`);
-    try { fs.copyFileSync(SCHEDULE_FILE, backup); } catch {}
-  }
+  createSnapshot('Before importing schedule CSV', 'auto');
 
   const result = { success: true, games, total_games: games.length, generated_at: new Date().toISOString(), source: 'csv_import', warnings: [], failures: [] };
   try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(result, null, 2)); }
@@ -2130,11 +2179,310 @@ app.post('/api/import-schedule', requireAdmin, express.text({ type: '*/*', limit
 // "admin finalizes ... when the deadline hits"). Leaves any still-`pending`
 // game untouched so an in-flight change request isn't silently steamrolled;
 // reports those back so admin knows to resolve them first.
+// ── Game history ─────────────────────────────────────────────────────────────
+// One chronological story per game, merged from the two stores that already
+// exist (changes.json = admin actions, change_requests.json = coach
+// negotiations). Returns both what has happened and, separately, what is
+// happening right now — so a director who goes looking can see an in-flight
+// negotiation without waiting for an escalation email.
+function buildGameHistory(gameId, changes, changeRequests, seasonData) {
+  const teams = seasonData.teams || [];
+  const nameOf = id => teams.find(t => String(t.id) === String(id))?.label
+    || teams.find(t => String(t.id) === String(id))?.name || String(id || '—');
+  const timeline = [];
+
+  for (const c of changes) {
+    if (c.game_id !== gameId) continue;
+    if (c.type === 'deletion') {
+      timeline.push({ at: c.timestamp, actor: 'Admin', kind: 'deleted', summary: 'Admin removed this game from the schedule' });
+    } else if (c.type === 'addition') {
+      timeline.push({ at: c.timestamp, actor: 'Admin', kind: 'created', summary: 'Admin added this game to the schedule' });
+    } else {
+      const fields = (c.changed_fields || []).map(f => `${f.field}: ${f.from} → ${f.to}`).join(', ');
+      timeline.push({
+        at: c.timestamp, actor: 'Admin', kind: 'edited',
+        summary: fields ? `Admin edited the game (${fields})` : 'Admin edited the game',
+        detail: c.forced ? 'Saved despite scheduling warnings' : null,
+      });
+    }
+  }
+
+  let active = null;
+  for (const cr of changeRequests) {
+    if (cr.game_id !== gameId) continue;
+
+    if (cr.manual_override) {
+      timeline.push({
+        at: cr.manual_override.at, actor: nameOf(cr.requesting_team_id || cr.initiating_team_id), kind: 'manual_override',
+        summary: `${nameOf(cr.requesting_team_id || cr.initiating_team_id)} changed the game directly (inside the 7-day window)`,
+        detail: `Agreed with ${cr.manual_override.who} by ${cr.manual_override.how}`,
+      });
+      continue;
+    }
+
+    timeline.push({
+      at: cr.submitted_at, actor: nameOf(cr.initiating_team_id), kind: 'requested',
+      summary: `${nameOf(cr.initiating_team_id)} asked to change this game`,
+      detail: cr.reason || null,
+    });
+
+    // Each superseded proposal, then whatever is currently on the table.
+    for (const h of (cr.history || [])) {
+      timeline.push({
+        at: h.at, actor: nameOf(h.proposing_team_id), kind: 'proposed',
+        summary: `${nameOf(h.proposing_team_id)} proposed ${h.date} at ${h.time} (round ${h.round})`,
+      });
+    }
+    if (cr.proposal && cr.round >= 1) {
+      timeline.push({
+        at: cr.round_started_at || cr.submitted_at, actor: nameOf(cr.proposing_team_id), kind: 'proposed',
+        summary: `${nameOf(cr.proposing_team_id)} proposed ${cr.proposal.date} at ${cr.proposal.time} (round ${cr.round})`,
+      });
+    }
+    if (cr.director_notified_at) {
+      timeline.push({ at: cr.director_notified_at, actor: 'System', kind: 'escalated',
+        summary: `Deadline missed — ${nameOf(cr.awaiting_team_id)}'s director was notified` });
+    }
+    if (cr.admin_notified_at) {
+      timeline.push({ at: cr.admin_notified_at, actor: 'System', kind: 'escalated',
+        summary: 'Still unanswered — league admin was notified' });
+    }
+    if (cr.stalemate_notified_at) {
+      timeline.push({ at: cr.stalemate_notified_at, actor: 'System', kind: 'escalated',
+        summary: `No agreement after ${cr.round} rounds — both directors were looped in` });
+    }
+    if (cr.status === 'confirmed') {
+      timeline.push({ at: cr.responded_at, actor: nameOf(cr.awaiting_team_id), kind: 'agreed',
+        summary: `${nameOf(cr.awaiting_team_id)} agreed — game moved to ${cr.proposal?.date} at ${cr.proposal?.time}` });
+    }
+    if (cr.status === 'cancelled') {
+      timeline.push({ at: cr.responded_at || cr.submitted_at, actor: nameOf(cr.initiating_team_id), kind: 'cancelled',
+        summary: `${nameOf(cr.initiating_team_id)} cancelled the request` });
+    }
+    if (cr.status === 'escalated') {
+      timeline.push({ at: cr.responded_at || cr.round_started_at, actor: 'System', kind: 'escalated',
+        summary: 'No time works for both teams — handed to the directors' });
+    }
+
+    if (cr.status === 'awaiting_response' || cr.status === 'awaiting_requester_confirm') {
+      active = {
+        change_request_id: cr.id,
+        status: cr.status,
+        round: cr.round || 0,
+        proposal: cr.proposal || null,
+        proposed_by: cr.proposing_team_id ? nameOf(cr.proposing_team_id) : null,
+        awaiting: cr.awaiting_team_id ? nameOf(cr.awaiting_team_id) : nameOf(cr.initiating_team_id),
+        awaiting_team_id: cr.awaiting_team_id,
+        response_due_at: cr.response_due_at || null,
+        reason: cr.reason || null,
+        escalated: {
+          director: !!cr.director_notified_at,
+          admin: !!cr.admin_notified_at,
+          stalemate: !!cr.stalemate_notified_at,
+        },
+        summary: cr.status === 'awaiting_requester_confirm'
+          ? `${nameOf(cr.initiating_team_id)} started a change request but hasn't confirmed it yet`
+          : `Round ${cr.round} — ${nameOf(cr.proposing_team_id)} proposed ${cr.proposal?.date} at ${cr.proposal?.time}, waiting on ${nameOf(cr.awaiting_team_id)}`,
+      };
+    }
+  }
+
+  timeline.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+  return { timeline, active };
+}
+
+app.get('/api/games/:id/history', requireAuth, (req, res) => {
+  const gameId = parseInt(req.params.id, 10);
+  let seasonData, changes = [];
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch { return res.status(500).json({ error: 'Could not read season.json' }); }
+  try { if (fs.existsSync(CHANGES_FILE)) changes = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
+
+  const { timeline, active } = buildGameHistory(gameId, changes, readChangeRequests(), seasonData);
+  res.json({ ok: true, game_id: gameId, timeline, active });
+});
+
 app.get('/api/change-requests', requireAdmin, (req, res) => {
   res.json(readChangeRequests());
 });
 
+// ── Snapshot endpoints (admin) ───────────────────────────────────────────────
+
+// ── Season setup (admin) ─────────────────────────────────────────────────────
+
+app.get('/api/season/config', requireAdmin, (req, res) => {
+  const data = readJsonSafe(SEASON_FILE, null);
+  if (!data) return res.status(500).json({ error: 'Could not read season.json' });
+  const season = data.season || {};
+  // Preview the calendar this config produces, so the effect of a start date is
+  // visible before saving rather than only after running the scheduler.
+  res.json({
+    ok: true,
+    season,
+    divisions: data.divisions || [],
+    calendar: buildSeasonWeeks(season).map(w => ({ week: w.week, first: w.weekdays[0], saturday: w.saturday })),
+  });
+});
+
+app.put('/api/season/config', requireAdmin, (req, res) => {
+  const data = readJsonSafe(SEASON_FILE, null);
+  if (!data) return res.status(500).json({ error: 'Could not read season.json' });
+  const { start, weeks, target_games, weekday_time, saturday_times, blackout_dates } = req.body || {};
+
+  if (start !== undefined && start && !/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+    return res.status(400).json({ error: 'Start date must be YYYY-MM-DD' });
+  }
+  if (weeks !== undefined && weeks !== null && !(Number(weeks) > 0 && Number(weeks) <= 52)) {
+    return res.status(400).json({ error: 'Weeks must be between 1 and 52' });
+  }
+  const badDate = (blackout_dates || []).find(d => !/^\d{4}-\d{2}-\d{2}$/.test(d));
+  if (badDate) return res.status(400).json({ error: `Blackout date "${badDate}" must be YYYY-MM-DD` });
+
+  data.season = { ...(data.season || {}) };
+  if (start !== undefined)          data.season.start = start;
+  if (weeks !== undefined)          data.season.weeks = Number(weeks) || undefined;
+  if (target_games !== undefined)   data.season.target_games = Number(target_games) || undefined;
+  if (weekday_time !== undefined)   data.season.weekday_time = weekday_time;
+  if (saturday_times !== undefined) data.season.saturday_times = saturday_times;
+  if (blackout_dates !== undefined) data.season.blackout_dates = blackout_dates;
+
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+
+  res.json({ ok: true, season: data.season,
+    calendar: buildSeasonWeeks(data.season).map(w => ({ week: w.week, first: w.weekdays[0], saturday: w.saturday })) });
+});
+
+// ── Division CRUD (admin) ────────────────────────────────────────────────────
+
+app.post('/api/season/divisions', requireAdmin, (req, res) => {
+  const data = readJsonSafe(SEASON_FILE, null);
+  if (!data) return res.status(500).json({ error: 'Could not read season.json' });
+  const { id, name, target_games } = req.body || {};
+  if (!id || !String(id).trim())   return res.status(400).json({ error: 'Division id is required (e.g. u10b)' });
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Division name is required' });
+  data.divisions = data.divisions || [];
+  if (data.divisions.some(d => String(d.id) === String(id).trim())) {
+    return res.status(400).json({ error: 'A division with that id already exists' });
+  }
+  const div = { id: String(id).trim(), name: String(name).trim() };
+  if (target_games) div.target_games = Number(target_games);
+  data.divisions.push(div);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true, division: div });
+});
+
+app.put('/api/season/divisions/:id', requireAdmin, (req, res) => {
+  const data = readJsonSafe(SEASON_FILE, null);
+  if (!data) return res.status(500).json({ error: 'Could not read season.json' });
+  const idx = (data.divisions || []).findIndex(d => String(d.id) === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Division not found' });
+  const { name, target_games } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Division name is required' });
+  data.divisions[idx] = { ...data.divisions[idx], name: String(name).trim(),
+    ...(target_games ? { target_games: Number(target_games) } : {}) };
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true, division: data.divisions[idx] });
+});
+
+app.delete('/api/season/divisions/:id', requireAdmin, (req, res) => {
+  const data = readJsonSafe(SEASON_FILE, null);
+  if (!data) return res.status(500).json({ error: 'Could not read season.json' });
+  // Same integrity guard as programs — deleting would orphan the teams in it.
+  const inUse = (data.teams || []).filter(t => String(t.division_id) === req.params.id).length;
+  if (inUse) return res.status(400).json({ error: `Cannot delete a division with ${inUse} team${inUse !== 1 ? 's' : ''} still in it` });
+  const before = (data.divisions || []).length;
+  data.divisions = (data.divisions || []).filter(d => String(d.id) !== req.params.id);
+  if (data.divisions.length === before) return res.status(404).json({ error: 'Division not found' });
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true });
+});
+
+// Season rollover. Programs, directors and fields persist year to year, so they
+// carry over; teams, the schedule and any in-flight requests are last season's
+// and are cleared for a fresh registration.
+app.post('/api/season/new', requireAdmin, (req, res) => {
+  const { start, weeks, target_games, label } = req.body || {};
+  if (!start || !/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+    return res.status(400).json({ error: 'A start date (YYYY-MM-DD) is required for the new season' });
+  }
+  const data = readJsonSafe(SEASON_FILE, null);
+  if (!data) return res.status(500).json({ error: 'Could not read season.json' });
+
+  const archived = createSnapshot(label ? `End of season: ${label}` : 'End of previous season', 'manual');
+  if (!archived) return res.status(500).json({ error: 'Could not archive the current season — aborting' });
+
+  const carried = {
+    season: {
+      ...(data.season || {}),
+      start,
+      weeks: Number(weeks) || data.season?.weeks,
+      target_games: Number(target_games) || data.season?.target_games,
+      blackout_dates: [],
+    },
+    divisions: data.divisions || [],
+    programs: data.programs || [],
+    directors: data.directors || [],
+    fields: data.fields || [],
+    teams: [],
+  };
+
+  try {
+    fs.writeFileSync(SEASON_FILE, JSON.stringify(carried, null, 2));
+    if (fs.existsSync(SCHEDULE_FILE)) fs.unlinkSync(SCHEDULE_FILE);
+    fs.writeFileSync(CHANGE_REQUESTS_FILE, '[]');
+  } catch (err) {
+    return res.status(500).json({ error: `Could not start new season: ${err.message}` });
+  }
+
+  res.json({ ok: true, archived_snapshot: archived.id, season: carried.season,
+    kept: { programs: carried.programs.length, directors: carried.directors.length, fields: carried.fields.length, divisions: carried.divisions.length } });
+});
+
+app.get('/api/snapshots', requireAdmin, (req, res) => {
+  res.json({ ok: true, snapshots: listSnapshots() });
+});
+
+app.post('/api/snapshots', requireAdmin, (req, res) => {
+  const label = (req.body?.label || '').trim() || 'Manual snapshot';
+  const snap = createSnapshot(label, 'manual');
+  if (!snap) return res.status(500).json({ error: 'Could not create snapshot' });
+  res.json({ ok: true, snapshot: { id: snap.id, label: snap.label, kind: snap.kind, created_at: snap.created_at, summary: snap.summary } });
+});
+
+app.post('/api/snapshots/:id/restore', requireAdmin, (req, res) => {
+  const file = path.join(SNAPSHOT_DIR, `${req.params.id}.json`);
+  if (!fs.existsSync(file)) return res.status(404).json({ error: 'Snapshot not found' });
+  const snap = readJsonSafe(file, null);
+  if (!snap) return res.status(500).json({ error: 'Snapshot is unreadable' });
+
+  // Restoring is itself destructive, so capture the current state first —
+  // a mistaken restore must also be undoable.
+  createSnapshot(`Before restoring "${snap.label}"`, 'auto');
+
+  try {
+    if (snap.season)   fs.writeFileSync(SEASON_FILE, JSON.stringify(snap.season, null, 2));
+    if (snap.schedule) fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(snap.schedule, null, 2));
+    else if (fs.existsSync(SCHEDULE_FILE)) fs.unlinkSync(SCHEDULE_FILE);
+    fs.writeFileSync(CHANGE_REQUESTS_FILE, JSON.stringify(snap.change_requests || [], null, 2));
+  } catch (err) {
+    return res.status(500).json({ error: `Restore failed: ${err.message}` });
+  }
+  res.json({ ok: true, restored: { id: snap.id, label: snap.label, created_at: snap.created_at }, summary: snap.summary });
+});
+
+app.delete('/api/snapshots/:id', requireAdmin, (req, res) => {
+  const file = path.join(SNAPSHOT_DIR, `${req.params.id}.json`);
+  if (!fs.existsSync(file)) return res.status(404).json({ error: 'Snapshot not found' });
+  try { fs.unlinkSync(file); } catch (err) { return res.status(500).json({ error: err.message }); }
+  res.json({ ok: true });
+});
+
 app.post('/api/finalize-games', requireAdmin, (req, res) => {
+  createSnapshot('Before finalizing games', 'auto');
   let schedData;
   try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read schedule.json' }); }
@@ -2178,11 +2526,12 @@ async function checkEscalations() {
     // Measured per round: each new proposal restarts the clock, because it's a
     // genuinely fresh ask of the other coach.
     const daysElapsed = daysBetween(cr.round_started_at, new Date().toISOString());
+    const deadlineDays = responseDeadlineDays(cr.round);
     const awaitingTeam = teams.find(t => String(t.id) === String(cr.awaiting_team_id));
     const proposingTeam = teams.find(t => String(t.id) === String(cr.proposing_team_id));
 
-    // ── Nobody responded ───────────────────────────────────────────────────
-    if (daysElapsed >= 3 && !cr.director_notified_at) {
+    // ── Nobody responded by their deadline ─────────────────────────────────
+    if (daysElapsed >= deadlineDays && !cr.director_notified_at) {
       const emails = directors
         .filter(d => d.active !== false && d.program_id === awaitingTeam?.program_id)
         .map(d => d.email).filter(Boolean);
@@ -2191,8 +2540,9 @@ async function checkEscalations() {
           to: emails,
           subject: `Action needed: Game #${cr.game_id} change request unanswered`,
           text: [
-            `${awaitingTeam?.label || 'One of your coaches'} hasn't responded to a proposed time from ${proposingTeam?.label || 'another coach'} for Game #${cr.game_id} (sent ${daysElapsed} days ago).`,
-            `Proposed: ${describeSlot(cr.proposal, seasonData.fields)}`,
+            `${awaitingTeam?.label || 'One of your coaches'} missed their deadline to respond to Game #${cr.game_id}.`,
+            `Proposed by ${proposingTeam?.label || 'the other coach'}: ${describeSlot(cr.proposal, seasonData.fields)}`,
+            `Round ${cr.round} — they had ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (due ${formatDeadline(cr.response_due_at)}), now ${daysElapsed} days on.`,
             `Could you nudge them to either accept it or suggest another time?`,
             '', '— Eastlake Scheduler',
           ].join('\n'),
@@ -2202,13 +2552,14 @@ async function checkEscalations() {
       changed = true;
     }
 
-    if (daysElapsed >= 5 && !cr.admin_notified_at) {
+    if (daysElapsed >= deadlineDays + ADMIN_ESCALATION_GRACE_DAYS && !cr.admin_notified_at) {
       if (ADMIN_EMAIL) {
         await sendEmail({
           to: ADMIN_EMAIL,
           subject: `Escalation: Game #${cr.game_id} change request still unanswered`,
           text: [
             `A proposed time for Game #${cr.game_id} has gone unanswered for ${daysElapsed} days (director already notified).`,
+            `Round ${cr.round} — deadline was ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (${formatDeadline(cr.response_due_at)}).`,
             `Waiting on: ${nameOf(cr.awaiting_team_id)}`,
             `Proposed by: ${nameOf(cr.proposing_team_id)}`,
             `Reason: ${cr.reason || '—'}`,

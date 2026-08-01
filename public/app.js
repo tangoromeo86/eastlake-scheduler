@@ -21,12 +21,16 @@ document.querySelectorAll('.top-nav-btn').forEach(btn => {
     document.getElementById('page-editor').classList.toggle('hidden', currentPage !== 'editor');
     document.getElementById('page-changes').classList.toggle('hidden', currentPage !== 'changes');
     document.getElementById('page-requests').classList.toggle('hidden', currentPage !== 'requests');
+    document.getElementById('page-season').classList.toggle('hidden', currentPage !== 'season');
+    document.getElementById('page-backups').classList.toggle('hidden', currentPage !== 'backups');
     document.getElementById('page-fields').classList.toggle('hidden', currentPage !== 'fields');
     document.getElementById('page-programs').classList.toggle('hidden', currentPage !== 'programs');
     if (currentPage === 'teams') renderTeamsPage();
     if (currentPage === 'editor') renderSeasonEditor();
     if (currentPage === 'changes') renderChangesPage();
     if (currentPage === 'requests') renderRequestsPage();
+    if (currentPage === 'season') renderSeasonPage();
+    if (currentPage === 'backups') renderBackupsPage();
     if (currentPage === 'fields') renderFieldsPage();
     if (currentPage === 'programs') renderProgramsPage();
   });
@@ -2374,7 +2378,7 @@ async function renderRequestsPage() {
 
   const sorted = [...list].sort((a, b) => (b.submitted_at || '').localeCompare(a.submitted_at || ''));
   container.innerHTML = `<table class="fields-table">
-    <thead><tr><th>Game</th><th>Started by</th><th>Round</th><th>Waiting on</th><th>On the table</th><th>Status</th><th>Escalation</th></tr></thead>
+    <thead><tr><th>Game</th><th>Started by</th><th>Round</th><th>Waiting on</th><th>Due</th><th>On the table</th><th>Status</th><th>Escalation</th></tr></thead>
     <tbody>
     ${sorted.map(cr => {
       const escalation = cr.manual_override
@@ -2385,11 +2389,17 @@ async function renderRequestsPage() {
       const proposal = cr.proposal?.date
         ? `${cr.proposal.date} ${cr.proposal.time || ''}` : '—';
       const rounds = cr.round ? `${cr.round}${(cr.history || []).length ? ` (${(cr.history || []).length} earlier)` : ''}` : '—';
+      // Overdue is the thing to spot at a glance, so call it out in red.
+      const overdue = cr.response_due_at && cr.status === 'awaiting_response' && new Date(cr.response_due_at) < new Date();
+      const dueCell = cr.response_due_at && cr.status === 'awaiting_response'
+        ? `<span style="color:${overdue ? '#991b1b' : '#475569'};font-weight:${overdue ? '600' : '400'}">${new Date(cr.response_due_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}${overdue ? ' (overdue)' : ''}</span>`
+        : '—';
       return `<tr>
         <td>#${cr.game_id}</td>
         <td>${esc(teamName_(cr.initiating_team_id || cr.requesting_team_id))}</td>
         <td>${esc(rounds)}</td>
         <td>${cr.awaiting_team_id ? esc(teamName_(cr.awaiting_team_id)) : '—'}</td>
+        <td>${dueCell}</td>
         <td>${esc(proposal)}</td>
         <td>${statusBadge(cr.status)}</td>
         <td style="font-size:12px">${escalation}</td>
@@ -2410,6 +2420,200 @@ document.getElementById('btn-finalize').addEventListener('click', async () => {
     alert(msg);
   } catch (e) { alert('Network error. Try again.'); }
 });
+
+
+// ── Season setup ─────────────────────────────────────────────────────────────
+
+function renderCalendarPreview(calendar) {
+  const el = document.getElementById('sc-calendar');
+  if (!calendar?.length) { el.innerHTML = '<p style="color:#94a3b8;padding:8px">Set a start date to see the season calendar.</p>'; return; }
+  el.innerHTML = `<table class="fields-table">
+    <thead><tr><th>Week</th><th>Starts (Mon)</th><th>Saturday</th></tr></thead>
+    <tbody>${calendar.map(w => `<tr><td>${w.week}</td><td>${esc(w.first)}</td><td>${esc(w.saturday || '—')}</td></tr>`).join('')}</tbody>
+  </table>`;
+}
+
+async function renderSeasonPage() {
+  let data;
+  try { data = await fetchJSON('api/season/config'); }
+  catch (e) { document.getElementById('sc-calendar').innerHTML = `<p style="color:#dc2626">Could not load season config: ${esc(e.message)}</p>`; return; }
+  const s = data.season || {};
+  document.getElementById('sc-start').value = s.start || '';
+  document.getElementById('sc-weeks').value = s.weeks || '';
+  document.getElementById('sc-target').value = s.target_games || '';
+  document.getElementById('sc-weekday-time').value = s.weekday_time || '';
+  document.getElementById('sc-blackouts').value = (s.blackout_dates || []).join('\n');
+  renderCalendarPreview(data.calendar);
+  renderDivisionsList(data.divisions || []);
+}
+
+document.getElementById('sc-save').addEventListener('click', async () => {
+  const errEl = document.getElementById('sc-error'), okEl = document.getElementById('sc-success');
+  errEl.classList.add('hidden'); okEl.classList.add('hidden');
+  const body = {
+    start: document.getElementById('sc-start').value || undefined,
+    weeks: document.getElementById('sc-weeks').value || undefined,
+    target_games: document.getElementById('sc-target').value || undefined,
+    weekday_time: document.getElementById('sc-weekday-time').value.trim() || undefined,
+    blackout_dates: document.getElementById('sc-blackouts').value.split('\n').map(x => x.trim()).filter(Boolean),
+  };
+  try {
+    const res = await fetch('api/season/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
+    renderCalendarPreview(data.calendar);
+    okEl.textContent = 'Season settings saved.'; okEl.classList.remove('hidden');
+    seasonData = await fetchJSON('api/season');
+  } catch { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
+});
+
+let editingDivisionId = null;
+function renderDivisionsList(divisions) {
+  const el = document.getElementById('divisions-list');
+  if (!divisions.length) { el.innerHTML = '<p style="color:#94a3b8;padding:24px">No divisions yet. Add one above.</p>'; return; }
+  el.innerHTML = `<table class="fields-table">
+    <thead><tr><th>ID</th><th>Name</th><th>Games</th><th>Teams</th><th></th></tr></thead>
+    <tbody>${divisions.map(d => {
+      const n = (seasonData?.teams || []).filter(t => String(t.division_id) === String(d.id)).length;
+      return `<tr>
+        <td><code>${esc(d.id)}</code></td>
+        <td><strong>${esc(d.name)}</strong></td>
+        <td>${d.target_games || '—'}</td>
+        <td>${n || '—'}</td>
+        <td><div class="field-row-actions">
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openDivisionEdit('${esc(d.id)}','${esc(d.name)}',${d.target_games || 0})">Edit</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteDivision('${esc(d.id)}')">Delete</button>
+        </div></td></tr>`;
+    }).join('')}</tbody></table>`;
+}
+
+function openDivisionAdd() {
+  editingDivisionId = null;
+  document.getElementById('dv-id').value = '';
+  document.getElementById('dv-name').value = '';
+  document.getElementById('dv-target').value = '';
+  document.getElementById('dv-id').disabled = false;
+  document.getElementById('dv-error').classList.add('hidden');
+  document.getElementById('division-form').classList.remove('hidden');
+}
+function openDivisionEdit(id, name, target) {
+  editingDivisionId = id;
+  document.getElementById('dv-id').value = id;
+  document.getElementById('dv-id').disabled = true;
+  document.getElementById('dv-name').value = name;
+  document.getElementById('dv-target').value = target || '';
+  document.getElementById('dv-error').classList.add('hidden');
+  document.getElementById('division-form').classList.remove('hidden');
+}
+document.getElementById('btn-add-division').addEventListener('click', openDivisionAdd);
+document.getElementById('dv-cancel').addEventListener('click', () => document.getElementById('division-form').classList.add('hidden'));
+
+document.getElementById('dv-save').addEventListener('click', async () => {
+  const errEl = document.getElementById('dv-error');
+  errEl.classList.add('hidden');
+  const body = {
+    id: document.getElementById('dv-id').value.trim(),
+    name: document.getElementById('dv-name').value.trim(),
+    target_games: document.getElementById('dv-target').value || undefined,
+  };
+  const url = editingDivisionId ? `api/season/divisions/${editingDivisionId}` : 'api/season/divisions';
+  try {
+    const res = await fetch(url, { method: editingDivisionId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
+    document.getElementById('division-form').classList.add('hidden');
+    seasonData = await fetchJSON('api/season');
+    renderSeasonPage();
+  } catch { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
+});
+
+async function deleteDivision(id) {
+  if (!confirm(`Delete division "${id}"?`)) return;
+  try {
+    const res = await fetch(`api/season/divisions/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    seasonData = await fetchJSON('api/season');
+    renderSeasonPage();
+  } catch { alert('Network error. Try again.'); }
+}
+
+document.getElementById('ns-go').addEventListener('click', async () => {
+  const errEl = document.getElementById('ns-error');
+  errEl.classList.add('hidden');
+  if (document.getElementById('ns-confirm').value.trim().toLowerCase() !== 'new season') {
+    errEl.textContent = 'Type "new season" to confirm.'; errEl.classList.remove('hidden'); return;
+  }
+  const body = {
+    start: document.getElementById('ns-start').value,
+    weeks: document.getElementById('ns-weeks').value || undefined,
+    label: document.getElementById('ns-label').value.trim() || undefined,
+  };
+  if (!body.start) { errEl.textContent = 'Pick a start date for the new season.'; errEl.classList.remove('hidden'); return; }
+  try {
+    const res = await fetch('api/season/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { errEl.textContent = data.error || 'Could not start new season.'; errEl.classList.remove('hidden'); return; }
+    alert(`New season started.\n\nArchived as restore point ${data.archived_snapshot}.\nKept ${data.kept.programs} programs, ${data.kept.directors} directors, ${data.kept.fields} fields, ${data.kept.divisions} divisions.\nTeams and schedule cleared for registration.`);
+    location.reload();
+  } catch { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
+});
+
+// ── Backups ──────────────────────────────────────────────────────────────────
+
+async function renderBackupsPage() {
+  const el = document.getElementById('snapshots-list');
+  el.innerHTML = '<p style="padding:24px;color:#94a3b8">Loading…</p>';
+  let data;
+  try { data = await fetchJSON('api/snapshots'); }
+  catch (e) { el.innerHTML = `<p style="color:#dc2626;padding:24px">Could not load snapshots: ${esc(e.message)}</p>`; return; }
+  if (!data.snapshots.length) { el.innerHTML = '<p style="color:#94a3b8;padding:24px">No restore points yet. One is taken automatically before any destructive action.</p>'; return; }
+  el.innerHTML = `<table class="fields-table">
+    <thead><tr><th>When</th><th>Label</th><th>Type</th><th>Contents</th><th></th></tr></thead>
+    <tbody>${data.snapshots.map(s => `<tr>
+      <td>${new Date(s.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
+      <td><strong>${esc(s.label)}</strong></td>
+      <td>${s.kind === 'manual' ? '<span class="confirmed-badge">Manual</span>' : '<span style="color:#94a3b8">Auto</span>'}</td>
+      <td style="font-size:12px;color:#64748b">${s.summary.teams} teams · ${s.summary.games} games · ${s.summary.programs} programs${s.summary.open_requests ? ` · ${s.summary.open_requests} open request(s)` : ''}</td>
+      <td><div class="field-row-actions">
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="restoreSnapshot('${s.id}','${esc(s.label)}')">Restore</button>
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteSnapshot('${s.id}')">Delete</button>
+      </div></td></tr>`).join('')}</tbody></table>`;
+}
+
+document.getElementById('btn-snapshot').addEventListener('click', async () => {
+  const label = document.getElementById('snap-label').value.trim();
+  try {
+    const res = await fetch('api/snapshots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || 'Could not take snapshot.'); return; }
+    document.getElementById('snap-label').value = '';
+    renderBackupsPage();
+  } catch { alert('Network error. Try again.'); }
+});
+
+async function restoreSnapshot(id, label) {
+  const typed = prompt(`Restore "${label}"?\n\nThis replaces the current season, roster, schedule and change requests.\nThe current state is snapshotted first, so this can be undone.\n\nType "restore" to confirm:`);
+  if ((typed || '').trim().toLowerCase() !== 'restore') return;
+  try {
+    const res = await fetch(`api/snapshots/${id}/restore`, { method: 'POST' });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || 'Restore failed.'); return; }
+    alert(`Restored "${data.restored.label}".\n${data.summary.teams} teams · ${data.summary.games} games.`);
+    location.reload();
+  } catch { alert('Network error. Try again.'); }
+}
+
+async function deleteSnapshot(id) {
+  if (!confirm('Delete this restore point? This cannot be undone.')) return;
+  try {
+    const res = await fetch(`api/snapshots/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    renderBackupsPage();
+  } catch { alert('Network error. Try again.'); }
+}
+
 
 initVerifyBanner();
 

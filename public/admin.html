@@ -32,6 +32,8 @@
     <button class="top-nav-btn" data-page="requests" id="nav-requests">&#128231; Change Requests</button>
     <button class="top-nav-btn" data-page="fields">&#127967; Fields</button>
     <button class="top-nav-btn" data-page="programs">&#127961; Programs</button>
+    <button class="top-nav-btn" data-page="season">&#128197; Season</button>
+    <button class="top-nav-btn" data-page="backups">&#128190; Backups</button>
   </nav>
 
   <input type="file" id="season-file-input" accept=".json,application/json" style="display:none">
@@ -261,6 +263,87 @@
       </div>
     </div>
     <div id="directors-list"></div>
+  </div>
+
+  <div id="page-season" class="page-section hidden">
+    <div class="changes-toolbar">
+      <span class="changes-toolbar-title">&#128197; Season Setup</span>
+    </div>
+    <div class="field-editor-form">
+      <div class="field-form-inner">
+        <div class="field-form-row">
+          <label>Season Start <span class="field-form-hint">(any date in week 1 — snaps to that Monday)</span><input id="sc-start" type="date"></label>
+          <label>Number of Weeks<input id="sc-weeks" type="number" min="1" max="52"></label>
+        </div>
+        <div class="field-form-row">
+          <label>Games per Team<input id="sc-target" type="number" min="1"></label>
+          <label>Default Weekday Time<input id="sc-weekday-time" type="text" placeholder="18:00"></label>
+        </div>
+        <div class="field-form-row">
+          <label style="flex:1">Blackout Dates <span class="field-form-hint">(one per line, YYYY-MM-DD)</span><textarea id="sc-blackouts" rows="4" spellcheck="false"></textarea></label>
+        </div>
+        <div class="field-form-actions">
+          <button id="sc-save" class="btn btn-primary">Save Season Settings</button>
+        </div>
+        <div id="sc-error" class="field-form-error hidden"></div>
+        <div id="sc-success" class="field-form-error hidden" style="background:#dcfce7;border-color:#16a34a;color:#166534"></div>
+        <h3 style="margin-top:20px">Resulting Calendar</h3>
+        <div id="sc-calendar"></div>
+      </div>
+    </div>
+
+    <div class="changes-toolbar" style="margin-top:32px">
+      <span class="changes-toolbar-title">&#127942; Divisions</span>
+      <button id="btn-add-division" class="btn btn-primary">+ Add Division</button>
+    </div>
+    <div id="division-form" class="field-editor-form hidden">
+      <div class="field-form-inner">
+        <div class="field-form-row">
+          <label>Division ID *<input id="dv-id" type="text" placeholder="e.g. u10b"></label>
+          <label>Name *<input id="dv-name" type="text" placeholder="e.g. U10 Boys"></label>
+          <label>Games<input id="dv-target" type="number" min="1"></label>
+        </div>
+        <div class="field-form-actions">
+          <button id="dv-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="dv-save" class="btn btn-primary">Save Division</button>
+        </div>
+        <div id="dv-error" class="field-form-error hidden"></div>
+      </div>
+    </div>
+    <div id="divisions-list"></div>
+
+    <div class="changes-toolbar" style="margin-top:32px">
+      <span class="changes-toolbar-title">&#127807; Start a New Season</span>
+    </div>
+    <div class="field-editor-form">
+      <div class="field-form-inner">
+        <p class="field-form-hint">Archives everything as a restore point, keeps your programs, directors, fields and divisions, and clears teams, the schedule and any open change requests for a fresh registration.</p>
+        <div class="field-form-row">
+          <label>New Season Start *<input id="ns-start" type="date"></label>
+          <label>Weeks<input id="ns-weeks" type="number" min="1" max="52"></label>
+          <label>Label the archive<input id="ns-label" type="text" placeholder="e.g. Spring 2026"></label>
+        </div>
+        <div class="field-form-row">
+          <label style="flex:1">Type <strong>new season</strong> to confirm<input id="ns-confirm" type="text" placeholder="new season"></label>
+        </div>
+        <div class="field-form-actions">
+          <button id="ns-go" class="btn btn-warn">Start New Season</button>
+        </div>
+        <div id="ns-error" class="field-form-error hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="page-backups" class="page-section hidden">
+    <div class="changes-toolbar">
+      <span class="changes-toolbar-title">&#128190; Restore Points</span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <input id="snap-label" type="text" placeholder="Label this snapshot" style="font-size:13px;padding:5px 9px;border:1px solid #cbd5e1;border-radius:6px">
+        <button id="btn-snapshot" class="btn btn-primary">+ Take Snapshot</button>
+      </span>
+    </div>
+    <p class="field-form-hint" style="padding:0 4px 12px">Each restore point captures the season, roster, schedule and change requests together, so restoring always returns a consistent league. Restoring also snapshots the current state first, so it can be undone.</p>
+    <div id="snapshots-list"></div>
   </div>
 
   <!-- Game Edit Modal -->

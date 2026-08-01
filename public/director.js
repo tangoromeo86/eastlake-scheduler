@@ -106,6 +106,22 @@ async function fetchJSON(url) {
   return res.json();
 }
 
+// Live negotiation state for the program's games, keyed by game_id, so a
+// director can see what's happening without waiting for an escalation email.
+let activeByGame = {};
+
+async function loadActiveNegotiations(games) {
+  activeByGame = {};
+  await Promise.all(games
+    .filter(g => (g.status || 'scheduled') === 'pending')
+    .map(async g => {
+      try {
+        const h = await fetchJSON(`api/games/${g.game_id}/history`);
+        if (h.active) activeByGame[g.game_id] = h.active;
+      } catch {}
+    }));
+}
+
 async function init() {
   try { session = await fetchJSON('api/auth/me'); } catch { session = null; }
   if (!session || (session.role !== 'director' && session.role !== 'admin')) {
@@ -131,6 +147,8 @@ async function init() {
   renderFieldsList();
 
   try { scheduleData = await fetchJSON('api/schedule'); } catch { scheduleData = { games: [] }; }
+  renderGamesList();
+  await loadActiveNegotiations(myProgramGames());
   renderGamesList();
 
   initVerifyBanner();
@@ -192,6 +210,47 @@ async function loadChangeSlots(gameId) {
   }
 }
 
+
+// ── Game history / live negotiation status ───────────────────────────────────
+function fmtWhen(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function fmtDue(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+// Compact one-liner so an in-flight negotiation is visible at a glance in the
+// games list, without having to open anything.
+function liveStatusHtml(active) {
+  if (!active) return '';
+  const overdue = active.response_due_at && new Date(active.response_due_at) < new Date();
+  const bits = [];
+  if (active.round) bits.push(`Round ${active.round}`);
+  if (active.proposed_by && active.proposal) bits.push(`${esc(active.proposed_by)} proposed ${esc(active.proposal.date)} ${esc(active.proposal.time)}`);
+  if (active.awaiting) bits.push(`waiting on <strong>${esc(active.awaiting)}</strong>`);
+  if (active.response_due_at) bits.push(`${overdue ? 'was due' : 'due'} ${esc(fmtDue(active.response_due_at))}`);
+  const flags = [];
+  if (active.escalated?.director) flags.push('director notified');
+  if (active.escalated?.admin) flags.push('admin notified');
+  if (active.escalated?.stalemate) flags.push('stalemate');
+  return `<div style="margin-top:4px;font-size:12px;color:${overdue ? '#991b1b' : '#92400e'}">
+    ${bits.join(' · ')}${flags.length ? ` <em>(${flags.join(', ')})</em>` : ''}</div>`;
+}
+
+async function showGameHistory(gameId) {
+  let data;
+  try { data = await fetchJSON(`api/games/${gameId}/history`); }
+  catch { alert('Could not load history for this game.'); return; }
+  const lines = (data.timeline || []).map(e =>
+    `${fmtWhen(e.at)} — ${e.summary}${e.detail ? `\n      ${e.detail}` : ''}`).join('\n');
+  const head = data.active
+    ? `IN PROGRESS: ${data.active.summary}${data.active.response_due_at ? `\nResponse due ${fmtDue(data.active.response_due_at)}` : ''}\n\n`
+    : '';
+  alert(`Game #${gameId} history\n\n${head}${lines || 'No changes recorded yet.'}`);
+}
+
 function renderGamesList() {
   const games = myProgramGames();
   const list = document.getElementById('games-list');
@@ -214,8 +273,11 @@ function renderGamesList() {
         <td>${esc(g.day)} ${esc(g.date)} ${esc(g.time)}</td>
         <td>${esc(g.home_team_name)}</td>
         <td>${esc(g.away_team_name)}</td>
-        <td>${statusBadge}</td>
-        <td>${canRequest ? `<button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openChangeRequest(${g.game_id},'${String(myTeamId)}')">Request Change</button>` : ''}</td>
+        <td>${statusBadge}${liveStatusHtml(activeByGame[g.game_id])}</td>
+        <td><div class="field-row-actions">
+          ${canRequest ? `<button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openChangeRequest(${g.game_id},'${String(myTeamId)}')">Request Change</button>` : ''}
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="showGameHistory(${g.game_id})">History</button>
+        </div></td>
       </tr>`;
     }).join('')}
     </tbody>
