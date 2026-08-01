@@ -70,7 +70,7 @@ for (const team of teams) {
 }
 
 // ── 3. No-matchup forbidden pairs ────────────────────────────────────────────
-// Built from team.restrictions[].type === 'no_matchup' with opponent_club
+// Built from team.restrictions[].type === 'no_matchup' with opponent_program_id
 // Key: "minId-maxId" → description string
 const forbiddenPairs = new Map();
 const pairKey = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
@@ -78,14 +78,14 @@ const pairKey = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
 for (const team of teams) {
   for (const restriction of (team.restrictions || [])) {
     if (restriction.type !== 'no_matchup') continue;
-    if (restriction.opponent_club) {
+    if (restriction.opponent_program_id) {
       const opponents = teams.filter(t =>
-        t.club_id === restriction.opponent_club && t.division_id === team.division_id
+        t.program_id === restriction.opponent_program_id && t.division_id === team.division_id
       );
       for (const opp of opponents) {
         const key = pairKey(team.id, opp.id);
         forbiddenPairs.set(key,
-          `${tName(team.id)} (${team.club_id}) has a no_matchup restriction against ${tName(opp.id)} (${opp.club_id})`
+          `${tName(team.id)} (${team.program_id}) has a no_matchup restriction against ${tName(opp.id)} (${opp.program_id})`
         );
       }
     }

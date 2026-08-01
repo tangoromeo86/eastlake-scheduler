@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Program — Eastlake League Scheduler</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1 id="program-title">My Program</h1>
+    <div class="header-actions">
+      <a href="./" class="btn btn-secondary">&#8592; Schedule</a>
+      <a href="logout" class="btn btn-secondary">Sign out</a>
+    </div>
+  </header>
+
+  <div id="director-page" style="max-width:1000px;margin:0 auto;padding:24px">
+
+    <div class="changes-toolbar">
+      <span class="changes-toolbar-title">&#128101; My Teams</span>
+      <button id="btn-add-team" class="btn btn-primary">+ Add Team</button>
+    </div>
+    <div id="team-editor-form" class="field-editor-form hidden">
+      <div class="field-form-inner">
+        <h3 id="team-form-title">Add Team</h3>
+        <div class="field-form-row">
+          <label>Team Name *<input id="tfe-label" type="text" placeholder="e.g. Wildcats U10"></label>
+          <label>Division *<select id="tfe-division"></select></label>
+        </div>
+        <div class="field-form-row">
+          <label>Coach Name<input id="tfe-coach" type="text" placeholder="e.g. Jane Smith"></label>
+          <label>Home Field<select id="tfe-field"><option value="">— None yet —</option></select></label>
+        </div>
+        <div class="field-form-row">
+          <label>Coach Email<input id="tfe-email" type="email" placeholder="jane@example.com"></label>
+          <label>Coach Phone<input id="tfe-phone" type="text" placeholder="(555) 555-5555"></label>
+        </div>
+        <div class="field-form-actions">
+          <button id="tfe-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="tfe-save" class="btn btn-primary">Save Team</button>
+        </div>
+        <div id="tfe-error" class="field-form-error hidden"></div>
+      </div>
+    </div>
+    <div id="teams-list"></div>
+
+    <div class="changes-toolbar" style="margin-top:32px">
+      <span class="changes-toolbar-title">&#127967; My Fields</span>
+      <button id="btn-add-field" class="btn btn-primary">+ Add Field</button>
+    </div>
+    <div id="field-editor-form" class="field-editor-form hidden">
+      <div class="field-form-inner">
+        <h3 id="field-form-title">Add Field</h3>
+        <div class="field-form-row">
+          <label>Venue Name *<input id="ffe-name" type="text" placeholder="e.g. Mel Harder Park"></label>
+          <label>Sub-field <span class="field-form-hint">(optional — e.g. U10, Field #3)</span><input id="ffe-subfield" type="text" placeholder="Leave blank if single surface"></label>
+        </div>
+        <div class="field-form-row">
+          <label>Address<input id="ffe-address" type="text" placeholder="e.g. 12519 Chardon Windsor Rd, Chardon OH"></label>
+        </div>
+        <div class="field-form-row">
+          <label style="flex:1">Notes <span class="field-form-hint">(parking, entrance, directions)</span><input id="ffe-notes" type="text" placeholder="e.g. Field is behind the school, park in rear lot"></label>
+        </div>
+        <div class="field-form-row">
+          <label>Coordinates <span class="field-form-hint">(paste from Google Maps, e.g. 41.535017, -81.461610)</span><input id="ffe-coords" type="text" placeholder="41.535017, -81.461610"></label>
+        </div>
+        <div class="field-form-actions">
+          <button id="ffe-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="ffe-save" class="btn btn-primary">Save Field</button>
+        </div>
+        <div id="ffe-error" class="field-form-error hidden"></div>
+      </div>
+    </div>
+    <div id="fields-list"></div>
+
+  </div>
+
+  <script src="director.js"></script>
+</body>
+</html>

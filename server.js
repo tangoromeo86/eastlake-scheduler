@@ -198,11 +198,6 @@ function loginPage(next) {
 
   <script>
     const NEXT = ${JSON.stringify(next || '')};
-    // Derive base path from current URL (works under any nginx prefix)
-    function pageBase() {
-      const p = window.location.pathname;
-      return p.substring(0, p.lastIndexOf('/') + 1);
-    }
 
     const emailInput   = document.getElementById('email-input');
     const pwInput      = document.getElementById('pw-input');
@@ -239,9 +234,9 @@ function loginPage(next) {
           pwInput.focus();
         } else {
           continueBtn.textContent = 'Signing in…';
-          const lr   = await fetch('api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+          const lr   = await fetch('api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, next: NEXT }) });
           const ld   = await lr.json();
-          if (ld.ok) { window.location = pageBase(); }
+          if (ld.ok) { window.location = ld.redirect; }
           else { showError(ld.error || 'Login failed. Try again.'); continueBtn.disabled = false; continueBtn.textContent = 'Continue'; }
         }
       } catch { showError('Something went wrong. Please try again.'); continueBtn.disabled = false; continueBtn.textContent = 'Continue'; }
@@ -257,7 +252,7 @@ function loginPage(next) {
       try {
         const res  = await fetch('api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pw, next: NEXT }) });
         const data = await res.json();
-        if (data.ok) { window.location = NEXT === 'admin' ? pageBase() + 'admin' : pageBase(); }
+        if (data.ok) { window.location = data.redirect; }
         else { showError(data.error || 'Incorrect password.'); signinBtn.disabled = false; signinBtn.textContent = 'Sign In'; pwInput.focus(); pwInput.select(); }
       } catch { showError('Something went wrong. Please try again.'); signinBtn.disabled = false; signinBtn.textContent = 'Sign In'; }
     }
@@ -287,6 +282,9 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'viewer.h
 
 app.get('/admin', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 app.get('/admin/', (req, res) => res.redirect((BASE_PATH || '') + '/admin'));
+
+app.get('/director', requireDirector, (req, res) => res.sendFile(path.join(__dirname, 'public', 'director.html')));
+app.get('/director/', (req, res) => res.redirect((BASE_PATH || '') + '/director'));
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
@@ -331,7 +329,8 @@ app.post('/api/auth/login', (req, res) => {
   if (!match) return res.status(401).json({ error: 'Email not recognized' });
   // Email-only login grants view access. Making changes requires verifying via magic link.
   setSession(res, { email, role: match.role, name: match.name, phone: match.phone || '', team_id: match.team_id || null, program_id: match.program_id || null, verified: false });
-  return res.json({ ok: true, redirect: BASE_PATH + '/' });
+  const defaultRedirect = match.role === 'director' ? '/director' : '/';
+  return res.json({ ok: true, redirect: BASE_PATH + (next === 'director' ? '/director' : (next || defaultRedirect)) });
 });
 
 // Request a magic-link email to upgrade the current session to "verified" (can make changes)
@@ -570,7 +569,7 @@ app.post('/api/run', requireAdmin, (req, res) => {
 
 app.post('/api/upload-season', requireAdmin, (req, res) => {
   const data = req.body;
-  const missing = ['season', 'clubs', 'divisions', 'fields', 'teams'].filter(k => !data[k]);
+  const missing = ['season', 'programs', 'divisions', 'fields', 'teams'].filter(k => !data[k]);
   if (missing.length) return res.status(400).json({ error: `Missing required keys: ${missing.join(', ')}` });
   if (!Array.isArray(data.divisions) || data.divisions.length === 0) return res.status(400).json({ error: 'divisions must be a non-empty array' });
   if (!Array.isArray(data.teams) || data.teams.length === 0) return res.status(400).json({ error: 'teams must be a non-empty array' });
@@ -1025,13 +1024,24 @@ app.post('/api/notify-change', requireAdmin, async (req, res) => {
 
 // ── Field CRUD (admin) ────────────────────────────────────────────────────────
 
-app.post('/api/season/fields', requireAdmin, (req, res) => {
+// A director may only touch fields/teams in their own program; admin is unrestricted.
+function canManageProgram(session, programId) {
+  if (session.role === 'admin') return true;
+  if (session.role === 'director') return !programId || programId === session.program_id;
+  return false;
+}
+
+app.post('/api/season/fields', requireDirector, requireVerified, (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
-  const { name, sub_field, address, notes, coordinates } = req.body;
+  const s = getSession(req);
+  const { name, sub_field, address, notes, coordinates, program_id } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Venue name is required' });
+  // Directors can only create fields for their own program; admin may set any program_id (or none, for a shared field).
+  const fieldProgramId = s.role === 'director' ? s.program_id : (program_id || null);
   const f = { id: 'field-' + Date.now(), name: name.trim(), address: (address || '').trim() };
+  if (fieldProgramId) f.program_id = fieldProgramId;
   if (sub_field?.trim()) f.sub_field = sub_field.trim();
   if (notes?.trim()) f.notes = notes.trim();
   if (coordinates?.trim()) f.coordinates = coordinates.replace(/\s/g, '');
@@ -1043,12 +1053,14 @@ app.post('/api/season/fields', requireAdmin, (req, res) => {
   res.json({ ok: true, field: f });
 });
 
-app.put('/api/season/fields/:id', requireAdmin, (req, res) => {
+app.put('/api/season/fields/:id', requireDirector, requireVerified, (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const s = getSession(req);
   const idx = (data.fields || []).findIndex(f => String(f.id) === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Field not found' });
+  if (!canManageProgram(s, data.fields[idx].program_id)) return res.status(403).json({ error: 'You can only edit fields in your own program' });
   const { name, sub_field, address, notes, coordinates } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Venue name is required' });
   const updated = { ...data.fields[idx], name: name.trim(), address: (address || '').trim() };
@@ -1081,13 +1093,112 @@ app.put('/api/season/fields/:id', requireAdmin, (req, res) => {
   res.json({ ok: true, field: updated });
 });
 
-app.delete('/api/season/fields/:id', requireAdmin, (req, res) => {
+app.delete('/api/season/fields/:id', requireDirector, requireVerified, (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const s = getSession(req);
+  const existing = (data.fields || []).find(f => String(f.id) === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Field not found' });
+  if (!canManageProgram(s, existing.program_id)) return res.status(403).json({ error: 'You can only delete fields in your own program' });
   const before = (data.fields || []).length;
   data.fields = (data.fields || []).filter(f => String(f.id) !== req.params.id);
   if (data.fields.length === before) return res.status(404).json({ error: 'Field not found' });
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true });
+});
+
+// ── Team CRUD (director or admin) ───────────────────────────────────────────────
+// Directors register their own program's teams here, instead of a whole-season upload.
+// New teams are live immediately — no confirm step (see NOTES.md).
+
+app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const s = getSession(req);
+  const { label, coach, email, phone, division_id, home_field_id, program_id } = req.body;
+  if (!label || !label.trim()) return res.status(400).json({ error: 'Team name is required' });
+  if (!division_id || !(data.divisions || []).some(d => String(d.id) === String(division_id))) {
+    return res.status(400).json({ error: 'A valid division_id is required' });
+  }
+  const teamProgramId = s.role === 'director' ? s.program_id : (program_id || null);
+  if (!canManageProgram(s, teamProgramId)) return res.status(403).json({ error: 'You can only add teams to your own program' });
+  if (home_field_id) {
+    const field = (data.fields || []).find(f => String(f.id) === String(home_field_id));
+    if (!field) return res.status(400).json({ error: 'Home field not found' });
+    if (field.program_id && field.program_id !== teamProgramId) {
+      return res.status(400).json({ error: 'Home field does not belong to this program' });
+    }
+  }
+  const t = {
+    id: 'team-' + Date.now(),
+    label: label.trim(),
+    coach: (coach || '').trim(),
+    email: (email || '').toLowerCase().trim(),
+    phone: (phone || '').trim(),
+    division_id,
+    home_field_id: home_field_id || null,
+    program_id: teamProgramId,
+    confirmed: true,
+  };
+  data.teams = [...(data.teams || []), t];
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true, team: t });
+});
+
+app.put('/api/teams/:id', requireDirector, requireVerified, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const s = getSession(req);
+  const idx = (data.teams || []).findIndex(t => String(t.id) === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Team not found' });
+  if (!canManageProgram(s, data.teams[idx].program_id)) return res.status(403).json({ error: 'You can only edit teams in your own program' });
+  const { label, coach, email, phone, division_id, home_field_id } = req.body;
+  if (!label || !label.trim()) return res.status(400).json({ error: 'Team name is required' });
+  if (!division_id || !(data.divisions || []).some(d => String(d.id) === String(division_id))) {
+    return res.status(400).json({ error: 'A valid division_id is required' });
+  }
+  const teamProgramId = data.teams[idx].program_id;
+  if (home_field_id) {
+    const field = (data.fields || []).find(f => String(f.id) === String(home_field_id));
+    if (!field) return res.status(400).json({ error: 'Home field not found' });
+    if (field.program_id && field.program_id !== teamProgramId) {
+      return res.status(400).json({ error: 'Home field does not belong to this program' });
+    }
+  }
+  data.teams[idx] = {
+    ...data.teams[idx],
+    label: label.trim(),
+    coach: (coach || '').trim(),
+    email: (email || '').toLowerCase().trim(),
+    phone: (phone || '').trim(),
+    division_id,
+    home_field_id: home_field_id || null,
+  };
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true, team: data.teams[idx] });
+});
+
+app.delete('/api/teams/:id', requireDirector, requireVerified, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const s = getSession(req);
+  const existing = (data.teams || []).find(t => String(t.id) === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Team not found' });
+  if (!canManageProgram(s, existing.program_id)) return res.status(403).json({ error: 'You can only delete teams in your own program' });
+  data.teams = (data.teams || []).filter(t => String(t.id) !== req.params.id);
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
   fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }

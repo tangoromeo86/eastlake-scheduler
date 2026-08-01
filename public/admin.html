@@ -60,18 +60,18 @@
     <nav id="division-tabs" class="tabs">
       <div class="admin-tabs-sep"></div>
       <button class="admin-top-view-btn" data-topview="fields">&#127967; Fields</button>
-      <button class="admin-top-view-btn" data-topview="city">&#127961; City</button>
+      <button class="admin-top-view-btn" data-topview="program">&#127961; Program</button>
     </nav>
 
-    <!-- Cross-division controls (Fields / City mode) -->
+    <!-- Cross-division controls (Fields / Program mode) -->
     <div id="admin-cross-div-bar" class="view-bar hidden">
       <div id="fields-controls" class="view-controls hidden">
         <label>Field: <select id="admin-field-select"><option value="">All fields</option></select></label>
         <button id="admin-field-export-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">&#8595; CSV</button>
       </div>
-      <div id="city-controls" class="view-controls hidden">
-        <label>City: <select id="admin-city-select"></select></label>
-        <button id="admin-city-export-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">&#8595; CSV</button>
+      <div id="program-controls" class="view-controls hidden">
+        <label>Program: <select id="admin-program-select"></select></label>
+        <button id="admin-program-export-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">&#8595; CSV</button>
       </div>
     </div>
 
@@ -149,9 +149,9 @@
       <div id="admin-fields-wrapper"></div>
     </div>
 
-    <!-- CITY VIEW -->
-    <div id="view-city" class="view-panel hidden">
-      <div id="admin-city-wrapper"></div>
+    <!-- PROGRAM VIEW -->
+    <div id="view-program" class="view-panel hidden">
+      <div id="admin-program-wrapper"></div>
     </div>
   </div>
 
@@ -211,14 +211,14 @@
 
   <div id="page-programs" class="page-section hidden">
     <div class="changes-toolbar">
-      <span class="changes-toolbar-title">&#127961; City Programs</span>
+      <span class="changes-toolbar-title">&#127961; Programs</span>
       <button id="btn-add-program" class="btn btn-primary">+ Add Program</button>
     </div>
     <div id="program-editor-form" class="field-editor-form hidden">
       <div class="field-form-inner">
         <h3 id="program-form-title">Add Program</h3>
         <div class="field-form-row">
-          <label>City / Program Name *<input id="pfe-name" type="text" placeholder="e.g. Chardon"></label>
+          <label>Program Name *<input id="pfe-name" type="text" placeholder="e.g. Chardon"></label>
         </div>
         <div class="field-form-actions">
           <button id="pfe-cancel" class="btn btn-secondary">Cancel</button>
