@@ -54,6 +54,10 @@
           </div>
           <p class="field-form-hint" style="margin:10px 0">Pick a time that works for you. These are the only times that fit both teams' availability and field openings:</p>
           <div id="cr-slots"></div>
+          <div class="field-form-row" id="cr-time-row" style="display:none">
+            <label>Kickoff time <span class="field-form-hint">(you and the other coach can fine-tune this)</span>
+              <select id="cr-time"></select></label>
+          </div>
           <div class="field-form-actions">
             <button id="cr-cancel" class="btn btn-secondary">Cancel</button>
             <button id="cr-submit" class="btn btn-primary">Send Request</button>
@@ -84,6 +88,7 @@
     </div>
   </div>
 
+  <script src="availability-editor.js"></script>
   <script src="my-team.js"></script>
 </body>
 </html>

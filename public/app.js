@@ -2441,7 +2441,7 @@ async function renderSeasonPage() {
   document.getElementById('sc-start').value = s.start || '';
   document.getElementById('sc-weeks').value = s.weeks || '';
   document.getElementById('sc-target').value = s.target_games || '';
-  document.getElementById('sc-weekday-time').value = s.weekday_time || '';
+  document.getElementById('sc-weekday-time').value = '18:30';
   document.getElementById('sc-blackouts').value = (s.blackout_dates || []).join('\n');
   renderCalendarPreview(data.calendar);
   renderDivisionsList(data.divisions || []);
@@ -2454,7 +2454,6 @@ document.getElementById('sc-save').addEventListener('click', async () => {
     start: document.getElementById('sc-start').value || undefined,
     weeks: document.getElementById('sc-weeks').value || undefined,
     target_games: document.getElementById('sc-target').value || undefined,
-    weekday_time: document.getElementById('sc-weekday-time').value.trim() || undefined,
     blackout_dates: document.getElementById('sc-blackouts').value.split('\n').map(x => x.trim()).filter(Boolean),
   };
   try {

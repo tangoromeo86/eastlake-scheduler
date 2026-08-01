@@ -6,7 +6,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { Resend } = require('resend');
 const { scheduleAll, validateGameEdit, dayName, teamName,
-        parseAvailability, parseFieldAvailability, saturdayBlock, saturdayTime,
+        resolveTeamAvailability, resolveFieldAvailability, nearestSaturdaySlot,
+        SATURDAY_SLOTS, SATURDAY_SLOT_TIMES, WEEKDAY_TIME, TIME_BOUNDS, isValidGameTime, allowedTimes,
         buildSeasonWeeks } = require('./lib/scheduler');
 
 const app = express();
@@ -597,19 +598,24 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
     : null;
 
   const today = new Date().toISOString().slice(0, 10);
-  const homeAvail = homeTeam ? parseAvailability(homeTeam) : null;
-  const awayAvail = awayTeam ? parseAvailability(awayTeam) : null;
 
   const slotsOut = [];
   for (const wk of buildSeasonWeeks(season)) {
-    const daySlots = wk.weekdays.map(d => ({ date: d, day: dayName(d), type: 'weekday' }));
-    if (wk.saturday) daySlots.push({ date: wk.saturday, day: 'Saturday', type: 'saturday' });
+    // Saturdays expand into their three real slots, so a coach can pick which
+    // part of the day rather than being handed a single division-fixed time.
+    const daySlots = wk.weekdays.map(d => ({ date: d, day: dayName(d), type: 'weekday', slotKey: null, time: WEEKDAY_TIME }));
+    if (wk.saturday) {
+      for (const k of SATURDAY_SLOTS) {
+        daySlots.push({ date: wk.saturday, day: 'Saturday', type: 'saturday', slotKey: k, time: SATURDAY_SLOT_TIMES[k] });
+      }
+    }
 
-    for (const { date, day, type } of daySlots) {
+    for (const { date, day, type, slotKey, time } of daySlots) {
       if (date <= today) continue;
       if (minDaysOut > 0 && daysBetween(new Date().toISOString(), date) < minDaysOut) continue;
       if (globalBlackouts.has(date)) continue;
       if (homeBlackouts.has(date) || awayBlackouts.has(date)) continue;
+      // A team can't play twice in a day even across Saturday slots.
       if (homeDates.has(date) || awayDates.has(date)) continue;
 
       const prevDay = adjacentDateStr(date, -1);
@@ -617,27 +623,18 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
       if (homeDates.has(prevDay) || homeDates.has(nextDay)) continue;
       if (awayDates.has(prevDay) || awayDates.has(nextDay)) continue;
 
-      const isSat = type === 'saturday';
-      // A proposal has to be a complete date+time+field, so resolve the time the
-      // same way the scheduler does before the availability check needs it.
-      let time;
-      if (isSat) {
-        time = saturdayTime(game.division_id, season);
-      } else {
-        time = homeAvail?.weekday[day]?.time || awayAvail?.weekday[day]?.time || season.weekday_time || '18:00';
-      }
-
-      if (homeAvail && awayAvail) {
-        const key = isSat ? saturdayBlock(time) : day;
-        const homeStatus = isSat ? homeAvail.saturday[key] : homeAvail.weekday[key]?.status;
-        const awayStatus = isSat ? awayAvail.saturday[key] : awayAvail.weekday[key]?.status;
+      // Availability resolved against this concrete date, not the weekday pattern.
+      if (homeTeam && awayTeam) {
+        const homeStatus = resolveTeamAvailability(homeTeam, date, type, slotKey);
+        const awayStatus = resolveTeamAvailability(awayTeam, date, type, slotKey);
         if (homeStatus === 'none' || homeStatus === 'travel') continue;
         if (awayStatus === 'none' || awayStatus === 'host') continue;
-        if (homeFieldObj) {
-          const fa = parseFieldAvailability(homeFieldObj);
-          if (!(isSat ? fa.saturday[key] : fa.weekday[key])) continue;
-        }
+        if (homeFieldObj && !resolveFieldAvailability(homeFieldObj, date, type, slotKey)) continue;
       }
+
+      // The home field can host other games that day now (different slots), so
+      // only a clash at this exact time rules the slot out.
+      if (homeFieldId && otherGames.some(g => g.field_id === homeFieldId && g.date === date && g.time === time)) continue;
 
       const fieldGames = homeFieldId
         ? otherGames.filter(g => g.field_id === homeFieldId && g.date === date)
@@ -645,7 +642,9 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
             .sort((a, b) => a.time.localeCompare(b.time))
         : [];
 
-      slotsOut.push({ date, day, week: wk.week, type, time, field_id: homeFieldId, field_games: fieldGames });
+      slotsOut.push({ date, day, week: wk.week, type, slot_key: slotKey, time,
+                      allowed_times: allowedTimes(type),
+                      field_id: homeFieldId, field_games: fieldGames });
     }
   }
   return { slots: slotsOut, home_field_name: homeFieldName };
@@ -1279,6 +1278,30 @@ async function notifyNoOptions(req, cr, seasonData, context) {
   });
 }
 
+// Resolves a client-picked slot against what's actually viable, allowing the
+// coaches to shift the kickoff within the legal window. Returns
+// { slot, time } or { error }. Never trusts the client's time.
+function resolveProposedSlot(slots, wanted, schedData, gameId) {
+  if (!wanted || !wanted.date) return { error: 'Pick a proposed date' };
+  const candidates = slots.filter(x => x.date === wanted.date &&
+    (!wanted.slot_key || x.slot_key === wanted.slot_key));
+  if (!candidates.length) return { error: 'That date is no longer available — please pick again', stale: true };
+  // Prefer an exact slot-time match, else the first viable slot on that date.
+  const slot = candidates.find(x => x.time === wanted.time) || candidates[0];
+
+  const time = wanted.time || slot.time;
+  if (!isValidGameTime(time, slot.type)) {
+    const [lo, hi] = TIME_BOUNDS[slot.type === 'saturday' ? 'saturday' : 'weekday'];
+    return { error: `Game time must be between ${lo} and ${hi}, on the half hour` };
+  }
+  // A shifted time could collide with another game already on that field.
+  const clash = (schedData.games || []).some(g =>
+    g.game_id !== gameId && g.field_id === slot.field_id && g.date === slot.date && g.time === time);
+  if (clash) return { error: 'Another game is already booked on that field at that time' };
+
+  return { slot, time };
+}
+
 app.post('/api/change-requests', requireVerified, async (req, res) => {
   const s = getSession(req);
   const { game_id, team_id, reason, details, slot } = req.body;
@@ -1311,8 +1334,9 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
       `${requestingTeam.label || 'A coach'} tried to reschedule Game #${game_id}, but no workable slot exists.`);
     return res.status(400).json({ error: 'No date works for both teams right now. Your directors have been notified to help.', no_options: true });
   }
-  const chosen = slots.find(x => x.date === slot.date && x.time === slot.time);
-  if (!chosen) return res.status(400).json({ error: 'That slot is no longer available — please pick again', stale_slot: true });
+  const picked = resolveProposedSlot(slots, slot, schedData, game_id);
+  if (picked.error) return res.status(400).json({ error: picked.error, stale_slot: !!picked.stale });
+  const chosen = { ...picked.slot, time: picked.time };
 
   const cr = {
     id: 'cr-' + Date.now(),
@@ -1525,15 +1549,35 @@ app.get('/api/change-requests/:id/counter', (req, res) => {
       `There's no other date that fits both teams' availability for Game #${cr.game_id}. Your directors have been notified and will help sort this out.`));
   }
 
-  const opts = available.map(x => `
-    <label class="slot"><input type="radio" name="slot" value="${x.date}|${x.time}" required>
+  const opts = available.map((x, i) => `
+    <label class="slot"><input type="radio" name="pick" value="${i}" data-date="${x.date}" required>
     ${describeSlot(x, seasonData.fields)}</label>`).join('');
 
+  // Times are negotiable within the day type's window, so offer the slot's
+  // standard time pre-selected plus every other legal kickoff.
+  const timeOptionsByIndex = available.map(x =>
+    (x.allowed_times || []).map(t => `<option value="${t}"${t === x.time ? ' selected' : ''}>${t}</option>`).join(''));
+
   res.send(crActionPage('Suggest another time',
-    `You're saying the proposed time for Game #${cr.game_id} doesn't work. Pick a time that does — it'll go back to the other coach.`,
+    `You're saying the proposed time for Game #${cr.game_id} doesn't work. Pick a date that does — you can nudge the kickoff time too — and it'll go back to the other coach.`,
     `<div class="cur">Currently proposed: ${describeSlot(cr.proposal, seasonData.fields)}</div>
-     <form method="POST" action="counter?token=${req.query.token}">${opts}
-     <button class="btn" type="submit">Send this back to the other coach</button></form>`));
+     <form method="POST" action="counter?token=${req.query.token}" id="cf">${opts}
+     <div style="margin-top:14px"><label style="font-size:13px;color:#475569">Kickoff time
+       <select name="time" id="tsel" style="margin-left:8px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px"></select>
+     </label></div>
+     <input type="hidden" name="date" id="dsel">
+     <button class="btn" type="submit">Send this back to the other coach</button></form>
+     <script>
+       var TIMES = ${JSON.stringify(timeOptionsByIndex)};
+       var DATES = ${JSON.stringify(available.map(x => x.date))};
+       var form = document.getElementById('cf');
+       form.addEventListener('change', function (e) {
+         if (e.target.name !== 'pick') return;
+         var i = parseInt(e.target.value, 10);
+         document.getElementById('tsel').innerHTML = TIMES[i];
+         document.getElementById('dsel').value = DATES[i];
+       });
+     </script>`));
 });
 
 app.post('/api/change-requests/:id/counter', express.urlencoded({ extended: false }), async (req, res) => {
@@ -1547,7 +1591,8 @@ app.post('/api/change-requests/:id/counter', express.urlencoded({ extended: fals
   const game = schedData.games.find(g => g.game_id === cr.game_id);
   if (!game) return crAlreadyResolved(res);
 
-  const [date, time] = String(req.body.slot || '').split('|');
+  const date = String(req.body.date || '');
+  const time = String(req.body.time || '');
   const { slots } = computeViableSlots(game, seasonData, schedData, { minDaysOut: CHANGE_REQUEST_MIN_DAYS });
   if (!slots.length) {
     cr.status = 'escalated';
@@ -1557,11 +1602,12 @@ app.post('/api/change-requests/:id/counter', express.urlencoded({ extended: fals
     return res.send(crActionPage('No other times work',
       `There's no other date that fits both teams for Game #${cr.game_id}. Your directors have been notified.`));
   }
-  const chosen = slots.find(x => x.date === date && x.time === time);
-  if (!chosen) {
+  const picked = resolveProposedSlot(slots, { date, time }, schedData, cr.game_id);
+  if (picked.error) {
     return res.status(400).send(crActionPage('That time is no longer free',
-      'Someone else booked that slot while you were deciding. Please open the link again and pick another.'));
+      `${picked.error}. Please open the link again and pick another.`));
   }
+  const chosen = { ...picked.slot, time: picked.time };
 
   // Flip the turn — the coach who rejected is now the one proposing.
   const nextAwaiting = cr.proposing_team_id;
@@ -2327,7 +2373,7 @@ app.get('/api/season/config', requireAdmin, (req, res) => {
 app.put('/api/season/config', requireAdmin, (req, res) => {
   const data = readJsonSafe(SEASON_FILE, null);
   if (!data) return res.status(500).json({ error: 'Could not read season.json' });
-  const { start, weeks, target_games, weekday_time, saturday_times, blackout_dates } = req.body || {};
+  const { start, weeks, target_games, blackout_dates } = req.body || {};
 
   if (start !== undefined && start && !/^\d{4}-\d{2}-\d{2}$/.test(start)) {
     return res.status(400).json({ error: 'Start date must be YYYY-MM-DD' });
@@ -2342,8 +2388,6 @@ app.put('/api/season/config', requireAdmin, (req, res) => {
   if (start !== undefined)          data.season.start = start;
   if (weeks !== undefined)          data.season.weeks = Number(weeks) || undefined;
   if (target_games !== undefined)   data.season.target_games = Number(target_games) || undefined;
-  if (weekday_time !== undefined)   data.season.weekday_time = weekday_time;
-  if (saturday_times !== undefined) data.season.saturday_times = saturday_times;
   if (blackout_dates !== undefined) data.season.blackout_dates = blackout_dates;
 
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }

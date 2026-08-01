@@ -5,6 +5,7 @@ let seasonData = null;
 let myTeam = null;
 let scheduleData = null;
 let crGameId = null;
+let seasonSlots = null;
 
 function esc(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -12,59 +13,6 @@ function esc(s) {
 
 function fieldDisplayName(f) {
   return f.sub_field ? `${f.name} – ${f.sub_field}` : f.name;
-}
-
-// ── Availability grid (shared shape with public/director.js) ────────────────
-const AVAIL_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday'];
-const AVAIL_SAT_BLOCKS = [['before11', 'Before 11am'], ['mid', '11am–2pm'], ['after2', '2pm–5pm']];
-const AVAIL_STATUS_OPTIONS = [
-  ['both', 'Available for both'],
-  ['host', 'Available to host'],
-  ['travel', 'Available to travel'],
-  ['none', 'Not available'],
-];
-
-function renderAvailabilityGrid(containerId, availability) {
-  const a = availability || {};
-  const weekday = a.weekday || {};
-  const saturday = a.saturday || {};
-  const statusOpts = (current) => AVAIL_STATUS_OPTIONS
-    .map(([v, l]) => `<option value="${v}" ${v === (current || 'both') ? 'selected' : ''}>${l}</option>`).join('');
-
-  const weekdayRows = AVAIL_WEEKDAYS.map(day => {
-    const entry = weekday[day] || {};
-    return `<tr>
-      <td>${day}</td>
-      <td><select class="avail-status" data-kind="weekday" data-key="${day}">${statusOpts(entry.status)}</select></td>
-      <td><input type="text" class="avail-time" data-key="${day}" placeholder="e.g. 18:30" value="${esc(entry.time || '')}" style="width:90px"></td>
-    </tr>`;
-  }).join('');
-
-  const satRows = AVAIL_SAT_BLOCKS.map(([key, label]) => `<tr>
-      <td>Sat: ${label}</td>
-      <td><select class="avail-status" data-kind="saturday" data-key="${key}">${statusOpts(saturday[key])}</select></td>
-      <td></td>
-    </tr>`).join('');
-
-  document.getElementById(containerId).innerHTML = `<table class="fields-table">
-    <thead><tr><th>Day</th><th>Status</th><th>Start Time (optional)</th></tr></thead>
-    <tbody>${weekdayRows}${satRows}</tbody>
-  </table>`;
-}
-
-function readAvailabilityGrid(containerId) {
-  const container = document.getElementById(containerId);
-  const weekday = {};
-  const saturday = {};
-  container.querySelectorAll('select.avail-status[data-kind="weekday"]').forEach(sel => {
-    const day = sel.dataset.key;
-    const timeInput = container.querySelector(`input.avail-time[data-key="${day}"]`);
-    weekday[day] = { status: sel.value, time: (timeInput?.value || '').trim() || null };
-  });
-  container.querySelectorAll('select.avail-status[data-kind="saturday"]').forEach(sel => {
-    saturday[sel.dataset.key] = sel.value;
-  });
-  return { weekday, saturday };
 }
 
 async function fetchJSON(url) {
@@ -79,6 +27,7 @@ async function init() {
     window.location = 'login';
     return;
   }
+  try { seasonSlots = await fetchJSON('api/season/slots'); } catch { seasonSlots = []; }
   try { seasonData = await fetchJSON('api/season'); }
   catch (e) {
     document.getElementById('my-team-page').innerHTML = `<p style="color:#dc2626">Could not load team data: ${esc(e.message)}</p>`;
@@ -97,7 +46,7 @@ async function init() {
   document.getElementById('mte-email').value = myTeam.email || '';
   document.getElementById('mte-phone').value = myTeam.phone || '';
   populateFieldSelect();
-  renderAvailabilityGrid('mte-availability', myTeam.availability);
+  renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots);
 
   try { scheduleData = await fetchJSON('api/schedule'); } catch { scheduleData = { games: [] }; }
   renderGamesList();
@@ -155,6 +104,10 @@ async function loadChangeSlots(gameId) {
       r.addEventListener('change', () => {
         crSelectedSlot = data.slots[parseInt(r.value, 10)];
         submitBtn.disabled = false;
+        const sel = document.getElementById('cr-time');
+        sel.innerHTML = (crSelectedSlot.allowed_times || [crSelectedSlot.time])
+          .map(t => `<option value="${t}"${t === crSelectedSlot.time ? ' selected' : ''}>${t}</option>`).join('');
+        document.getElementById('cr-time-row').style.display = '';
       });
     });
   } catch (e) {
@@ -252,6 +205,8 @@ function openChangeRequest(gameId) {
   populateCrFieldSelects();
 
   crSelectedSlot = null;
+  const tr = document.getElementById('cr-time-row');
+  if (tr) tr.style.display = 'none';
   const locked = daysUntil(game.date) < 7;
   document.getElementById('cr-form-title').textContent = locked ? 'Change Locked — Manual Override' : 'Request Change';
   document.getElementById('cr-normal-form').classList.toggle('hidden', locked);
@@ -277,7 +232,8 @@ document.getElementById('cr-submit').addEventListener('click', async () => {
   const body = {
     game_id: crGameId,
     reason: document.getElementById('cr-reason').value.trim(),
-    slot: crSelectedSlot,
+    slot: { date: crSelectedSlot.date, slot_key: crSelectedSlot.slot_key || null,
+            time: document.getElementById('cr-time').value || crSelectedSlot.time },
   };
   try {
     const res = await fetch('api/change-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -341,7 +297,7 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
     myTeam = data.team;
     document.getElementById('team-title').textContent = myTeam.label || 'My Team';
-    renderAvailabilityGrid('mte-availability', myTeam.availability);
+    renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots);
     if (data.email_change_pending) {
       okEl.textContent = data.email_change_sent
         ? `Saved. Check ${data.pending_email} for a link to confirm your new email — until then, your old email stays on file.`
