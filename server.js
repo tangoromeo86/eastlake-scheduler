@@ -5,7 +5,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { Resend } = require('resend');
-const { scheduleAll, validateGameEdit, SEASON_WEEKS, dayName, teamName } = require('./lib/scheduler');
+const { scheduleAll, validateGameEdit, dayName, teamName,
+        parseAvailability, parseFieldAvailability, saturdayBlock, saturdayTime,
+        buildSeasonWeeks } = require('./lib/scheduler');
 
 const app = express();
 const PORT = process.env.PORT || 3010;
@@ -141,6 +143,20 @@ function daysBetween(isoA, isoB) {
 function crTeamContact(t) {
   if (!t) return null;
   return { id: t.id, name: teamName(t), coach: t.coach || '', email: t.email || '', phone: t.phone || '', program_id: t.program_id || null };
+}
+
+// A team's email doubles as its coach's login identity, so changing it never
+// takes effect until the *new* address proves it's reachable. Shared by every
+// route that can change a team email (coach self-edit, director edit, admin
+// season editor) so the safeguard can't be sidestepped through a different door.
+async function sendTeamEmailChangeConfirmation(req, team, newEmail) {
+  const token = createEmailChangeToken(team.id, newEmail);
+  const confirmUrl = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/teams/${team.id}/confirm-email?token=${token}`;
+  return sendEmail({
+    to: newEmail,
+    subject: `Confirm your new email — ${team.label || teamName(team)}`,
+    text: `Click the link below to confirm this email address for ${team.label || teamName(team)}:\n\n${confirmUrl}\n\nThis link expires in 15 minutes and can only be used once. If you didn't request this change, you can ignore this email — nothing will happen until the link above is clicked.\n\n— Eastlake Scheduler`,
+  });
 }
 
 function requireAuth(req, res, next) {
@@ -457,7 +473,9 @@ app.get('/api/season', requireAuth, (req, res) => {
 });
 
 app.get('/api/season/slots', requireAuth, (req, res) => {
-  const result = SEASON_WEEKS.map(wk => {
+  let seasonCfg = {};
+  try { seasonCfg = (JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')).season) || {}; } catch {}
+  const result = buildSeasonWeeks(seasonCfg).map(wk => {
     const dates = [];
     for (const d of wk.weekdays) dates.push({ date: d, type: 'weekday', day: dayName(d) });
     if (wk.saturday) dates.push({ date: wk.saturday, type: 'saturday', day: 'Saturday' });
@@ -525,7 +543,7 @@ app.get('/api/game/:id/suggest-dates', requireAdmin, (req, res) => {
     : null;
 
   const suggestions = [];
-  for (const wk of SEASON_WEEKS) {
+  for (const wk of buildSeasonWeeks(season)) {
     const slots = wk.weekdays.map(d => ({ date: d, day: dayName(d), type: 'weekday' }));
     if (wk.saturday) slots.push({ date: wk.saturday, day: 'Saturday', type: 'saturday' });
 
@@ -540,6 +558,23 @@ app.get('/api/game/:id/suggest-dates', requireAdmin, (req, res) => {
       const nextDay = adjacentDateStr(date, +1);
       if (homeDates.has(prevDay) || homeDates.has(nextDay)) continue;
       if (awayDates.has(prevDay) || awayDates.has(nextDay)) continue;
+
+      // Respect the same availability rules the scheduler enforces, so the admin
+      // is never offered a date that the scheduler itself would refuse.
+      if (homeTeam && awayTeam) {
+        const isSat = type === 'saturday';
+        const key = isSat ? saturdayBlock(saturdayTime(game.division_id, season)) : day;
+        const homeAvail = parseAvailability(homeTeam);
+        const awayAvail = parseAvailability(awayTeam);
+        const homeStatus = isSat ? homeAvail.saturday[key] : homeAvail.weekday[key]?.status;
+        const awayStatus = isSat ? awayAvail.saturday[key] : awayAvail.weekday[key]?.status;
+        if (homeStatus === 'none' || homeStatus === 'travel') continue;
+        if (awayStatus === 'none' || awayStatus === 'host') continue;
+        if (homeFieldObj) {
+          const fa = parseFieldAvailability(homeFieldObj);
+          if (!(isSat ? fa.saturday[key] : fa.weekday[key])) continue;
+        }
+      }
 
       // Collect other games at the home field on this date
       const fieldGames = homeFieldId
@@ -675,7 +710,7 @@ app.post('/api/game', requireAdmin, (req, res) => {
   if (violations.length && !force) return res.status(409).json({ violations });
 
   let newWeek = null;
-  for (const wk of SEASON_WEEKS) {
+  for (const wk of buildSeasonWeeks(seasonData.season)) {
     if (wk.weekdays.includes(date) || wk.saturday === date) { newWeek = wk.week; break; }
   }
 
@@ -687,7 +722,7 @@ app.post('/api/game', requireAdmin, (req, res) => {
   const resolvedFieldAddress = fieldObj ? (fieldObj.address || '') : '';
 
   const newGame = {
-    game_id: gameId, division_id, week: newWeek,
+    game_id: gameId, status: 'scheduled', division_id, week: newWeek,
     date, day: dayName(date), time,
     field_id: field_id_p, field_name: resolvedFieldName, field_address: resolvedFieldAddress,
     home_team_id: home_team_id_p, home_team_name: homeTeam ? teamName(homeTeam) : String(home_team_id_p),
@@ -764,7 +799,7 @@ app.put('/api/game/:id', requireAdmin, (req, res) => {
   if (violations.length && !force) return res.status(409).json({ violations });
 
   let newWeek = existingGame.week;
-  for (const wk of SEASON_WEEKS) {
+  for (const wk of buildSeasonWeeks(seasonData.season)) {
     if (wk.weekdays.includes(date) || wk.saturday === date) { newWeek = wk.week; break; }
   }
 
@@ -940,7 +975,7 @@ app.post('/api/notify-addition', requireAdmin, async (req, res) => {
   res.json({ ok: true, sent_to: emails });
 });
 
-app.patch('/api/team/:id', requireAdmin, (req, res) => {
+app.patch('/api/team/:id', requireAdmin, async (req, res) => {
   const rawId = req.params.id;
   const teamId = isNaN(parseInt(rawId, 10)) ? rawId : parseInt(rawId, 10);
 
@@ -951,8 +986,11 @@ app.patch('/api/team/:id', requireAdmin, (req, res) => {
   const teamIdx = seasonData.teams.findIndex(t => t.id === teamId);
   if (teamIdx === -1) return res.status(404).json({ error: `Team ${teamId} not found` });
 
+  const existingEmail = seasonData.teams[teamIdx].email || '';
   const team = { ...seasonData.teams[teamIdx] };
-  const allowed = ['label', 'name', 'coach', 'phone', 'email', 'home_field_id', 'confirmed', 'blackout_dates'];
+  // `email` is deliberately absent — it goes through the confirm-at-new-address
+  // flow below rather than being written directly, same as every other route.
+  const allowed = ['label', 'name', 'coach', 'phone', 'home_field_id', 'confirmed', 'blackout_dates', 'program_id', 'availability'];
   for (const field of allowed) {
     if (!(field in req.body)) continue;
     team[field] = req.body[field];
@@ -964,6 +1002,12 @@ app.patch('/api/team/:id', requireAdmin, (req, res) => {
   fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(seasonData, null, 2)); }
   catch (err) { return res.status(500).json({ error: `Could not write season.json: ${err.message}` }); }
+
+  const newEmail = ('email' in req.body ? (req.body.email || '') : '').toLowerCase().trim();
+  if (newEmail && newEmail !== existingEmail) {
+    const result = await sendTeamEmailChangeConfirmation(req, team, newEmail);
+    return res.json({ ok: true, team, email_change_pending: true, email_change_sent: result.ok, pending_email: newEmail });
+  }
   res.json({ ok: true, team });
 });
 
@@ -1026,6 +1070,10 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
   const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
   const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
   const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));
+
+  if ((game.status || 'scheduled') === 'finalized') {
+    return res.status(400).json({ error: 'This game has been finalized by the league admin and can no longer be changed', finalized: true });
+  }
 
   const daysOut = daysBetween(new Date().toISOString(), game.date);
   if (daysOut < 7) {
@@ -1165,7 +1213,7 @@ function applyChangeRequestToGame(cr, schedData, seasonData) {
   const field_id = cr.preferred_field_id || existingGame.field_id;
 
   let newWeek = existingGame.week;
-  for (const wk of SEASON_WEEKS) {
+  for (const wk of buildSeasonWeeks(seasonData.season)) {
     if (wk.weekdays.includes(date) || wk.saturday === date) { newWeek = wk.week; break; }
   }
 
@@ -1196,6 +1244,14 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   let seasonData, schedData;
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [], fields: [] }; }
   try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
+
+  // Finalize skips pending games, so this shouldn't normally happen — but an
+  // approve link could still be clicked after an admin force-finalized the game.
+  const targetGame = schedData.games.find(g => g.game_id === cr.game_id);
+  if (targetGame && (targetGame.status || 'scheduled') === 'finalized') {
+    return res.status(200).send(crActionPage('Game already finalized',
+      `Game #${cr.game_id} has been finalized by the league admin, so this change could not be applied. Contact the admin if it still needs to change.`));
+  }
 
   const updatedGame = applyChangeRequestToGame(cr, schedData, seasonData);
   const backup = SCHEDULE_FILE.replace('.json', `.backup-${Date.now()}.json`);
@@ -1291,6 +1347,10 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
   const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
   const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
   const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));
+
+  if ((game.status || 'scheduled') === 'finalized') {
+    return res.status(400).json({ error: 'This game has been finalized by the league admin and can no longer be changed', finalized: true });
+  }
 
   const cr = {
     id: 'cr-' + Date.now(),
@@ -1577,13 +1637,7 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
 
   if (emailChanged) {
-    const token = createEmailChangeToken(existing.id, newEmail);
-    const confirmUrl = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/teams/${existing.id}/confirm-email?token=${token}`;
-    const result = await sendEmail({
-      to: newEmail,
-      subject: `Confirm your new email — ${data.teams[idx].label}`,
-      text: `Click the link below to confirm this email address for ${data.teams[idx].label}:\n\n${confirmUrl}\n\nThis link expires in 15 minutes and can only be used once. If you didn't request this change, you can ignore this email — nothing will happen until the link above is clicked.\n\n— Eastlake Scheduler`,
-    });
+    const result = await sendTeamEmailChangeConfirmation(req, data.teams[idx], newEmail);
     return res.json({ ok: true, team: data.teams[idx], email_change_pending: true, email_change_sent: result.ok, pending_email: newEmail });
   }
 
@@ -1663,8 +1717,18 @@ app.delete('/api/season/programs/:id', requireAdmin, (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
-  const inUse = (data.directors || []).some(d => d.program_id === req.params.id);
-  if (inUse) return res.status(400).json({ error: 'Cannot delete a program with directors assigned to it' });
+  // Deleting a program that still owns directors/teams/fields would orphan them
+  // (they'd keep a program_id pointing at nothing, silently breaking scoping).
+  const blockers = [];
+  const dirCount = (data.directors || []).filter(d => d.program_id === req.params.id).length;
+  const teamCount = (data.teams || []).filter(t => t.program_id === req.params.id).length;
+  const fieldCount = (data.fields || []).filter(f => f.program_id === req.params.id).length;
+  if (dirCount)   blockers.push(`${dirCount} director${dirCount !== 1 ? 's' : ''}`);
+  if (teamCount)  blockers.push(`${teamCount} team${teamCount !== 1 ? 's' : ''}`);
+  if (fieldCount) blockers.push(`${fieldCount} field${fieldCount !== 1 ? 's' : ''}`);
+  if (blockers.length) {
+    return res.status(400).json({ error: `Cannot delete a program that still has ${blockers.join(', ')} assigned to it` });
+  }
   const before = (data.programs || []).length;
   data.programs = (data.programs || []).filter(p => String(p.id) !== req.params.id);
   if (data.programs.length === before) return res.status(404).json({ error: 'Program not found' });
@@ -1857,6 +1921,7 @@ app.post('/api/import-schedule', requireAdmin, express.text({ type: '*/*', limit
 
     games.push({
       game_id:        C.gameId >= 0 ? (parseInt(r[C.gameId], 10) || i) : i,
+      status:         'scheduled',
       division_id:    divId,
       week:           C.week >= 0 ? (parseInt(r[C.week], 10) || 0) : 0,
       date,

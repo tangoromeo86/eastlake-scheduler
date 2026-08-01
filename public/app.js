@@ -1655,7 +1655,13 @@ async function saveTeamForm(teamId) {
     const idx = seasonData.teams.findIndex(t => t.id === teamId);
     if (idx !== -1) seasonData.teams[idx] = data.team;
 
-    statusEl.textContent = '✓ Saved';
+    if (data.email_change_pending) {
+      statusEl.textContent = data.email_change_sent
+        ? `✓ Saved — email unchanged until ${data.pending_email} confirms via the link sent to it`
+        : `✓ Saved, but the confirmation email failed to send — email unchanged`;
+    } else {
+      statusEl.textContent = '✓ Saved';
+    }
     statusEl.className = 'editor-status saved';
 
     // Refresh the team row summary
