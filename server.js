@@ -86,21 +86,38 @@ function clearSession(res) {
 }
 
 // ── Magic-link verification tokens (in-memory, short-lived) ──────────────────
+// One Map for both purposes, discriminated by `type`: logging in as your own
+// verified session, or confirming a team's new email address.
 const VERIFY_TOKEN_TTL_MS = 15 * 60 * 1000;
-const verifyTokens = new Map(); // token -> { email, exp }
+const verifyTokens = new Map(); // token -> { type, exp, ...payload }
 
 function createVerifyToken(email) {
   const token = crypto.randomBytes(24).toString('base64url');
-  verifyTokens.set(token, { email, exp: Date.now() + VERIFY_TOKEN_TTL_MS });
+  verifyTokens.set(token, { type: 'login-verify', email, exp: Date.now() + VERIFY_TOKEN_TTL_MS });
   return token;
 }
 
 function redeemVerifyToken(token, email) {
   const entry = verifyTokens.get(token);
-  if (!entry) return false;
+  if (!entry || entry.type !== 'login-verify') return false;
   verifyTokens.delete(token); // one-time use
   if (entry.exp < Date.now()) return false;
   return entry.email === email;
+}
+
+function createEmailChangeToken(teamId, newEmail) {
+  const token = crypto.randomBytes(24).toString('base64url');
+  verifyTokens.set(token, { type: 'email-change', team_id: teamId, newEmail, exp: Date.now() + VERIFY_TOKEN_TTL_MS });
+  return token;
+}
+
+// Returns { team_id, newEmail } on success, or null if the token is missing/expired/wrong type.
+function redeemEmailChangeToken(token) {
+  const entry = verifyTokens.get(token);
+  if (!entry || entry.type !== 'email-change') return null;
+  verifyTokens.delete(token); // one-time use
+  if (entry.exp < Date.now()) return null;
+  return { team_id: entry.team_id, newEmail: entry.newEmail };
 }
 
 function requireAuth(req, res, next) {
@@ -285,6 +302,12 @@ app.get('/admin/', (req, res) => res.redirect((BASE_PATH || '') + '/admin'));
 
 app.get('/director', requireDirector, (req, res) => res.sendFile(path.join(__dirname, 'public', 'director.html')));
 app.get('/director/', (req, res) => res.redirect((BASE_PATH || '') + '/director'));
+
+app.get('/my-team', requireAuth, (req, res) => {
+  const s = getSession(req);
+  if (s.role !== 'coach') return res.redirect(BASE_PATH + '/');
+  res.sendFile(path.join(__dirname, 'public', 'my-team.html'));
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
@@ -1031,6 +1054,12 @@ function canManageProgram(session, programId) {
   return false;
 }
 
+// Editing a team (not creating/deleting) is also allowed for a coach editing their own team.
+function canEditTeam(session, team) {
+  if (session.role === 'coach') return team.id === session.team_id;
+  return canManageProgram(session, team.program_id);
+}
+
 app.post('/api/season/fields', requireDirector, requireVerified, (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
@@ -1153,20 +1182,23 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
   res.json({ ok: true, team: t });
 });
 
-app.put('/api/teams/:id', requireDirector, requireVerified, (req, res) => {
+app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
   const s = getSession(req);
   const idx = (data.teams || []).findIndex(t => String(t.id) === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Team not found' });
-  if (!canManageProgram(s, data.teams[idx].program_id)) return res.status(403).json({ error: 'You can only edit teams in your own program' });
-  const { label, coach, email, phone, division_id, home_field_id } = req.body;
+  const existing = data.teams[idx];
+  if (!canEditTeam(s, existing)) return res.status(403).json({ error: 'You can only edit your own team' });
+  const { label, coach, email, phone, home_field_id } = req.body;
+  // Coaches can't move their own team to a different division — only a director/admin can.
+  const division_id = s.role === 'coach' ? existing.division_id : req.body.division_id;
   if (!label || !label.trim()) return res.status(400).json({ error: 'Team name is required' });
   if (!division_id || !(data.divisions || []).some(d => String(d.id) === String(division_id))) {
     return res.status(400).json({ error: 'A valid division_id is required' });
   }
-  const teamProgramId = data.teams[idx].program_id;
+  const teamProgramId = existing.program_id;
   if (home_field_id) {
     const field = (data.fields || []).find(f => String(f.id) === String(home_field_id));
     if (!field) return res.status(400).json({ error: 'Home field not found' });
@@ -1174,20 +1206,56 @@ app.put('/api/teams/:id', requireDirector, requireVerified, (req, res) => {
       return res.status(400).json({ error: 'Home field does not belong to this program' });
     }
   }
+
+  const newEmail = (email || '').toLowerCase().trim();
+  const emailChanged = newEmail && newEmail !== existing.email;
+
   data.teams[idx] = {
-    ...data.teams[idx],
+    ...existing,
     label: label.trim(),
     coach: (coach || '').trim(),
-    email: (email || '').toLowerCase().trim(),
     phone: (phone || '').trim(),
     division_id,
     home_field_id: home_field_id || null,
+    // email is intentionally left as-is here — see confirm-email flow below
   };
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
   fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+
+  if (emailChanged) {
+    const token = createEmailChangeToken(existing.id, newEmail);
+    const confirmUrl = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/teams/${existing.id}/confirm-email?token=${token}`;
+    const result = await sendEmail({
+      to: newEmail,
+      subject: `Confirm your new email — ${data.teams[idx].label}`,
+      text: `Click the link below to confirm this email address for ${data.teams[idx].label}:\n\n${confirmUrl}\n\nThis link expires in 15 minutes and can only be used once. If you didn't request this change, you can ignore this email — nothing will happen until the link above is clicked.\n\n— Eastlake Scheduler`,
+    });
+    return res.json({ ok: true, team: data.teams[idx], email_change_pending: true, email_change_sent: result.ok, pending_email: newEmail });
+  }
+
   res.json({ ok: true, team: data.teams[idx] });
+});
+
+// Redeems an email-change link. No session required — clicking the link at the
+// new address IS the proof of ownership, distinct from a login session.
+app.get('/api/teams/:id/confirm-email', (req, res) => {
+  const result = redeemEmailChangeToken(req.query.token || '');
+  if (!result || result.team_id !== req.params.id) {
+    return res.status(400).send('This confirmation link is invalid or has expired. Please request the email change again.');
+  }
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).send('Could not read season.json'); }
+  const idx = (data.teams || []).findIndex(t => String(t.id) === req.params.id);
+  if (idx === -1) return res.status(404).send('Team not found.');
+  data.teams[idx] = { ...data.teams[idx], email: result.newEmail };
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).send('Could not write season.json'); }
+  res.send(`Email confirmed! ${data.teams[idx].label}'s contact email is now ${result.newEmail}. You can close this page.`);
 });
 
 app.delete('/api/teams/:id', requireDirector, requireVerified, (req, res) => {

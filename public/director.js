@@ -158,6 +158,11 @@ document.getElementById('tfe-save').addEventListener('click', async () => {
     seasonData = await fetchJSON('api/season');
     document.getElementById('team-editor-form').classList.add('hidden');
     renderTeamsList();
+    if (data.email_change_pending) {
+      alert(data.email_change_sent
+        ? `Saved. The coach's email hasn't changed yet — ${data.pending_email} needs to click the confirmation link sent to it.`
+        : `Saved, but the confirmation email couldn't be sent. The coach's email hasn't changed yet — try again shortly.`);
+    }
   } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
 });
 

@@ -67,6 +67,7 @@ function updateHeader() {
       `<span class="header-name">${esc(session.name)}</span>` +
       (session.role === 'admin' ? '<a href="admin" class="header-link">Admin ›</a>' : '') +
       (session.role === 'director' ? '<a href="director" class="header-link">Manage My Program ›</a>' : '') +
+      (session.role === 'coach' ? '<a href="my-team" class="header-link">Edit My Team ›</a>' : '') +
       `<a href="logout" class="header-link">Sign out</a>`;
     document.getElementById('help-btn').addEventListener('click', openHelp);
 

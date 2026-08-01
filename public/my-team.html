@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Team — Eastlake League Scheduler</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1 id="team-title">My Team</h1>
+    <div class="header-actions">
+      <a href="./" class="btn btn-secondary">&#8592; Schedule</a>
+      <a href="logout" class="btn btn-secondary">Sign out</a>
+    </div>
+  </header>
+
+  <div id="my-team-page" style="max-width:640px;margin:0 auto;padding:24px">
+    <div id="pending-email-note" class="field-form-error hidden" style="background:#fef3c7;border-color:#f59e0b;color:#92400e"></div>
+
+    <div class="field-editor-form">
+      <div class="field-form-inner">
+        <div class="field-form-row">
+          <label>Team Name *<input id="mte-label" type="text" placeholder="e.g. Wildcats U10"></label>
+        </div>
+        <div class="field-form-row">
+          <label>Coach Name<input id="mte-coach" type="text" placeholder="e.g. Jane Smith"></label>
+          <label>Home Field<select id="mte-field"><option value="">— None yet —</option></select></label>
+        </div>
+        <div class="field-form-row">
+          <label>Coach Email<input id="mte-email" type="email" placeholder="jane@example.com"></label>
+          <label>Coach Phone<input id="mte-phone" type="text" placeholder="(555) 555-5555"></label>
+        </div>
+        <div class="field-form-actions">
+          <button id="mte-save" class="btn btn-primary">Save Changes</button>
+        </div>
+        <div id="mte-error" class="field-form-error hidden"></div>
+        <div id="mte-success" class="field-form-error hidden" style="background:#dcfce7;border-color:#16a34a;color:#166534"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="my-team.js"></script>
+</body>
+</html>
