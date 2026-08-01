@@ -71,9 +71,9 @@ for (const team of teams) {
 
 // ── 3. No-matchup forbidden pairs ────────────────────────────────────────────
 // Built from team.restrictions[].type === 'no_matchup' with opponent_program_id
-// Key: "minId-maxId" → description string
+// Key: sorted "idA-idB" (string-sorted, not numeric — team ids aren't always numeric) → description string
 const forbiddenPairs = new Map();
-const pairKey = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
+const pairKey = (a, b) => [String(a), String(b)].sort().join('-');
 
 for (const team of teams) {
   for (const restriction of (team.restrictions || [])) {

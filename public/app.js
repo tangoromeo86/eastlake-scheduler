@@ -741,6 +741,36 @@ function renderMatrixView(divGames, divTeams) {
 }
 
 // ── STATS VIEW ────────────────────────────────────────────────────────────────
+// Mirrors the haversine calc in lib/scheduler.js (not shared — that module isn't loaded client-side).
+function parseCoordsClient(str) {
+  if (!str) return null;
+  const parts = str.split(',').map(s => parseFloat(s.trim()));
+  if (parts.length !== 2 || parts.some(n => !Number.isFinite(n))) return null;
+  return { lat: parts[0], lng: parts[1] };
+}
+function haversineMilesClient(a, b) {
+  if (!a || !b) return null;
+  const R = 3958.8;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const sinLat = Math.sin(dLat / 2), sinLng = Math.sin(dLng / 2);
+  const h = sinLat * sinLat + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * sinLng * sinLng;
+  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+// Total miles a team traveled on their away games, or null if coordinates aren't
+// available for the team's home field or any of the venues they played at.
+function teamTravelMiles(team, myGames) {
+  const fields = seasonData?.fields || [];
+  const homeCoords = parseCoordsClient(fields.find(f => f.id === team.home_field_id)?.coordinates);
+  if (!homeCoords) return null;
+  let total = 0, any = false;
+  myGames.filter(g => g.away_team_id === team.id).forEach(g => {
+    const dist = haversineMilesClient(homeCoords, parseCoordsClient(fields.find(f => f.id === g.field_id)?.coordinates));
+    if (dist !== null) { total += dist; any = true; }
+  });
+  return any ? total : null;
+}
+
 function renderStatsView(divGames, divTeams) {
   if (!divTeams.length) {
     document.getElementById('stats-wrapper').innerHTML = '<p class="no-games">No teams found.</p>';
@@ -756,6 +786,7 @@ function renderStatsView(divGames, divTeams) {
     <th class="center">Away</th>
     <th class="center">Wkday</th>
     <th class="center">Sat</th>
+    <th class="center">Travel (mi)</th>
     ${weeks.map(w => `<th class="center">W${w}</th>`).join('')}
   </tr>`;
 
@@ -766,6 +797,7 @@ function renderStatsView(divGames, divTeams) {
     const away = myGames.filter(g => g.away_team_id === id).length;
     const wd  = myGames.filter(g => g.day !== 'Saturday').length;
     const sat = myGames.filter(g => g.day === 'Saturday').length;
+    const travel = teamTravelMiles(team, myGames);
     const perWeek = {};
     myGames.forEach(g => { perWeek[g.week] = (perWeek[g.week] || 0) + 1; });
     const imbalanced = Math.abs(home - away) > 1;
@@ -777,6 +809,7 @@ function renderStatsView(divGames, divTeams) {
       <td class="center ${imbalanced ? 'stat-warn' : ''}">${away}</td>
       <td class="center">${wd}</td>
       <td class="center">${sat}</td>
+      <td class="center">${travel !== null ? Math.round(travel) : '—'}</td>
       ${weeks.map(w => {
         const n = perWeek[w] || 0;
         return `<td class="center ${n > 2 ? 'stat-warn' : n === 0 ? 'stat-zero' : ''}">${n || '·'}</td>`;
@@ -794,12 +827,12 @@ function renderStatsView(divGames, divTeams) {
         <tfoot><tr>
           <td><strong>Total</strong></td>
           <td class="center stat-total"><strong>${divGames.length}</strong></td>
-          <td colspan="4"></td>
+          <td colspan="5"></td>
           ${weekTotals.map(n => `<td class="center"><strong>${n}</strong></td>`).join('')}
         </tr></tfoot>
       </table>
     </div>
-    <p class="stats-note">Orange = home/away imbalance &gt;1. · = no game that week.</p>`;
+    <p class="stats-note">Orange = home/away imbalance &gt;1. · = no game that week. Travel is estimated straight-line distance, not driving distance.</p>`;
 }
 
 // ── Teams Roster Page (global, all divisions) ─────────────────────────────────
