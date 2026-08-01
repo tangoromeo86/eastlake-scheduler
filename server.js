@@ -1065,7 +1065,7 @@ app.post('/api/season/fields', requireDirector, requireVerified, (req, res) => {
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
   const s = getSession(req);
-  const { name, sub_field, address, notes, coordinates, program_id } = req.body;
+  const { name, sub_field, address, notes, coordinates, program_id, availability } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Venue name is required' });
   // Directors can only create fields for their own program; admin may set any program_id (or none, for a shared field).
   const fieldProgramId = s.role === 'director' ? s.program_id : (program_id || null);
@@ -1074,6 +1074,7 @@ app.post('/api/season/fields', requireDirector, requireVerified, (req, res) => {
   if (sub_field?.trim()) f.sub_field = sub_field.trim();
   if (notes?.trim()) f.notes = notes.trim();
   if (coordinates?.trim()) f.coordinates = coordinates.replace(/\s/g, '');
+  if (availability && typeof availability === 'object') f.availability = availability;
   data.fields = [...(data.fields || []), f];
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
   fs.copyFileSync(SEASON_FILE, backup);
@@ -1090,12 +1091,13 @@ app.put('/api/season/fields/:id', requireDirector, requireVerified, (req, res) =
   const idx = (data.fields || []).findIndex(f => String(f.id) === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Field not found' });
   if (!canManageProgram(s, data.fields[idx].program_id)) return res.status(403).json({ error: 'You can only edit fields in your own program' });
-  const { name, sub_field, address, notes, coordinates } = req.body;
+  const { name, sub_field, address, notes, coordinates, availability } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Venue name is required' });
   const updated = { ...data.fields[idx], name: name.trim(), address: (address || '').trim() };
   if (sub_field?.trim()) updated.sub_field = sub_field.trim(); else delete updated.sub_field;
   if (notes?.trim()) updated.notes = notes.trim(); else delete updated.notes;
   if (coordinates?.trim()) updated.coordinates = coordinates.replace(/\s/g, ''); else delete updated.coordinates;
+  if (availability && typeof availability === 'object') updated.availability = availability;
   delete updated.weekend_venue; delete updated.weekend_address;
   data.fields[idx] = updated;
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
@@ -1191,7 +1193,7 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   if (idx === -1) return res.status(404).json({ error: 'Team not found' });
   const existing = data.teams[idx];
   if (!canEditTeam(s, existing)) return res.status(403).json({ error: 'You can only edit your own team' });
-  const { label, coach, email, phone, home_field_id } = req.body;
+  const { label, coach, email, phone, home_field_id, availability } = req.body;
   // Coaches can't move their own team to a different division — only a director/admin can.
   const division_id = s.role === 'coach' ? existing.division_id : req.body.division_id;
   if (!label || !label.trim()) return res.status(400).json({ error: 'Team name is required' });
@@ -1217,6 +1219,7 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
     phone: (phone || '').trim(),
     division_id,
     home_field_id: home_field_id || null,
+    ...(availability && typeof availability === 'object' ? { availability } : {}),
     // email is intentionally left as-is here — see confirm-email flow below
   };
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);

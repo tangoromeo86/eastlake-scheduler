@@ -12,6 +12,59 @@ function fieldDisplayName(f) {
   return f.sub_field ? `${f.name} – ${f.sub_field}` : f.name;
 }
 
+// ── Availability grid (shared shape with public/director.js) ────────────────
+const AVAIL_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday'];
+const AVAIL_SAT_BLOCKS = [['before11', 'Before 11am'], ['mid', '11am–2pm'], ['after2', '2pm–5pm']];
+const AVAIL_STATUS_OPTIONS = [
+  ['both', 'Available for both'],
+  ['host', 'Available to host'],
+  ['travel', 'Available to travel'],
+  ['none', 'Not available'],
+];
+
+function renderAvailabilityGrid(containerId, availability) {
+  const a = availability || {};
+  const weekday = a.weekday || {};
+  const saturday = a.saturday || {};
+  const statusOpts = (current) => AVAIL_STATUS_OPTIONS
+    .map(([v, l]) => `<option value="${v}" ${v === (current || 'both') ? 'selected' : ''}>${l}</option>`).join('');
+
+  const weekdayRows = AVAIL_WEEKDAYS.map(day => {
+    const entry = weekday[day] || {};
+    return `<tr>
+      <td>${day}</td>
+      <td><select class="avail-status" data-kind="weekday" data-key="${day}">${statusOpts(entry.status)}</select></td>
+      <td><input type="text" class="avail-time" data-key="${day}" placeholder="e.g. 18:30" value="${esc(entry.time || '')}" style="width:90px"></td>
+    </tr>`;
+  }).join('');
+
+  const satRows = AVAIL_SAT_BLOCKS.map(([key, label]) => `<tr>
+      <td>Sat: ${label}</td>
+      <td><select class="avail-status" data-kind="saturday" data-key="${key}">${statusOpts(saturday[key])}</select></td>
+      <td></td>
+    </tr>`).join('');
+
+  document.getElementById(containerId).innerHTML = `<table class="fields-table">
+    <thead><tr><th>Day</th><th>Status</th><th>Start Time (optional)</th></tr></thead>
+    <tbody>${weekdayRows}${satRows}</tbody>
+  </table>`;
+}
+
+function readAvailabilityGrid(containerId) {
+  const container = document.getElementById(containerId);
+  const weekday = {};
+  const saturday = {};
+  container.querySelectorAll('select.avail-status[data-kind="weekday"]').forEach(sel => {
+    const day = sel.dataset.key;
+    const timeInput = container.querySelector(`input.avail-time[data-key="${day}"]`);
+    weekday[day] = { status: sel.value, time: (timeInput?.value || '').trim() || null };
+  });
+  container.querySelectorAll('select.avail-status[data-kind="saturday"]').forEach(sel => {
+    saturday[sel.dataset.key] = sel.value;
+  });
+  return { weekday, saturday };
+}
+
 async function fetchJSON(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -42,6 +95,7 @@ async function init() {
   document.getElementById('mte-email').value = myTeam.email || '';
   document.getElementById('mte-phone').value = myTeam.phone || '';
   populateFieldSelect();
+  renderAvailabilityGrid('mte-availability', myTeam.availability);
 
   initVerifyBanner();
 }
@@ -67,6 +121,7 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     email:         document.getElementById('mte-email').value.trim(),
     phone:         document.getElementById('mte-phone').value.trim(),
     home_field_id: document.getElementById('mte-field').value || null,
+    availability:  readAvailabilityGrid('mte-availability'),
   };
   if (!body.label) { errEl.textContent = 'Team name is required.'; errEl.classList.remove('hidden'); return; }
   try {
@@ -75,6 +130,7 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
     myTeam = data.team;
     document.getElementById('team-title').textContent = myTeam.label || 'My Team';
+    renderAvailabilityGrid('mte-availability', myTeam.availability);
     if (data.email_change_pending) {
       okEl.textContent = data.email_change_sent
         ? `Saved. Check ${data.pending_email} for a link to confirm your new email — until then, your old email stays on file.`
