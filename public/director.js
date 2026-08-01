@@ -153,6 +153,45 @@ function teamById(id) {
   return (seasonData?.teams || []).find(t => String(t.id) === String(id));
 }
 
+
+// ── Change-request slot picker ───────────────────────────────────────────────
+// Slots come from the server, which only offers times valid for BOTH teams.
+let crSelectedSlot = null;
+
+function crSlotLabel(s) {
+  const d = new Date(s.date + 'T12:00:00Z');
+  const nice = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return `${nice} at ${s.time}`;
+}
+
+async function loadChangeSlots(gameId) {
+  const box = document.getElementById('cr-slots');
+  const submitBtn = document.getElementById('cr-submit');
+  box.innerHTML = '<p style="color:#94a3b8;padding:8px">Finding times that work for both teams…</p>';
+  submitBtn.disabled = true;
+  try {
+    const params = new URLSearchParams({ game_id: gameId });
+    if (crTeamId) params.set('team_id', crTeamId);
+    const data = await fetchJSON('api/change-requests/options?' + params.toString());
+    if (!data.slots.length) {
+      box.innerHTML = '<p style="color:#dc2626;padding:8px">No other time fits both teams\' availability. You may need to adjust a team\'s availability or open up a field.</p>';
+      return;
+    }
+    box.innerHTML = data.slots.map((s, i) => `
+      <label class="cr-slot" style="display:block;background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin:6px 0;cursor:pointer;font-size:14px">
+        <input type="radio" name="cr-slot" value="${i}" style="margin-right:10px">${esc(crSlotLabel(s))}
+      </label>`).join('');
+    box.querySelectorAll('input[name="cr-slot"]').forEach(r => {
+      r.addEventListener('change', () => {
+        crSelectedSlot = data.slots[parseInt(r.value, 10)];
+        submitBtn.disabled = false;
+      });
+    });
+  } catch (e) {
+    box.innerHTML = '<p style="color:#dc2626;padding:8px">Could not load available times. Try again.</p>';
+  }
+}
+
 function renderGamesList() {
   const games = myProgramGames();
   const list = document.getElementById('games-list');
@@ -200,6 +239,7 @@ function openChangeRequest(gameId, teamId) {
   document.getElementById('cr-error').classList.add('hidden');
   populateCrFieldSelects();
 
+  crSelectedSlot = null;
   const locked = daysUntil(game.date) < 7;
   document.getElementById('cr-form-title').textContent = locked ? 'Change Locked — Manual Override' : 'Request Change';
   document.getElementById('cr-normal-form').classList.toggle('hidden', locked);
@@ -210,10 +250,7 @@ function openChangeRequest(gameId, teamId) {
     document.getElementById('cr-mo-time').value = game.time;
   } else {
     document.getElementById('cr-reason').value = '';
-    document.getElementById('cr-details').value = '';
-    document.getElementById('cr-date').value = '';
-    document.getElementById('cr-time').value = '';
-    document.getElementById('cr-field').value = '';
+    loadChangeSlots(gameId);
   }
   document.getElementById('cr-form').classList.remove('hidden');
 }
@@ -224,15 +261,11 @@ document.getElementById('cr-mo-cancel').addEventListener('click', () => document
 document.getElementById('cr-submit').addEventListener('click', async () => {
   const errEl = document.getElementById('cr-error');
   errEl.classList.add('hidden');
-  const reason = document.getElementById('cr-reason').value.trim();
-  if (!reason) { errEl.textContent = 'Reason is required.'; errEl.classList.remove('hidden'); return; }
+  if (!crSelectedSlot) { errEl.textContent = 'Pick a proposed time first.'; errEl.classList.remove('hidden'); return; }
   const body = {
     game_id: crGameId, team_id: crTeamId,
-    reason,
-    details: document.getElementById('cr-details').value.trim(),
-    preferred_date: document.getElementById('cr-date').value,
-    preferred_time: document.getElementById('cr-time').value.trim(),
-    preferred_field_id: document.getElementById('cr-field').value || null,
+    reason: document.getElementById('cr-reason').value.trim(),
+    slot: crSelectedSlot,
   };
   try {
     const res = await fetch('api/change-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

@@ -490,6 +490,103 @@ function adjacentDateStr(dateStr, delta) {
   return d.toISOString().slice(0, 10);
 }
 
+// ── Viable-slot engine ───────────────────────────────────────────────────────
+// Single source of truth for "when could this game actually be played?".
+// Enforces exactly what the scheduler enforces — global/team blackouts, each
+// team's existing games, no back-to-back days, both teams' weekly availability
+// (including host/travel orientation), and the home field being open — so a
+// coach or admin can never be offered a slot the scheduler itself would refuse.
+//
+// opts.minDaysOut  — skip anything closer than this many days (change requests
+//                    use 7; the admin editor passes 0 since it can place freely).
+function computeViableSlots(game, seasonData, schedData, opts = {}) {
+  const { minDaysOut = 0, homeTeamId, awayTeamId } = opts;
+  const teams = seasonData.teams || [];
+  const fields = seasonData.fields || [];
+  const season = seasonData.season || {};
+
+  const home_team_id = homeTeamId !== undefined ? homeTeamId : game.home_team_id;
+  const away_team_id = awayTeamId !== undefined ? awayTeamId : game.away_team_id;
+  const homeTeam = teams.find(t => t.id === home_team_id);
+  const awayTeam = teams.find(t => t.id === away_team_id);
+
+  const globalBlackouts = new Set(season.blackout_dates || []);
+  for (const weekend of (season.blackout_weekends || [])) {
+    if (weekend.saturday) globalBlackouts.add(weekend.saturday);
+    if (weekend.sunday)   globalBlackouts.add(weekend.sunday);
+    if (Array.isArray(weekend.dates)) for (const d of weekend.dates) globalBlackouts.add(d);
+  }
+
+  const homeBlackouts = new Set(homeTeam?.blackout_dates || []);
+  const awayBlackouts = new Set(awayTeam?.blackout_dates || []);
+
+  const otherGames = schedData.games.filter(g => g.game_id !== game.game_id);
+  const homeDates = new Set(otherGames
+    .filter(g => g.home_team_id === home_team_id || g.away_team_id === home_team_id).map(g => g.date));
+  const awayDates = new Set(otherGames
+    .filter(g => g.home_team_id === away_team_id || g.away_team_id === away_team_id).map(g => g.date));
+
+  const homeFieldId = homeTeam?.home_field_id ?? null;
+  const homeFieldObj = homeFieldId ? fields.find(f => f.id === homeFieldId) : null;
+  const homeFieldName = homeFieldObj
+    ? (homeFieldObj.sub_field ? `${homeFieldObj.name} – ${homeFieldObj.sub_field}` : homeFieldObj.name)
+    : null;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const homeAvail = homeTeam ? parseAvailability(homeTeam) : null;
+  const awayAvail = awayTeam ? parseAvailability(awayTeam) : null;
+
+  const slotsOut = [];
+  for (const wk of buildSeasonWeeks(season)) {
+    const daySlots = wk.weekdays.map(d => ({ date: d, day: dayName(d), type: 'weekday' }));
+    if (wk.saturday) daySlots.push({ date: wk.saturday, day: 'Saturday', type: 'saturday' });
+
+    for (const { date, day, type } of daySlots) {
+      if (date <= today) continue;
+      if (minDaysOut > 0 && daysBetween(new Date().toISOString(), date) < minDaysOut) continue;
+      if (globalBlackouts.has(date)) continue;
+      if (homeBlackouts.has(date) || awayBlackouts.has(date)) continue;
+      if (homeDates.has(date) || awayDates.has(date)) continue;
+
+      const prevDay = adjacentDateStr(date, -1);
+      const nextDay = adjacentDateStr(date, +1);
+      if (homeDates.has(prevDay) || homeDates.has(nextDay)) continue;
+      if (awayDates.has(prevDay) || awayDates.has(nextDay)) continue;
+
+      const isSat = type === 'saturday';
+      // A proposal has to be a complete date+time+field, so resolve the time the
+      // same way the scheduler does before the availability check needs it.
+      let time;
+      if (isSat) {
+        time = saturdayTime(game.division_id, season);
+      } else {
+        time = homeAvail?.weekday[day]?.time || awayAvail?.weekday[day]?.time || season.weekday_time || '18:00';
+      }
+
+      if (homeAvail && awayAvail) {
+        const key = isSat ? saturdayBlock(time) : day;
+        const homeStatus = isSat ? homeAvail.saturday[key] : homeAvail.weekday[key]?.status;
+        const awayStatus = isSat ? awayAvail.saturday[key] : awayAvail.weekday[key]?.status;
+        if (homeStatus === 'none' || homeStatus === 'travel') continue;
+        if (awayStatus === 'none' || awayStatus === 'host') continue;
+        if (homeFieldObj) {
+          const fa = parseFieldAvailability(homeFieldObj);
+          if (!(isSat ? fa.saturday[key] : fa.weekday[key])) continue;
+        }
+      }
+
+      const fieldGames = homeFieldId
+        ? otherGames.filter(g => g.field_id === homeFieldId && g.date === date)
+            .map(g => ({ game_id: g.game_id, time: g.time || '', home: g.home_team_name, away: g.away_team_name }))
+            .sort((a, b) => a.time.localeCompare(b.time))
+        : [];
+
+      slotsOut.push({ date, day, week: wk.week, type, time, field_id: homeFieldId, field_games: fieldGames });
+    }
+  }
+  return { slots: slotsOut, home_field_name: homeFieldName };
+}
+
 app.get('/api/game/:id/suggest-dates', requireAdmin, (req, res) => {
   const gameId = parseInt(req.params.id, 10);
 
@@ -502,93 +599,15 @@ app.get('/api/game/:id/suggest-dates', requireAdmin, (req, res) => {
   const game = schedData.games.find(g => g.game_id === gameId);
   if (!game) return res.status(404).json({ error: `Game ${gameId} not found` });
 
-  // Allow caller to pass updated team IDs (in case editor changed them before clicking)
+  // The editor may have changed the teams before clicking Suggest.
   const rawHomeId = req.query.home_team_id;
   const rawAwayId = req.query.away_team_id;
-  const home_team_id = rawHomeId ? (isNaN(parseInt(rawHomeId, 10)) ? rawHomeId : parseInt(rawHomeId, 10)) : game.home_team_id;
-  const away_team_id = rawAwayId ? (isNaN(parseInt(rawAwayId, 10)) ? rawAwayId : parseInt(rawAwayId, 10)) : game.away_team_id;
+  const opts = {};
+  if (rawHomeId) opts.homeTeamId = isNaN(parseInt(rawHomeId, 10)) ? rawHomeId : parseInt(rawHomeId, 10);
+  if (rawAwayId) opts.awayTeamId = isNaN(parseInt(rawAwayId, 10)) ? rawAwayId : parseInt(rawAwayId, 10);
 
-  const teams = seasonData.teams || [];
-  const homeTeam = teams.find(t => t.id === home_team_id);
-  const awayTeam = teams.find(t => t.id === away_team_id);
-
-  // Global blackouts
-  const season = seasonData.season || {};
-  const globalBlackouts = new Set(season.blackout_dates || []);
-  for (const weekend of (season.blackout_weekends || [])) {
-    if (weekend.saturday) globalBlackouts.add(weekend.saturday);
-    if (weekend.sunday)   globalBlackouts.add(weekend.sunday);
-    if (Array.isArray(weekend.dates)) for (const d of weekend.dates) globalBlackouts.add(d);
-  }
-
-  // Team-level blackouts
-  const homeBlackouts = new Set(homeTeam?.blackout_dates || []);
-  const awayBlackouts = new Set(awayTeam?.blackout_dates || []);
-
-  // Dates each team already has a game (excluding the game being edited)
-  const otherGames = schedData.games.filter(g => g.game_id !== gameId);
-  const homeDates = new Set(otherGames
-    .filter(g => g.home_team_id === home_team_id || g.away_team_id === home_team_id)
-    .map(g => g.date));
-  const awayDates = new Set(otherGames
-    .filter(g => g.home_team_id === away_team_id || g.away_team_id === away_team_id)
-    .map(g => g.date));
-
-  // Home team's home field for schedule preview
-  const homeFieldId = homeTeam?.home_field_id ?? null;
-  const fields = seasonData.fields || [];
-  const homeFieldObj = homeFieldId ? fields.find(f => f.id === homeFieldId) : null;
-  const homeFieldName = homeFieldObj
-    ? (homeFieldObj.sub_field ? `${homeFieldObj.name} – ${homeFieldObj.sub_field}` : homeFieldObj.name)
-    : null;
-
-  const suggestions = [];
-  for (const wk of buildSeasonWeeks(season)) {
-    const slots = wk.weekdays.map(d => ({ date: d, day: dayName(d), type: 'weekday' }));
-    if (wk.saturday) slots.push({ date: wk.saturday, day: 'Saturday', type: 'saturday' });
-
-    for (const { date, day, type } of slots) {
-      if (globalBlackouts.has(date)) continue;
-      if (homeBlackouts.has(date)) continue;
-      if (awayBlackouts.has(date)) continue;
-      if (homeDates.has(date)) continue;
-      if (awayDates.has(date)) continue;
-
-      const prevDay = adjacentDateStr(date, -1);
-      const nextDay = adjacentDateStr(date, +1);
-      if (homeDates.has(prevDay) || homeDates.has(nextDay)) continue;
-      if (awayDates.has(prevDay) || awayDates.has(nextDay)) continue;
-
-      // Respect the same availability rules the scheduler enforces, so the admin
-      // is never offered a date that the scheduler itself would refuse.
-      if (homeTeam && awayTeam) {
-        const isSat = type === 'saturday';
-        const key = isSat ? saturdayBlock(saturdayTime(game.division_id, season)) : day;
-        const homeAvail = parseAvailability(homeTeam);
-        const awayAvail = parseAvailability(awayTeam);
-        const homeStatus = isSat ? homeAvail.saturday[key] : homeAvail.weekday[key]?.status;
-        const awayStatus = isSat ? awayAvail.saturday[key] : awayAvail.weekday[key]?.status;
-        if (homeStatus === 'none' || homeStatus === 'travel') continue;
-        if (awayStatus === 'none' || awayStatus === 'host') continue;
-        if (homeFieldObj) {
-          const fa = parseFieldAvailability(homeFieldObj);
-          if (!(isSat ? fa.saturday[key] : fa.weekday[key])) continue;
-        }
-      }
-
-      // Collect other games at the home field on this date
-      const fieldGames = homeFieldId
-        ? otherGames
-            .filter(g => g.field_id === homeFieldId && g.date === date)
-            .map(g => ({ game_id: g.game_id, time: g.time || '', home: g.home_team_name, away: g.away_team_name }))
-            .sort((a, b) => a.time.localeCompare(b.time))
-        : [];
-
-      suggestions.push({ date, day, week: wk.week, type, field_games: fieldGames });
-    }
-  }
-
-  res.json({ suggestions, home_field_name: homeFieldName });
+  const { slots, home_field_name } = computeViableSlots(game, seasonData, schedData, opts);
+  res.json({ suggestions: slots, home_field_name });
 });
 
 app.get('/api/export/csv', requireAuth, (req, res) => {
@@ -1050,68 +1069,203 @@ function resolveRequestingTeam(session, game, bodyTeamId, teams) {
 
 // ── Game change requests ────────────────────────────────────────────────────
 
-app.post('/api/change-requests', requireVerified, async (req, res) => {
-  const s = getSession(req);
-  const { game_id, team_id, reason, details, preferred_date, preferred_time, preferred_field_id } = req.body;
-  if (!game_id || !reason || !reason.trim()) return res.status(400).json({ error: 'game_id and reason are required' });
+// How many days out a change request must be to use the negotiation flow at all
+// (anything closer belongs to the manual-override path).
+const CHANGE_REQUEST_MIN_DAYS = 7;
+// Rounds of back-and-forth before both directors are looped in to break the tie.
+const STALEMATE_ROUND_LIMIT = 3;
 
+// Loads schedule + season and resolves the caller's side of a game. Shared by
+// every coach-facing change-request route so the permission logic lives once.
+function loadGameContext(req, gameId) {
   let schedData, seasonData;
   try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
-  catch (err) { return res.status(500).json({ error: 'Could not read schedule.json' }); }
+  catch { return { error: 'Could not read schedule.json' }; }
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
-  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  catch { return { error: 'Could not read season.json' }; }
+  const game = schedData.games.find(g => g.game_id === gameId);
+  if (!game) return { error: 'Game not found', status: 404 };
+  return { schedData, seasonData, game, teams: seasonData.teams || [] };
+}
 
-  const game = schedData.games.find(g => g.game_id === game_id);
-  if (!game) return res.status(404).json({ error: 'Game not found' });
+// Slots this coach could legitimately propose for their game.
+app.get('/api/change-requests/options', requireVerified, (req, res) => {
+  const s = getSession(req);
+  const gameId = parseInt(req.query.game_id, 10);
+  const ctx = loadGameContext(req, gameId);
+  if (ctx.error) return res.status(ctx.status || 500).json({ error: ctx.error });
 
+  const myTeamId = resolveRequestingTeam(s, ctx.game, req.query.team_id, ctx.teams);
+  if (!myTeamId) return res.status(403).json({ error: 'You can only view options for your own game' });
+  if ((ctx.game.status || 'scheduled') === 'finalized') {
+    return res.status(400).json({ error: 'This game has been finalized and can no longer be changed', finalized: true });
+  }
+
+  const { slots } = computeViableSlots(ctx.game, ctx.seasonData, ctx.schedData, { minDaysOut: CHANGE_REQUEST_MIN_DAYS });
+  res.json({ ok: true, slots, current: { date: ctx.game.date, time: ctx.game.time, field_name: ctx.game.field_name } });
+});
+
+// Formats a proposal for display in emails and pages.
+function describeSlot(slot, fields) {
+  const f = (fields || []).find(x => String(x.id) === String(slot.field_id));
+  const fname = f ? (f.sub_field ? `${f.name} – ${f.sub_field}` : f.name) : '';
+  const d = new Date(slot.date + 'T12:00:00Z');
+  const nice = d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return `${nice} at ${slot.time}${fname ? ` — ${fname}` : ''}`;
+}
+
+// Every round gets fresh links, so a link from an earlier round can't be replayed.
+function newRoundTokens() {
+  return { approve: newActionToken(), counter: newActionToken(), cancel: newActionToken() };
+}
+
+// Hands the ball to the other coach: swaps turn, resets the response clock, and
+// clears the per-round escalation flags (a new round is a genuinely fresh ask).
+function advanceRound(cr, proposingTeamId, awaitingTeamId, proposal) {
+  cr.history = cr.history || [];
+  // Only record a proposal once it's actually been superseded — the initial
+  // confirm (round 0 -> 1) isn't replacing anything.
+  if (cr.proposal && (cr.round || 0) >= 1) {
+    cr.history.push({ round: cr.round, proposing_team_id: cr.proposing_team_id, ...cr.proposal, at: new Date().toISOString() });
+  }
+  cr.round = (cr.round || 0) + 1;
+  cr.proposing_team_id = proposingTeamId;
+  cr.awaiting_team_id = awaitingTeamId;
+  cr.proposal = proposal;
+  cr.status = 'awaiting_response';
+  cr.tokens = newRoundTokens();
+  cr.round_started_at = new Date().toISOString();
+  cr.director_notified_at = null;
+  cr.admin_notified_at = null;
+}
+
+function directorsForTeams(seasonData, teamIds) {
   const teams = seasonData.teams || [];
+  const programIds = teamIds
+    .map(id => teams.find(t => String(t.id) === String(id))?.program_id)
+    .filter(Boolean);
+  return (seasonData.directors || [])
+    .filter(d => d.active !== false && programIds.includes(d.program_id));
+}
+
+// Emails the coach whose turn it is with Approve / Suggest-another-time links.
+async function notifyTurn(req, cr, seasonData) {
+  const teams = seasonData.teams || [];
+  const awaitingTeam = teams.find(t => String(t.id) === String(cr.awaiting_team_id));
+  const proposingTeam = teams.find(t => String(t.id) === String(cr.proposing_team_id));
+  if (!awaitingTeam?.email) return { ok: false, reason: 'no email for awaiting team' };
+  const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
+  const isCounter = cr.round > 1;
+  return sendEmail({
+    to: awaitingTeam.email,
+    subject: `${isCounter ? 'New time proposed' : 'Change requested'} for Game #${cr.game_id} — your response needed`,
+    text: [
+      `${proposingTeam?.label || proposingTeam?.name || 'The other coach'} ${isCounter ? 'has proposed a different time' : 'has requested a change'} for Game #${cr.game_id}.`,
+      '',
+      `Proposed: ${describeSlot(cr.proposal, seasonData.fields)}`,
+      cr.reason ? `Reason: ${cr.reason}` : null,
+      '',
+      `Works for us — approve it: ${base}/approve?token=${cr.tokens.approve}`,
+      `Doesn't work — suggest another time: ${base}/counter?token=${cr.tokens.counter}`,
+      '',
+      `Please respond within 2 days. If we don't hear from you, your director will be looped in to help move things along.`,
+      '', '— Eastlake Scheduler',
+    ].filter(l => l !== null).join('\n'),
+  });
+}
+
+// When no slot works for both teams, the coaches can't resolve it themselves —
+// hand it to the directors rather than dead-ending.
+async function notifyNoOptions(req, cr, seasonData, context) {
+  const dirs = directorsForTeams(seasonData, [cr.requesting_team_id || cr.initiating_team_id, cr.other_team_id]);
+  const emails = dirs.map(d => d.email).filter(Boolean);
+  if (!emails.length) return;
+  const teams = seasonData.teams || [];
+  const nameOf = id => teams.find(t => String(t.id) === String(id))?.label || id;
+  await sendEmail({
+    to: [...new Set(emails)],
+    subject: `Needs your help: no workable time for Game #${cr.game_id}`,
+    text: [
+      `${context}`,
+      '',
+      `Game #${cr.game_id}: ${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}`,
+      '',
+      `There is no date that satisfies both teams' stated availability, their fields' open hours, and the rest of the schedule.`,
+      `Usually this means one team's availability needs updating, or a field needs to open up.`,
+      '', '— Eastlake Scheduler',
+    ].join('\n'),
+  });
+}
+
+app.post('/api/change-requests', requireVerified, async (req, res) => {
+  const s = getSession(req);
+  const { game_id, team_id, reason, details, slot } = req.body;
+  if (!game_id) return res.status(400).json({ error: 'game_id is required' });
+
+  const ctx = loadGameContext(req, game_id);
+  if (ctx.error) return res.status(ctx.status || 500).json({ error: ctx.error });
+  const { game, seasonData, schedData, teams } = ctx;
+
   const requestingTeamId = resolveRequestingTeam(s, game, team_id, teams);
   if (!requestingTeamId) return res.status(403).json({ error: 'You can only request a change on your own game' });
   const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
   const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
-  const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));
 
   if ((game.status || 'scheduled') === 'finalized') {
     return res.status(400).json({ error: 'This game has been finalized by the league admin and can no longer be changed', finalized: true });
   }
-
-  const daysOut = daysBetween(new Date().toISOString(), game.date);
-  if (daysOut < 7) {
-    return res.status(400).json({ error: 'This game is within 7 days — use Manual Override instead', lockout: true });
+  if (daysBetween(new Date().toISOString(), game.date) < CHANGE_REQUEST_MIN_DAYS) {
+    return res.status(400).json({ error: `This game is within ${CHANGE_REQUEST_MIN_DAYS} days — use Manual Override instead`, lockout: true });
   }
-
   if (!requestingTeam?.email) return res.status(400).json({ error: 'No email on file for your team — contact your director' });
+  if (!slot || !slot.date || !slot.time) return res.status(400).json({ error: 'Pick a proposed date and time' });
+
+  // Never trust the client's slot: re-derive what's actually viable and match.
+  const { slots } = computeViableSlots(game, seasonData, schedData, { minDaysOut: CHANGE_REQUEST_MIN_DAYS });
+  if (!slots.length) {
+    await notifyNoOptions(req,
+      { game_id, initiating_team_id: requestingTeamId, other_team_id: otherTeamId },
+      seasonData,
+      `${requestingTeam.label || 'A coach'} tried to reschedule Game #${game_id}, but no workable slot exists.`);
+    return res.status(400).json({ error: 'No date works for both teams right now. Your directors have been notified to help.', no_options: true });
+  }
+  const chosen = slots.find(x => x.date === slot.date && x.time === slot.time);
+  if (!chosen) return res.status(400).json({ error: 'That slot is no longer available — please pick again', stale_slot: true });
 
   const cr = {
     id: 'cr-' + Date.now(),
     game_id, division_id: game.division_id,
-    requesting_team_id: requestingTeamId, other_team_id: otherTeamId,
-    reason: reason.trim(), details: details || '', preferred_date: preferred_date || '', preferred_time: preferred_time || '', preferred_field_id: preferred_field_id || '',
+    initiating_team_id: requestingTeamId,
+    requesting_team_id: requestingTeamId,   // kept for the manual-override record shape
+    other_team_id: otherTeamId,
+    reason: (reason || '').trim(), details: (details || '').trim(),
+    proposing_team_id: requestingTeamId,
+    awaiting_team_id: null,                 // set once the initiator confirms
+    proposal: { date: chosen.date, time: chosen.time, field_id: chosen.field_id },
+    round: 0,
+    history: [],
     status: 'awaiting_requester_confirm',
-    submitted_at: new Date().toISOString(), requested_at: null, responded_at: null,
-    director_notified_at: null, admin_notified_at: null,
-    tokens: { requester_confirm: newActionToken(), requester_cancel: newActionToken(), other_approve: newActionToken(), other_reject: newActionToken() },
+    submitted_at: new Date().toISOString(), round_started_at: null, responded_at: null,
+    director_notified_at: null, admin_notified_at: null, stalemate_notified_at: null,
+    tokens: newRoundTokens(),
     manual_override: null,
   };
   const list = readChangeRequests();
   list.push(cr);
   writeChangeRequests(list);
 
-  const confirmUrl = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}/confirm?token=${cr.tokens.requester_confirm}`;
-  const cancelUrl  = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}/cancel?token=${cr.tokens.requester_cancel}`;
+  const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
   const result = await sendEmail({
     to: requestingTeam.email,
     subject: `Confirm your change request — Game #${game_id}`,
     text: [
-      `Did you mean to request a schedule change for Game #${game_id} (${requestingTeam.label || requestingTeam.name} vs ${otherTeam?.label || otherTeam?.name || 'opponent'})?`,
+      `Did you mean to request a schedule change for Game #${game_id}?`,
       '',
-      `Reason: ${cr.reason}`,
-      cr.details ? `Details: ${cr.details}` : null,
-      cr.preferred_date ? `Preferred date: ${cr.preferred_date}` : null,
-      cr.preferred_time ? `Preferred time: ${cr.preferred_time}` : null,
+      `You proposed: ${describeSlot(cr.proposal, seasonData.fields)}`,
+      cr.reason ? `Reason: ${cr.reason}` : null,
       '',
-      `Yes, send this request: ${confirmUrl}`,
-      `No, cancel: ${cancelUrl}`,
+      `Yes, send it to the other coach: ${base}/confirm?token=${cr.tokens.approve}`,
+      `No, cancel: ${base}/cancel?token=${cr.tokens.cancel}`,
       '',
       'If you ignore this, nothing happens — the request never reaches the other coach.',
       '', '— Eastlake Scheduler',
@@ -1121,96 +1275,88 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
   res.json({ ok: true, change_request: cr });
 });
 
-function crActionPage(title, message) {
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>
+function crActionPage(title, message, extraHtml) {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
   <style>body{font-family:system-ui,-apple-system,sans-serif;background:#f4f6f8;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
-  .card{background:#fff;border-radius:12px;padding:32px;max-width:440px;box-shadow:0 4px 20px rgba(0,0,0,.08)}
-  h1{font-size:1.1rem;margin-bottom:10px;color:#1a1a2e}p{color:#475569;line-height:1.5;font-size:14px}</style></head>
-  <body><div class="card"><h1>${title}</h1><p>${message}</p></div></body></html>`;
+  .card{background:#fff;border-radius:12px;padding:32px;max-width:560px;width:100%;box-shadow:0 4px 20px rgba(0,0,0,.08)}
+  h1{font-size:1.1rem;margin-bottom:10px;color:#1a1a2e}p{color:#475569;line-height:1.5;font-size:14px}
+  .slot{display:block;width:100%;text-align:left;background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin:8px 0;font-size:14px;cursor:pointer}
+  .slot:hover{border-color:#2d6cf0;background:#f0f5ff}
+  .slot input{margin-right:10px}
+  .btn{margin-top:16px;width:100%;padding:12px;background:#2d6cf0;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+  .cur{background:#fef3c7;border-radius:8px;padding:10px 12px;font-size:13px;color:#92400e;margin-bottom:16px}</style></head>
+  <body><div class="card"><h1>${title}</h1><p>${message}</p>${extraHtml || ''}</div></body></html>`;
 }
 
-// Not found / already redeemed / status doesn't match this token's expected step.
+// Not found / already redeemed / a link from a previous round.
 function crAlreadyResolved(res) {
-  res.status(200).send(crActionPage('Already resolved', 'This request has already been resolved (or this link has expired). No action was taken.'));
+  res.status(200).send(crActionPage('Already resolved', 'This request has already been resolved, or a newer message has replaced this one. No action was taken.'));
+}
+
+// Looks up a request by id and validates the token for the expected step.
+function findCrByToken(id, token, expectedStatus, tokenKey) {
+  const list = readChangeRequests();
+  const idx = list.findIndex(c => c.id === id);
+  if (idx === -1) return null;
+  const cr = list[idx];
+  if (cr.status !== expectedStatus) return null;
+  if (!token || cr.tokens?.[tokenKey] !== token) return null;
+  return { list, idx, cr };
 }
 
 app.get('/api/change-requests/:id/confirm', async (req, res) => {
-  const list = readChangeRequests();
-  const idx = list.findIndex(c => c.id === req.params.id);
-  const cr = idx !== -1 ? list[idx] : null;
-  if (!cr || cr.status !== 'awaiting_requester_confirm' || cr.tokens.requester_confirm !== req.query.token) {
-    return crAlreadyResolved(res);
-  }
+  const found = findCrByToken(req.params.id, req.query.token, 'awaiting_requester_confirm', 'approve');
+  if (!found) return crAlreadyResolved(res);
+  const { list, idx, cr } = found;
+
   let seasonData, schedData;
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [] }; }
   try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
-  const teams = seasonData.teams || [];
-  const requestingTeam = teams.find(t => String(t.id) === String(cr.requesting_team_id));
-  const otherTeam = teams.find(t => String(t.id) === String(cr.other_team_id));
-  const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
 
-  cr.status = 'awaiting_other_coach';
-  cr.requested_at = new Date().toISOString();
+  advanceRound(cr, cr.initiating_team_id, cr.other_team_id, cr.proposal);
   list[idx] = cr;
   writeChangeRequests(list);
 
+  // The game keeps its agreed date — only the badge changes — so nobody turns up
+  // at the wrong field while the coaches are still negotiating.
+  const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
   if (gameIdx !== -1) {
     schedData.games[gameIdx].status = 'pending';
     try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
   }
 
-  if (otherTeam?.email) {
-    const approveUrl = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}/approve?token=${cr.tokens.other_approve}`;
-    const rejectUrl  = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}/reject?token=${cr.tokens.other_reject}`;
-    await sendEmail({
-      to: otherTeam.email,
-      subject: `Change requested for Game #${cr.game_id} — your response needed`,
-      text: [
-        `${requestingTeam?.label || requestingTeam?.name || 'The other coach'} has requested a schedule change for Game #${cr.game_id}.`,
-        '',
-        `Reason: ${cr.reason}`,
-        cr.details ? `Details: ${cr.details}` : null,
-        cr.preferred_date ? `Preferred date: ${cr.preferred_date}` : null,
-        cr.preferred_time ? `Preferred time: ${cr.preferred_time}` : null,
-        '',
-        `Approve: ${approveUrl}`,
-        `Reject: ${rejectUrl}`,
-        '',
-        `Please respond within 2 days. If we don't hear from you, your director will be looped in to help move things along.`,
-        '', '— Eastlake Scheduler',
-      ].filter(l => l !== null).join('\n'),
-    });
-  }
-
-  res.send(crActionPage('Request sent', `Your change request for Game #${cr.game_id} has been sent to the other coach for approval.`));
+  await notifyTurn(req, cr, seasonData);
+  res.send(crActionPage('Request sent',
+    `Your proposal for Game #${cr.game_id} has gone to the other coach. The game stays at its current time until you both agree.`));
 });
 
 app.get('/api/change-requests/:id/cancel', (req, res) => {
-  const list = readChangeRequests();
-  const idx = list.findIndex(c => c.id === req.params.id);
-  const cr = idx !== -1 ? list[idx] : null;
-  if (!cr || cr.status !== 'awaiting_requester_confirm' || cr.tokens.requester_cancel !== req.query.token) {
-    return crAlreadyResolved(res);
-  }
+  const found = findCrByToken(req.params.id, req.query.token, 'awaiting_requester_confirm', 'cancel');
+  if (!found) return crAlreadyResolved(res);
+  const { list, idx, cr } = found;
   cr.status = 'cancelled';
   list[idx] = cr;
   writeChangeRequests(list);
   res.send(crActionPage('Cancelled', `Your change request for Game #${cr.game_id} was cancelled. The schedule is unchanged.`));
 });
 
-// Applies a change request's preferred date/time/field to the actual game (only the
-// fields the requester specified — anything left blank keeps the game's current value).
-// Mirrors PUT /api/game/:id's apply logic (validate → recompute week/field/team names →
-// write schedule.json) but never hard-blocks on soft violations — the coaches have
-// already agreed via the approve/reject flow, so there's no "Save Anyway" step here.
+
+// Inside-7-days changes skip the request/approve flow entirely — the two coaches
+// already agreed by phone/text, this just records it and applies the change.
+// Notifies the other coach and both teams' directors (not admin) — a director-owned
+// accountability record, not admin oversight, per NOTES.md.
+// Applies an agreed proposal to the real game. Mirrors PUT /api/game/:id's
+// recompute (week / field name / day) but never hard-blocks on soft violations —
+// the coaches have already agreed, so there is no "Save Anyway" step here.
 function applyChangeRequestToGame(cr, schedData, seasonData) {
   const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
   if (gameIdx === -1) return null;
   const existingGame = schedData.games[gameIdx];
+  const p = cr.proposal || {};
 
-  const date = cr.preferred_date || existingGame.date;
-  const time = cr.preferred_time || existingGame.time;
-  const field_id = cr.preferred_field_id || existingGame.field_id;
+  const date = p.date || existingGame.date;
+  const time = p.time || existingGame.time;
+  const field_id = p.field_id || existingGame.field_id;
 
   let newWeek = existingGame.week;
   for (const wk of buildSeasonWeeks(seasonData.season)) {
@@ -1235,18 +1381,14 @@ function applyChangeRequestToGame(cr, schedData, seasonData) {
 }
 
 app.get('/api/change-requests/:id/approve', async (req, res) => {
-  const list = readChangeRequests();
-  const idx = list.findIndex(c => c.id === req.params.id);
-  const cr = idx !== -1 ? list[idx] : null;
-  if (!cr || cr.status !== 'awaiting_other_coach' || cr.tokens.other_approve !== req.query.token) {
-    return crAlreadyResolved(res);
-  }
+  const found = findCrByToken(req.params.id, req.query.token, 'awaiting_response', 'approve');
+  if (!found) return crAlreadyResolved(res);
+  const { list, idx, cr } = found;
+
   let seasonData, schedData;
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [], fields: [] }; }
   try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
 
-  // Finalize skips pending games, so this shouldn't normally happen — but an
-  // approve link could still be clicked after an admin force-finalized the game.
   const targetGame = schedData.games.find(g => g.game_id === cr.game_id);
   if (targetGame && (targetGame.status || 'scheduled') === 'finalized') {
     return res.status(200).send(crActionPage('Game already finalized',
@@ -1263,67 +1405,96 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   list[idx] = cr;
   writeChangeRequests(list);
 
+  // Tell the coach who proposed it that it's locked in.
   const teams = seasonData.teams || [];
-  const requestingTeam = teams.find(t => String(t.id) === String(cr.requesting_team_id));
-  if (requestingTeam?.email && updatedGame) {
+  const proposer = teams.find(t => String(t.id) === String(cr.proposing_team_id));
+  if (proposer?.email && updatedGame) {
     await sendEmail({
-      to: requestingTeam.email,
-      subject: `Change approved — Game #${cr.game_id}`,
+      to: proposer.email,
+      subject: `Agreed — Game #${cr.game_id} has moved`,
       text: [
-        `Your change request for Game #${cr.game_id} was approved.`,
+        `Your proposed time for Game #${cr.game_id} was accepted. The schedule has been updated.`,
         '', `New date: ${updatedGame.day} ${updatedGame.date}`, `New time: ${updatedGame.time}`, `Field: ${updatedGame.field_name}`,
         '', '— Eastlake Scheduler',
       ].join('\n'),
     });
   }
 
-  res.send(crActionPage('Change approved', `Game #${cr.game_id} has been updated. The requesting coach has been notified.`));
+  res.send(crActionPage('Locked in', `Game #${cr.game_id} has been moved to ${describeSlot(cr.proposal, seasonData.fields)}. Both coaches have been notified.`));
 });
 
-app.get('/api/change-requests/:id/reject', async (req, res) => {
-  const list = readChangeRequests();
-  const idx = list.findIndex(c => c.id === req.params.id);
-  const cr = idx !== -1 ? list[idx] : null;
-  if (!cr || cr.status !== 'awaiting_other_coach' || cr.tokens.other_reject !== req.query.token) {
-    return crAlreadyResolved(res);
+// "This doesn't work" — instead of ending the thread, hand this coach the same
+// picker so they can say what *would* work. Token-authenticated so it works
+// straight from the email without logging in.
+app.get('/api/change-requests/:id/counter', (req, res) => {
+  const found = findCrByToken(req.params.id, req.query.token, 'awaiting_response', 'counter');
+  if (!found) return crAlreadyResolved(res);
+  const { cr } = found;
+
+  let seasonData, schedData;
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [] }; }
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
+  const game = schedData.games.find(g => g.game_id === cr.game_id);
+  if (!game) return crAlreadyResolved(res);
+
+  const { slots } = computeViableSlots(game, seasonData, schedData, { minDaysOut: CHANGE_REQUEST_MIN_DAYS });
+  const available = slots.filter(x => !(x.date === cr.proposal?.date && x.time === cr.proposal?.time));
+
+  if (!available.length) {
+    return res.send(crActionPage('No other times work',
+      `There's no other date that fits both teams' availability for Game #${cr.game_id}. Your directors have been notified and will help sort this out.`));
   }
-  cr.status = 'rejected';
-  cr.responded_at = new Date().toISOString();
+
+  const opts = available.map(x => `
+    <label class="slot"><input type="radio" name="slot" value="${x.date}|${x.time}" required>
+    ${describeSlot(x, seasonData.fields)}</label>`).join('');
+
+  res.send(crActionPage('Suggest another time',
+    `You're saying the proposed time for Game #${cr.game_id} doesn't work. Pick a time that does — it'll go back to the other coach.`,
+    `<div class="cur">Currently proposed: ${describeSlot(cr.proposal, seasonData.fields)}</div>
+     <form method="POST" action="counter?token=${req.query.token}">${opts}
+     <button class="btn" type="submit">Send this back to the other coach</button></form>`));
+});
+
+app.post('/api/change-requests/:id/counter', express.urlencoded({ extended: false }), async (req, res) => {
+  const found = findCrByToken(req.params.id, req.query.token, 'awaiting_response', 'counter');
+  if (!found) return crAlreadyResolved(res);
+  const { list, idx, cr } = found;
+
+  let seasonData, schedData;
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [] }; }
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
+  const game = schedData.games.find(g => g.game_id === cr.game_id);
+  if (!game) return crAlreadyResolved(res);
+
+  const [date, time] = String(req.body.slot || '').split('|');
+  const { slots } = computeViableSlots(game, seasonData, schedData, { minDaysOut: CHANGE_REQUEST_MIN_DAYS });
+  if (!slots.length) {
+    cr.status = 'escalated';
+    list[idx] = cr;
+    writeChangeRequests(list);
+    await notifyNoOptions(req, cr, seasonData, `Game #${cr.game_id} is stuck — no time fits both teams.`);
+    return res.send(crActionPage('No other times work',
+      `There's no other date that fits both teams for Game #${cr.game_id}. Your directors have been notified.`));
+  }
+  const chosen = slots.find(x => x.date === date && x.time === time);
+  if (!chosen) {
+    return res.status(400).send(crActionPage('That time is no longer free',
+      'Someone else booked that slot while you were deciding. Please open the link again and pick another.'));
+  }
+
+  // Flip the turn — the coach who rejected is now the one proposing.
+  const nextAwaiting = cr.proposing_team_id;
+  const nowProposing = cr.awaiting_team_id;
+  advanceRound(cr, nowProposing, nextAwaiting, { date: chosen.date, time: chosen.time, field_id: chosen.field_id });
   list[idx] = cr;
   writeChangeRequests(list);
 
-  let schedData;
-  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = null; }
-  if (schedData) {
-    const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
-    if (gameIdx !== -1) {
-      schedData.games[gameIdx].status = 'scheduled';
-      try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
-    }
-  }
-
-  let seasonData;
-  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [] }; }
-  const requestingTeam = (seasonData.teams || []).find(t => String(t.id) === String(cr.requesting_team_id));
-  if (requestingTeam?.email) {
-    await sendEmail({
-      to: requestingTeam.email,
-      subject: `Change declined — Game #${cr.game_id}`,
-      text: [
-        `Your change request for Game #${cr.game_id} was declined by the other coach.`,
-        `The game stays as originally scheduled.`,
-        '', '— Eastlake Scheduler',
-      ].join('\n'),
-    });
-  }
-
-  res.send(crActionPage('Change declined', `Game #${cr.game_id} stays as originally scheduled. The requesting coach has been notified.`));
+  await notifyTurn(req, cr, seasonData);
+  res.send(crActionPage('Sent back',
+    `Your suggested time for Game #${cr.game_id} has gone to the other coach. The game stays at its current time until you both agree.`));
 });
 
-// Inside-7-days changes skip the request/approve flow entirely — the two coaches
-// already agreed by phone/text, this just records it and applies the change.
-// Notifies the other coach and both teams' directors (not admin) — a director-owned
-// accountability record, not admin oversight, per NOTES.md.
 app.post('/api/change-requests/:game_id/manual-override', requireVerified, async (req, res) => {
   const s = getSession(req);
   const gameId = parseInt(req.params.game_id, 10);
@@ -1356,11 +1527,14 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
     id: 'cr-' + Date.now(),
     game_id: gameId, division_id: game.division_id,
     requesting_team_id: requestingTeamId, other_team_id: otherTeamId,
-    reason: 'Manual override', details: '', preferred_date: date || '', preferred_time: time || '', preferred_field_id: field_id || '',
+    reason: 'Manual override', details: '',
+    proposal: { date: date || '', time: time || '', field_id: field_id || '' },
+    proposing_team_id: requestingTeamId, awaiting_team_id: null,
+    round: 0, history: [],
     status: 'confirmed',
     submitted_at: new Date().toISOString(), requested_at: new Date().toISOString(), responded_at: new Date().toISOString(),
     director_notified_at: null, admin_notified_at: null,
-    tokens: { requester_confirm: null, requester_cancel: null, other_approve: null, other_reject: null },
+    tokens: {}, stalemate_notified_at: null, round_started_at: null,
     manual_override: { who: who_spoke_to.trim(), how: how_connected.trim(), submitted_by_team_id: requestingTeamId, at: new Date().toISOString() },
   };
 
@@ -1997,23 +2171,29 @@ async function checkEscalations() {
   const teams = seasonData.teams || [];
   const directors = seasonData.directors || [];
   let changed = false;
+  const nameOf = id => teams.find(t => String(t.id) === String(id))?.label || teams.find(t => String(t.id) === String(id))?.name || id;
 
   for (const cr of list) {
-    if (cr.status !== 'awaiting_other_coach' || !cr.requested_at) continue;
-    const daysElapsed = daysBetween(cr.requested_at, new Date().toISOString());
-    const otherTeam = teams.find(t => String(t.id) === String(cr.other_team_id));
-    const requestingTeam = teams.find(t => String(t.id) === String(cr.requesting_team_id));
+    if (cr.status !== 'awaiting_response' || !cr.round_started_at) continue;
+    // Measured per round: each new proposal restarts the clock, because it's a
+    // genuinely fresh ask of the other coach.
+    const daysElapsed = daysBetween(cr.round_started_at, new Date().toISOString());
+    const awaitingTeam = teams.find(t => String(t.id) === String(cr.awaiting_team_id));
+    const proposingTeam = teams.find(t => String(t.id) === String(cr.proposing_team_id));
 
+    // ── Nobody responded ───────────────────────────────────────────────────
     if (daysElapsed >= 3 && !cr.director_notified_at) {
-      const otherDirectors = directors.filter(d => d.active !== false && d.program_id === otherTeam?.program_id);
-      const emails = otherDirectors.map(d => d.email).filter(Boolean);
+      const emails = directors
+        .filter(d => d.active !== false && d.program_id === awaitingTeam?.program_id)
+        .map(d => d.email).filter(Boolean);
       if (emails.length) {
         await sendEmail({
           to: emails,
           subject: `Action needed: Game #${cr.game_id} change request unanswered`,
           text: [
-            `${otherTeam?.label || otherTeam?.name || 'One of your coaches'} hasn't responded to a change request from ${requestingTeam?.label || requestingTeam?.name || 'another coach'} for Game #${cr.game_id} (requested ${daysElapsed} days ago).`,
-            `Could you help nudge them to approve or reject it?`,
+            `${awaitingTeam?.label || 'One of your coaches'} hasn't responded to a proposed time from ${proposingTeam?.label || 'another coach'} for Game #${cr.game_id} (sent ${daysElapsed} days ago).`,
+            `Proposed: ${describeSlot(cr.proposal, seasonData.fields)}`,
+            `Could you nudge them to either accept it or suggest another time?`,
             '', '— Eastlake Scheduler',
           ].join('\n'),
         });
@@ -2028,15 +2208,39 @@ async function checkEscalations() {
           to: ADMIN_EMAIL,
           subject: `Escalation: Game #${cr.game_id} change request still unanswered`,
           text: [
-            `A change request for Game #${cr.game_id} has gone unanswered for ${daysElapsed} days (director was already notified).`,
-            `Requesting team: ${requestingTeam?.label || requestingTeam?.name}`,
-            `Other team: ${otherTeam?.label || otherTeam?.name}`,
-            `Reason: ${cr.reason}`,
+            `A proposed time for Game #${cr.game_id} has gone unanswered for ${daysElapsed} days (director already notified).`,
+            `Waiting on: ${nameOf(cr.awaiting_team_id)}`,
+            `Proposed by: ${nameOf(cr.proposing_team_id)}`,
+            `Reason: ${cr.reason || '—'}`,
             '', '— Eastlake Scheduler',
           ].join('\n'),
         });
       }
       cr.admin_notified_at = new Date().toISOString();
+      changed = true;
+    }
+
+    // ── Stalemate: they're both responding, just not agreeing ──────────────
+    // Fires once. The thread stays open — this is visibility for the directors,
+    // not a takeover, since the coaches may still settle it themselves.
+    if ((cr.round || 0) > STALEMATE_ROUND_LIMIT && !cr.stalemate_notified_at) {
+      const emails = directorsForTeams(seasonData, [cr.initiating_team_id, cr.other_team_id])
+        .map(d => d.email).filter(Boolean);
+      if (emails.length) {
+        await sendEmail({
+          to: [...new Set(emails)],
+          subject: `Stuck: Game #${cr.game_id} has been back and forth ${cr.round} times`,
+          text: [
+            `${nameOf(cr.initiating_team_id)} and ${nameOf(cr.other_team_id)} have exchanged ${cr.round} proposals for Game #${cr.game_id} without agreeing.`,
+            `Currently on the table: ${describeSlot(cr.proposal, seasonData.fields)} (waiting on ${nameOf(cr.awaiting_team_id)})`,
+            '',
+            `Every option offered already fits both teams' stated availability, so this usually means one team's availability needs updating.`,
+            `They can still resolve it themselves — this is just so you know it's stuck.`,
+            '', '— Eastlake Scheduler',
+          ].join('\n'),
+        });
+      }
+      cr.stalemate_notified_at = new Date().toISOString();
       changed = true;
     }
   }

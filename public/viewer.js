@@ -382,7 +382,11 @@ function renderGames(divGames) {
   // Attach request change button listeners
   if (session) {
     document.querySelectorAll('.req-btn[data-gid]').forEach(btn => {
-      btn.addEventListener('click', () => openChangeRequest(parseInt(btn.dataset.gid, 10)));
+      btn.addEventListener('click', () => {
+        // The change flow lives on the coach/director pages, where the server
+        // computes which times actually work for both teams.
+        window.location = session?.role === 'director' ? 'director' : 'my-team';
+      });
     });
   }
 }

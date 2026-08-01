@@ -88,18 +88,10 @@
         <h3 id="cr-form-title">Request Change</h3>
         <div id="cr-normal-form">
           <div class="field-form-row">
-            <label style="flex:1">Reason *<input id="cr-reason" type="text" placeholder="e.g. Field conflict with another team"></label>
+            <label style="flex:1">Why does this need to change?<input id="cr-reason" type="text" placeholder="e.g. Field conflict with another team"></label>
           </div>
-          <div class="field-form-row">
-            <label style="flex:1">Details<input id="cr-details" type="text" placeholder="Optional — anything else the other coach should know"></label>
-          </div>
-          <div class="field-form-row">
-            <label>Preferred Date<input id="cr-date" type="date"></label>
-            <label>Preferred Time<input id="cr-time" type="text" placeholder="e.g. 18:30"></label>
-          </div>
-          <div class="field-form-row">
-            <label>Preferred Field<select id="cr-field"><option value="">— No preference —</option></select></label>
-          </div>
+          <p class="field-form-hint" style="margin:10px 0">Pick a time that works for you. These are the only times that fit both teams' availability and field openings:</p>
+          <div id="cr-slots"></div>
           <div class="field-form-actions">
             <button id="cr-cancel" class="btn btn-secondary">Cancel</button>
             <button id="cr-submit" class="btn btn-primary">Send Request</button>

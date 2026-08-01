@@ -2362,7 +2362,8 @@ async function renderRequestsPage() {
   const statusBadge = st => {
     const map = {
       awaiting_requester_confirm: ['Awaiting requester', '#f1f5f9', '#475569'],
-      awaiting_other_coach:       ['Awaiting other coach', '#fef3c7', '#92400e'],
+      awaiting_response:          ['Awaiting response', '#fef3c7', '#92400e'],
+      escalated:                  ['Escalated — no options', '#fef2f2', '#991b1b'],
       confirmed:                  ['Confirmed', '#dcfce7', '#166534'],
       rejected:                   ['Rejected', '#fef2f2', '#991b1b'],
       cancelled:                  ['Cancelled', '#f1f5f9', '#64748b'],
@@ -2373,19 +2374,24 @@ async function renderRequestsPage() {
 
   const sorted = [...list].sort((a, b) => (b.submitted_at || '').localeCompare(a.submitted_at || ''));
   container.innerHTML = `<table class="fields-table">
-    <thead><tr><th>Game</th><th>From</th><th>To</th><th>Reason</th><th>Status</th><th>Submitted</th><th>Escalation</th></tr></thead>
+    <thead><tr><th>Game</th><th>Started by</th><th>Round</th><th>Waiting on</th><th>On the table</th><th>Status</th><th>Escalation</th></tr></thead>
     <tbody>
     ${sorted.map(cr => {
       const escalation = cr.manual_override
         ? `Manual override — ${esc(cr.manual_override.who)} (${esc(cr.manual_override.how)})`
-        : [cr.director_notified_at ? 'Director notified' : null, cr.admin_notified_at ? 'Admin notified' : null].filter(Boolean).join(', ') || '—';
+        : [cr.director_notified_at ? 'Director notified' : null,
+           cr.admin_notified_at ? 'Admin notified' : null,
+           cr.stalemate_notified_at ? 'Stalemate — directors looped in' : null].filter(Boolean).join(', ') || '—';
+      const proposal = cr.proposal?.date
+        ? `${cr.proposal.date} ${cr.proposal.time || ''}` : '—';
+      const rounds = cr.round ? `${cr.round}${(cr.history || []).length ? ` (${(cr.history || []).length} earlier)` : ''}` : '—';
       return `<tr>
         <td>#${cr.game_id}</td>
-        <td>${esc(teamName_(cr.requesting_team_id))}</td>
-        <td>${esc(teamName_(cr.other_team_id))}</td>
-        <td>${esc(cr.reason)}</td>
+        <td>${esc(teamName_(cr.initiating_team_id || cr.requesting_team_id))}</td>
+        <td>${esc(rounds)}</td>
+        <td>${cr.awaiting_team_id ? esc(teamName_(cr.awaiting_team_id)) : '—'}</td>
+        <td>${esc(proposal)}</td>
         <td>${statusBadge(cr.status)}</td>
-        <td>${cr.submitted_at ? new Date(cr.submitted_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}</td>
         <td style="font-size:12px">${escalation}</td>
       </tr>`;
     }).join('')}
