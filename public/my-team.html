@@ -41,6 +41,55 @@
         <div id="mte-success" class="field-form-error hidden" style="background:#dcfce7;border-color:#16a34a;color:#166534"></div>
       </div>
     </div>
+
+    <h3 style="margin-top:32px">Upcoming Games</h3>
+    <div id="games-list"></div>
+
+    <div id="cr-form" class="field-editor-form hidden">
+      <div class="field-form-inner">
+        <h3 id="cr-form-title">Request Change</h3>
+        <div id="cr-normal-form">
+          <div class="field-form-row">
+            <label style="flex:1">Reason *<input id="cr-reason" type="text" placeholder="e.g. Field conflict with another team"></label>
+          </div>
+          <div class="field-form-row">
+            <label style="flex:1">Details<input id="cr-details" type="text" placeholder="Optional — anything else the other coach should know"></label>
+          </div>
+          <div class="field-form-row">
+            <label>Preferred Date<input id="cr-date" type="date"></label>
+            <label>Preferred Time<input id="cr-time" type="text" placeholder="e.g. 18:30"></label>
+          </div>
+          <div class="field-form-row">
+            <label>Preferred Field<select id="cr-field"><option value="">— No preference —</option></select></label>
+          </div>
+          <div class="field-form-actions">
+            <button id="cr-cancel" class="btn btn-secondary">Cancel</button>
+            <button id="cr-submit" class="btn btn-primary">Send Request</button>
+          </div>
+        </div>
+        <div id="cr-lockout-form" class="hidden">
+          <p class="field-form-hint">This game is less than 7 days away, so it's too late for the normal request/approve flow. Call or text the other coach directly at <strong id="cr-other-phone"></strong> to work it out, then record it here.</p>
+          <div class="field-form-row">
+            <label>New Date *<input id="cr-mo-date" type="date"></label>
+            <label>New Time *<input id="cr-mo-time" type="text" placeholder="e.g. 18:30"></label>
+          </div>
+          <div class="field-form-row">
+            <label>Field<select id="cr-mo-field"><option value="">— Keep current —</option></select></label>
+          </div>
+          <div class="field-form-row">
+            <label>Who did you speak with? *<input id="cr-mo-who" type="text" placeholder="e.g. Coach Smith"></label>
+          </div>
+          <div class="field-form-row">
+            <label>How did you connect? *<input id="cr-mo-how" type="text" placeholder="e.g. Phone call, text message"></label>
+          </div>
+          <div class="field-form-actions">
+            <button id="cr-mo-cancel" class="btn btn-secondary">Cancel</button>
+            <button id="cr-mo-submit" class="btn btn-primary">Record &amp; Apply Change</button>
+          </div>
+        </div>
+        <div id="cr-error" class="field-form-error hidden"></div>
+      </div>
+    </div>
   </div>
 
   <script src="my-team.js"></script>

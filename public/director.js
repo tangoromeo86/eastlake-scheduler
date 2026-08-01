@@ -4,6 +4,9 @@ let session = null;
 let seasonData = null;
 let editingTeamId = null;
 let editingFieldId = null;
+let scheduleData = null;
+let crGameId = null;
+let crTeamId = null;
 
 function esc(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -126,8 +129,142 @@ async function init() {
   populateFieldSelect();
   renderTeamsList();
   renderFieldsList();
+
+  try { scheduleData = await fetchJSON('api/schedule'); } catch { scheduleData = { games: [] }; }
+  renderGamesList();
+
   initVerifyBanner();
 }
+
+// ── Games list + change requests ─────────────────────────────────────────────
+
+function myProgramGames() {
+  const teamIds = new Set(myProgramTeams().map(t => String(t.id)));
+  return (scheduleData?.games || []).filter(g => teamIds.has(String(g.home_team_id)) || teamIds.has(String(g.away_team_id)))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function daysUntil(dateStr) {
+  const ms = new Date(dateStr + 'T00:00:00') - new Date(new Date().toDateString());
+  return Math.floor(ms / (24 * 60 * 60 * 1000));
+}
+
+function teamById(id) {
+  return (seasonData?.teams || []).find(t => String(t.id) === String(id));
+}
+
+function renderGamesList() {
+  const games = myProgramGames();
+  const list = document.getElementById('games-list');
+  if (!games.length) {
+    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No games scheduled yet.</p>';
+    return;
+  }
+  list.innerHTML = `<table class="fields-table">
+    <thead><tr><th>Date</th><th>Home</th><th>Away</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    ${games.map(g => {
+      const status = g.status || 'scheduled';
+      const statusBadge = status === 'pending' ? '<span class="unconfirmed-badge">Pending change</span>'
+        : status === 'confirmed' ? '<span class="confirmed-badge">Confirmed change</span>'
+        : status === 'finalized' ? '<span class="confirmed-badge">Finalized</span>' : '—';
+      // Whichever of our program's teams is involved is who we'd act on behalf of.
+      const myTeamId = [g.home_team_id, g.away_team_id].find(id => myProgramTeams().some(t => String(t.id) === String(id)));
+      const canRequest = status !== 'finalized';
+      return `<tr>
+        <td>${esc(g.day)} ${esc(g.date)} ${esc(g.time)}</td>
+        <td>${esc(g.home_team_name)}</td>
+        <td>${esc(g.away_team_name)}</td>
+        <td>${statusBadge}</td>
+        <td>${canRequest ? `<button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openChangeRequest(${g.game_id},'${String(myTeamId)}')">Request Change</button>` : ''}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table>`;
+}
+
+function populateCrFieldSelects() {
+  const fields = [...(seasonData?.fields || [])].sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
+  const opts = '<option value="">— No preference —</option>' + fields.map(f => `<option value="${String(f.id)}">${esc(fieldDisplayName(f))}</option>`).join('');
+  document.getElementById('cr-field').innerHTML = opts;
+  document.getElementById('cr-mo-field').innerHTML = opts.replace('No preference', 'Keep current');
+}
+
+function openChangeRequest(gameId, teamId) {
+  const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
+  if (!game) return;
+  crGameId = gameId;
+  crTeamId = teamId;
+  const otherId = String(game.home_team_id) === teamId ? game.away_team_id : game.home_team_id;
+  const other = teamById(otherId);
+  document.getElementById('cr-error').classList.add('hidden');
+  populateCrFieldSelects();
+
+  const locked = daysUntil(game.date) < 7;
+  document.getElementById('cr-form-title').textContent = locked ? 'Change Locked — Manual Override' : 'Request Change';
+  document.getElementById('cr-normal-form').classList.toggle('hidden', locked);
+  document.getElementById('cr-lockout-form').classList.toggle('hidden', !locked);
+  if (locked) {
+    document.getElementById('cr-other-phone').textContent = other?.phone || '(no phone on file)';
+    document.getElementById('cr-mo-date').value = game.date;
+    document.getElementById('cr-mo-time').value = game.time;
+  } else {
+    document.getElementById('cr-reason').value = '';
+    document.getElementById('cr-details').value = '';
+    document.getElementById('cr-date').value = '';
+    document.getElementById('cr-time').value = '';
+    document.getElementById('cr-field').value = '';
+  }
+  document.getElementById('cr-form').classList.remove('hidden');
+}
+
+document.getElementById('cr-cancel').addEventListener('click', () => document.getElementById('cr-form').classList.add('hidden'));
+document.getElementById('cr-mo-cancel').addEventListener('click', () => document.getElementById('cr-form').classList.add('hidden'));
+
+document.getElementById('cr-submit').addEventListener('click', async () => {
+  const errEl = document.getElementById('cr-error');
+  errEl.classList.add('hidden');
+  const reason = document.getElementById('cr-reason').value.trim();
+  if (!reason) { errEl.textContent = 'Reason is required.'; errEl.classList.remove('hidden'); return; }
+  const body = {
+    game_id: crGameId, team_id: crTeamId,
+    reason,
+    details: document.getElementById('cr-details').value.trim(),
+    preferred_date: document.getElementById('cr-date').value,
+    preferred_time: document.getElementById('cr-time').value.trim(),
+    preferred_field_id: document.getElementById('cr-field').value || null,
+  };
+  try {
+    const res = await fetch('api/change-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { errEl.textContent = data.error || 'Could not submit request.'; errEl.classList.remove('hidden'); return; }
+    document.getElementById('cr-form').classList.add('hidden');
+    alert("Check the coach's email to confirm this request before it goes to the other coach.");
+  } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
+});
+
+document.getElementById('cr-mo-submit').addEventListener('click', async () => {
+  const errEl = document.getElementById('cr-error');
+  errEl.classList.add('hidden');
+  const who = document.getElementById('cr-mo-who').value.trim();
+  const how = document.getElementById('cr-mo-how').value.trim();
+  const date = document.getElementById('cr-mo-date').value;
+  const time = document.getElementById('cr-mo-time').value.trim();
+  if (!who || !how || !date || !time) { errEl.textContent = 'Date, time, who, and how are all required.'; errEl.classList.remove('hidden'); return; }
+  const body = {
+    team_id: crTeamId, date, time,
+    field_id: document.getElementById('cr-mo-field').value || null,
+    who_spoke_to: who, how_connected: how,
+  };
+  try {
+    const res = await fetch(`api/change-requests/${crGameId}/manual-override`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { errEl.textContent = data.error || 'Could not apply change.'; errEl.classList.remove('hidden'); return; }
+    document.getElementById('cr-form').classList.add('hidden');
+    scheduleData = await fetchJSON('api/schedule');
+    renderGamesList();
+  } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
+});
 
 function myProgramFields() {
   return (seasonData?.fields || []).filter(f => f.program_id === session.program_id);

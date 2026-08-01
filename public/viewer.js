@@ -354,7 +354,7 @@ function renderGames(divGames) {
       <td>${g.day.slice(0,3)}</td>
       <td>${formatTime12h(g.time)}</td>
       <td class="g-home">${esc(g.home_team_name)}</td>
-      <td class="g-away">${esc(g.away_team_name)}</td>
+      <td class="g-away">${esc(g.away_team_name)}${g.status === 'pending' ? ' <span class="pending-badge">Pending change</span>' : ''}</td>
       <td>${esc(g.field_name)}</td>
       <td class="g-addr">${esc(g.field_address)}${fieldMapLink(g.field_id)}</td>
       ${session ? `<td><button class="req-btn" data-gid="${g.game_id}">Request Change</button></td>` : ''}
@@ -367,6 +367,7 @@ function renderGames(divGames) {
       <div class="game-card-top">
         <span>W${g.week} · ${g.day.slice(0,3)} ${formatDate(g.date)} · ${formatTime12h(g.time)}</span>
         ${g.is_rematch ? '<span class="rematch-badge">Rematch</span>' : ''}
+        ${g.status === 'pending' ? '<span class="pending-badge">Pending change</span>' : ''}
       </div>
       <div class="game-card-matchup">
         <span class="home">${esc(g.home_team_name)}</span>
@@ -1052,22 +1053,28 @@ async function submitChangeRequest() {
   const g = crState.game;
   const divName = (seasonData?.divisions || []).find(d => d.id === g.division_id)?.name || g.division_id;
   const issueLabel = ISSUE_OPTS.find(o => o.value === crState.issue)?.label || crState.issue;
+  const altField = crState.details?.alt_field || '';
   const body = {
     game_id:         g.game_id,
     reason:          issueLabel,
-    details:         buildEmailBody(),
+    details:         buildEmailBody() + (altField ? `\nRequested field: ${altField}` : ''),
     preferred_date:  crState.details?.available || crState.details?.preferred_date || '',
     preferred_time:  crState.details?.preferred_time || '',
-    preferred_field: crState.details?.alt_field || '',
   };
   try {
-    const r = await fetch('api/change-request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch('api/change-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d = await r.json();
     if (d.ok) {
       btn.style.display = 'none';
       status.style.display = '';
       status.style.color = '#16a34a';
-      status.textContent = '✓ Request sent! The league admin will be in touch.';
+      status.textContent = '✓ Check your email to confirm this request — it won\'t go to the other coach until you do.';
+    } else if (d.lockout) {
+      btn.disabled = false;
+      btn.textContent = '📧 Send Request';
+      status.style.display = '';
+      status.style.color = '#dc2626';
+      status.textContent = `This game is within 7 days — call the other coach directly instead. Ask your director to record a Manual Override.`;
     } else {
       btn.disabled = false;
       btn.textContent = '📧 Send Request';

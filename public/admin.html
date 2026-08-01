@@ -17,6 +17,7 @@
         <button id="run-confirm-ok" class="btn" style="background:#b45309;color:#fff;border-color:#92400e;padding:4px 10px;font-size:13px">Go</button>
         <button id="run-confirm-cancel" class="btn btn-secondary" style="padding:4px 10px;font-size:13px">✕</button>
       </span>
+      <button id="btn-finalize" class="btn btn-secondary">&#9989; Finalize Games</button>
       <button id="btn-upload" class="btn btn-secondary">&#8593; Upload season.json</button>
       <a id="btn-csv" class="btn btn-secondary" href="api/export/csv" download>&#8595; Export CSV</a>
       <button id="btn-import-csv" class="btn btn-secondary">&#8593; Import CSV</button>
@@ -28,6 +29,7 @@
     <button class="top-nav-btn" data-page="teams">&#128101; Teams</button>
     <button class="top-nav-btn" data-page="editor">&#9998; Editor</button>
     <button class="top-nav-btn" data-page="changes" id="nav-changes">&#128221; Changes</button>
+    <button class="top-nav-btn" data-page="requests" id="nav-requests">&#128231; Change Requests</button>
     <button class="top-nav-btn" data-page="fields">&#127967; Fields</button>
     <button class="top-nav-btn" data-page="programs">&#127961; Programs</button>
   </nav>
@@ -176,6 +178,13 @@
       <button id="btn-clear-changes" class="btn btn-secondary">Clear Log</button>
     </div>
     <div id="changes-content"></div>
+  </div>
+
+  <div id="page-requests" class="page-section hidden">
+    <div class="changes-toolbar">
+      <span class="changes-toolbar-title">&#128231; Coach Change Requests</span>
+    </div>
+    <div id="requests-content"></div>
   </div>
 
   <div id="page-fields" class="page-section hidden">

@@ -14,6 +14,7 @@ const BASE_PATH = process.env.BASE_PATH || '';
 const SCHEDULE_FILE = path.join(__dirname, 'schedule.json');
 const SEASON_FILE   = path.join(__dirname, 'season.json');
 const CHANGES_FILE  = path.join(__dirname, 'changes.json');
+const CHANGE_REQUESTS_FILE = path.join(__dirname, 'change_requests.json');
 
 // ── Auth config (set via environment — never hardcode secrets here) ───────────
 const ADMIN_EMAIL    = (process.env.ADMIN_EMAIL    || '').toLowerCase().trim();
@@ -118,6 +119,28 @@ function redeemEmailChangeToken(token) {
   verifyTokens.delete(token); // one-time use
   if (entry.exp < Date.now()) return null;
   return { team_id: entry.team_id, newEmail: entry.newEmail };
+}
+
+// ── Game change requests (persisted — these links must stay valid for up to
+// a week, so unlike the short-lived tokens above they live on the record
+// itself in change_requests.json, not the in-memory Map, and survive restarts.
+function readChangeRequests() {
+  if (!fs.existsSync(CHANGE_REQUESTS_FILE)) return [];
+  try { return JSON.parse(fs.readFileSync(CHANGE_REQUESTS_FILE, 'utf8')); }
+  catch { return []; }
+}
+function writeChangeRequests(list) {
+  fs.writeFileSync(CHANGE_REQUESTS_FILE, JSON.stringify(list, null, 2));
+}
+function newActionToken() {
+  return crypto.randomBytes(24).toString('base64url');
+}
+function daysBetween(isoA, isoB) {
+  return Math.floor((new Date(isoB) - new Date(isoA)) / (24 * 60 * 60 * 1000));
+}
+function crTeamContact(t) {
+  if (!t) return null;
+  return { id: t.id, name: teamName(t), coach: t.coach || '', email: t.email || '', phone: t.phone || '', program_id: t.program_id || null };
 }
 
 function requireAuth(req, res, next) {
@@ -967,27 +990,353 @@ app.patch('/api/division/:id', requireAdmin, (req, res) => {
 
 // ── Change request email (coach-initiated) ────────────────────────────────────
 
-app.post('/api/change-request', requireVerified, (req, res) => {
+// A coach may only request on their own game; a director/admin must say which
+// of the game's two teams they're acting for (and it must be theirs to manage).
+function resolveRequestingTeam(session, game, bodyTeamId, teams) {
+  if (session.role === 'coach') {
+    if (game.home_team_id !== session.team_id && game.away_team_id !== session.team_id) return null;
+    return session.team_id;
+  }
+  if (bodyTeamId !== game.home_team_id && bodyTeamId !== game.away_team_id) return null;
+  const team = teams.find(t => String(t.id) === String(bodyTeamId));
+  if (!team) return null;
+  if (!canManageProgram(session, team.program_id)) return null;
+  return bodyTeamId;
+}
+
+// ── Game change requests ────────────────────────────────────────────────────
+
+app.post('/api/change-requests', requireVerified, async (req, res) => {
   const s = getSession(req);
-  const { game_id, reason, details, preferred_date, preferred_time, preferred_field } = req.body;
-  if (!game_id || !reason) return res.status(400).json({ error: 'game_id and reason required' });
+  const { game_id, team_id, reason, details, preferred_date, preferred_time, preferred_field_id } = req.body;
+  if (!game_id || !reason || !reason.trim()) return res.status(400).json({ error: 'game_id and reason are required' });
 
-  const subject = `Change Request: Game #${game_id} — from ${s.name}`;
-  const lines = [
-    `A coach has submitted a schedule change request.`,
-    ``,
-    `From: ${s.name} (${s.email})`,
-    `Game #: ${game_id}`,
-    `Reason: ${reason}`,
-  ];
-  if (details)          lines.push(`Details: ${details}`);
-  if (preferred_date)   lines.push(`Preferred date: ${preferred_date}`);
-  if (preferred_time)   lines.push(`Preferred time: ${preferred_time}`);
-  if (preferred_field)  lines.push(`Preferred field: ${preferred_field}`);
-  lines.push('', '— Eastlake Scheduler');
+  let schedData, seasonData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read schedule.json' }); }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
 
-  sendEmail({ to: EMAIL_REPLY_TO || ADMIN_EMAIL, subject, text: lines.join('\n') });
-  res.json({ ok: true });
+  const game = schedData.games.find(g => g.game_id === game_id);
+  if (!game) return res.status(404).json({ error: 'Game not found' });
+
+  const teams = seasonData.teams || [];
+  const requestingTeamId = resolveRequestingTeam(s, game, team_id, teams);
+  if (!requestingTeamId) return res.status(403).json({ error: 'You can only request a change on your own game' });
+  const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
+  const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
+  const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));
+
+  const daysOut = daysBetween(new Date().toISOString(), game.date);
+  if (daysOut < 7) {
+    return res.status(400).json({ error: 'This game is within 7 days — use Manual Override instead', lockout: true });
+  }
+
+  if (!requestingTeam?.email) return res.status(400).json({ error: 'No email on file for your team — contact your director' });
+
+  const cr = {
+    id: 'cr-' + Date.now(),
+    game_id, division_id: game.division_id,
+    requesting_team_id: requestingTeamId, other_team_id: otherTeamId,
+    reason: reason.trim(), details: details || '', preferred_date: preferred_date || '', preferred_time: preferred_time || '', preferred_field_id: preferred_field_id || '',
+    status: 'awaiting_requester_confirm',
+    submitted_at: new Date().toISOString(), requested_at: null, responded_at: null,
+    director_notified_at: null, admin_notified_at: null,
+    tokens: { requester_confirm: newActionToken(), requester_cancel: newActionToken(), other_approve: newActionToken(), other_reject: newActionToken() },
+    manual_override: null,
+  };
+  const list = readChangeRequests();
+  list.push(cr);
+  writeChangeRequests(list);
+
+  const confirmUrl = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}/confirm?token=${cr.tokens.requester_confirm}`;
+  const cancelUrl  = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}/cancel?token=${cr.tokens.requester_cancel}`;
+  const result = await sendEmail({
+    to: requestingTeam.email,
+    subject: `Confirm your change request — Game #${game_id}`,
+    text: [
+      `Did you mean to request a schedule change for Game #${game_id} (${requestingTeam.label || requestingTeam.name} vs ${otherTeam?.label || otherTeam?.name || 'opponent'})?`,
+      '',
+      `Reason: ${cr.reason}`,
+      cr.details ? `Details: ${cr.details}` : null,
+      cr.preferred_date ? `Preferred date: ${cr.preferred_date}` : null,
+      cr.preferred_time ? `Preferred time: ${cr.preferred_time}` : null,
+      '',
+      `Yes, send this request: ${confirmUrl}`,
+      `No, cancel: ${cancelUrl}`,
+      '',
+      'If you ignore this, nothing happens — the request never reaches the other coach.',
+      '', '— Eastlake Scheduler',
+    ].filter(l => l !== null).join('\n'),
+  });
+  if (!result.ok) return res.status(500).json({ error: 'Could not send confirmation email', reason: result.reason });
+  res.json({ ok: true, change_request: cr });
+});
+
+function crActionPage(title, message) {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>
+  <style>body{font-family:system-ui,-apple-system,sans-serif;background:#f4f6f8;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+  .card{background:#fff;border-radius:12px;padding:32px;max-width:440px;box-shadow:0 4px 20px rgba(0,0,0,.08)}
+  h1{font-size:1.1rem;margin-bottom:10px;color:#1a1a2e}p{color:#475569;line-height:1.5;font-size:14px}</style></head>
+  <body><div class="card"><h1>${title}</h1><p>${message}</p></div></body></html>`;
+}
+
+// Not found / already redeemed / status doesn't match this token's expected step.
+function crAlreadyResolved(res) {
+  res.status(200).send(crActionPage('Already resolved', 'This request has already been resolved (or this link has expired). No action was taken.'));
+}
+
+app.get('/api/change-requests/:id/confirm', async (req, res) => {
+  const list = readChangeRequests();
+  const idx = list.findIndex(c => c.id === req.params.id);
+  const cr = idx !== -1 ? list[idx] : null;
+  if (!cr || cr.status !== 'awaiting_requester_confirm' || cr.tokens.requester_confirm !== req.query.token) {
+    return crAlreadyResolved(res);
+  }
+  let seasonData, schedData;
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [] }; }
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
+  const teams = seasonData.teams || [];
+  const requestingTeam = teams.find(t => String(t.id) === String(cr.requesting_team_id));
+  const otherTeam = teams.find(t => String(t.id) === String(cr.other_team_id));
+  const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
+
+  cr.status = 'awaiting_other_coach';
+  cr.requested_at = new Date().toISOString();
+  list[idx] = cr;
+  writeChangeRequests(list);
+
+  if (gameIdx !== -1) {
+    schedData.games[gameIdx].status = 'pending';
+    try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
+  }
+
+  if (otherTeam?.email) {
+    const approveUrl = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}/approve?token=${cr.tokens.other_approve}`;
+    const rejectUrl  = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}/reject?token=${cr.tokens.other_reject}`;
+    await sendEmail({
+      to: otherTeam.email,
+      subject: `Change requested for Game #${cr.game_id} — your response needed`,
+      text: [
+        `${requestingTeam?.label || requestingTeam?.name || 'The other coach'} has requested a schedule change for Game #${cr.game_id}.`,
+        '',
+        `Reason: ${cr.reason}`,
+        cr.details ? `Details: ${cr.details}` : null,
+        cr.preferred_date ? `Preferred date: ${cr.preferred_date}` : null,
+        cr.preferred_time ? `Preferred time: ${cr.preferred_time}` : null,
+        '',
+        `Approve: ${approveUrl}`,
+        `Reject: ${rejectUrl}`,
+        '',
+        `Please respond within 2 days. If we don't hear from you, your director will be looped in to help move things along.`,
+        '', '— Eastlake Scheduler',
+      ].filter(l => l !== null).join('\n'),
+    });
+  }
+
+  res.send(crActionPage('Request sent', `Your change request for Game #${cr.game_id} has been sent to the other coach for approval.`));
+});
+
+app.get('/api/change-requests/:id/cancel', (req, res) => {
+  const list = readChangeRequests();
+  const idx = list.findIndex(c => c.id === req.params.id);
+  const cr = idx !== -1 ? list[idx] : null;
+  if (!cr || cr.status !== 'awaiting_requester_confirm' || cr.tokens.requester_cancel !== req.query.token) {
+    return crAlreadyResolved(res);
+  }
+  cr.status = 'cancelled';
+  list[idx] = cr;
+  writeChangeRequests(list);
+  res.send(crActionPage('Cancelled', `Your change request for Game #${cr.game_id} was cancelled. The schedule is unchanged.`));
+});
+
+// Applies a change request's preferred date/time/field to the actual game (only the
+// fields the requester specified — anything left blank keeps the game's current value).
+// Mirrors PUT /api/game/:id's apply logic (validate → recompute week/field/team names →
+// write schedule.json) but never hard-blocks on soft violations — the coaches have
+// already agreed via the approve/reject flow, so there's no "Save Anyway" step here.
+function applyChangeRequestToGame(cr, schedData, seasonData) {
+  const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
+  if (gameIdx === -1) return null;
+  const existingGame = schedData.games[gameIdx];
+
+  const date = cr.preferred_date || existingGame.date;
+  const time = cr.preferred_time || existingGame.time;
+  const field_id = cr.preferred_field_id || existingGame.field_id;
+
+  let newWeek = existingGame.week;
+  for (const wk of SEASON_WEEKS) {
+    if (wk.weekdays.includes(date) || wk.saturday === date) { newWeek = wk.week; break; }
+  }
+
+  const fieldObj = (seasonData.fields || []).find(f => f.id === field_id);
+  const resolvedFieldName    = fieldObj ? (fieldObj.sub_field ? `${fieldObj.name} – ${fieldObj.sub_field}` : (fieldObj.name || field_id)) : field_id;
+  const resolvedFieldAddress = fieldObj ? (fieldObj.address || '') : '';
+
+  const updatedGame = {
+    ...existingGame,
+    date, day: dayName(date), time, field_id,
+    field_name: resolvedFieldName, field_address: resolvedFieldAddress,
+    week: newWeek,
+    status: 'confirmed',
+  };
+  schedData.games[gameIdx] = updatedGame;
+  schedData.total_games = schedData.games.length;
+  schedData.generated_at = new Date().toISOString();
+  return updatedGame;
+}
+
+app.get('/api/change-requests/:id/approve', async (req, res) => {
+  const list = readChangeRequests();
+  const idx = list.findIndex(c => c.id === req.params.id);
+  const cr = idx !== -1 ? list[idx] : null;
+  if (!cr || cr.status !== 'awaiting_other_coach' || cr.tokens.other_approve !== req.query.token) {
+    return crAlreadyResolved(res);
+  }
+  let seasonData, schedData;
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [], fields: [] }; }
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
+
+  const updatedGame = applyChangeRequestToGame(cr, schedData, seasonData);
+  const backup = SCHEDULE_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  if (fs.existsSync(SCHEDULE_FILE)) fs.copyFileSync(SCHEDULE_FILE, backup);
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
+
+  cr.status = 'confirmed';
+  cr.responded_at = new Date().toISOString();
+  list[idx] = cr;
+  writeChangeRequests(list);
+
+  const teams = seasonData.teams || [];
+  const requestingTeam = teams.find(t => String(t.id) === String(cr.requesting_team_id));
+  if (requestingTeam?.email && updatedGame) {
+    await sendEmail({
+      to: requestingTeam.email,
+      subject: `Change approved — Game #${cr.game_id}`,
+      text: [
+        `Your change request for Game #${cr.game_id} was approved.`,
+        '', `New date: ${updatedGame.day} ${updatedGame.date}`, `New time: ${updatedGame.time}`, `Field: ${updatedGame.field_name}`,
+        '', '— Eastlake Scheduler',
+      ].join('\n'),
+    });
+  }
+
+  res.send(crActionPage('Change approved', `Game #${cr.game_id} has been updated. The requesting coach has been notified.`));
+});
+
+app.get('/api/change-requests/:id/reject', async (req, res) => {
+  const list = readChangeRequests();
+  const idx = list.findIndex(c => c.id === req.params.id);
+  const cr = idx !== -1 ? list[idx] : null;
+  if (!cr || cr.status !== 'awaiting_other_coach' || cr.tokens.other_reject !== req.query.token) {
+    return crAlreadyResolved(res);
+  }
+  cr.status = 'rejected';
+  cr.responded_at = new Date().toISOString();
+  list[idx] = cr;
+  writeChangeRequests(list);
+
+  let schedData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = null; }
+  if (schedData) {
+    const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
+    if (gameIdx !== -1) {
+      schedData.games[gameIdx].status = 'scheduled';
+      try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
+    }
+  }
+
+  let seasonData;
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [] }; }
+  const requestingTeam = (seasonData.teams || []).find(t => String(t.id) === String(cr.requesting_team_id));
+  if (requestingTeam?.email) {
+    await sendEmail({
+      to: requestingTeam.email,
+      subject: `Change declined — Game #${cr.game_id}`,
+      text: [
+        `Your change request for Game #${cr.game_id} was declined by the other coach.`,
+        `The game stays as originally scheduled.`,
+        '', '— Eastlake Scheduler',
+      ].join('\n'),
+    });
+  }
+
+  res.send(crActionPage('Change declined', `Game #${cr.game_id} stays as originally scheduled. The requesting coach has been notified.`));
+});
+
+// Inside-7-days changes skip the request/approve flow entirely — the two coaches
+// already agreed by phone/text, this just records it and applies the change.
+// Notifies the other coach and both teams' directors (not admin) — a director-owned
+// accountability record, not admin oversight, per NOTES.md.
+app.post('/api/change-requests/:game_id/manual-override', requireVerified, async (req, res) => {
+  const s = getSession(req);
+  const gameId = parseInt(req.params.game_id, 10);
+  const { team_id, date, time, field_id, who_spoke_to, how_connected } = req.body;
+  if (!who_spoke_to?.trim() || !how_connected?.trim()) {
+    return res.status(400).json({ error: 'who_spoke_to and how_connected are both required' });
+  }
+
+  let schedData, seasonData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read schedule.json' }); }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+
+  const game = schedData.games.find(g => g.game_id === gameId);
+  if (!game) return res.status(404).json({ error: 'Game not found' });
+
+  const teams = seasonData.teams || [];
+  const requestingTeamId = resolveRequestingTeam(s, game, team_id, teams);
+  if (!requestingTeamId) return res.status(403).json({ error: 'You can only override a change on your own game' });
+  const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
+  const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
+  const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));
+
+  const cr = {
+    id: 'cr-' + Date.now(),
+    game_id: gameId, division_id: game.division_id,
+    requesting_team_id: requestingTeamId, other_team_id: otherTeamId,
+    reason: 'Manual override', details: '', preferred_date: date || '', preferred_time: time || '', preferred_field_id: field_id || '',
+    status: 'confirmed',
+    submitted_at: new Date().toISOString(), requested_at: new Date().toISOString(), responded_at: new Date().toISOString(),
+    director_notified_at: null, admin_notified_at: null,
+    tokens: { requester_confirm: null, requester_cancel: null, other_approve: null, other_reject: null },
+    manual_override: { who: who_spoke_to.trim(), how: how_connected.trim(), submitted_by_team_id: requestingTeamId, at: new Date().toISOString() },
+  };
+
+  const updatedGame = applyChangeRequestToGame(cr, schedData, seasonData);
+  if (!updatedGame) return res.status(404).json({ error: 'Game not found' });
+  const backup = SCHEDULE_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SCHEDULE_FILE, backup);
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write schedule.json' }); }
+
+  const list = readChangeRequests();
+  list.push(cr);
+  writeChangeRequests(list);
+
+  const directors = (seasonData.directors || []).filter(d =>
+    d.active !== false && (d.program_id === requestingTeam?.program_id || d.program_id === otherTeam?.program_id)
+  );
+  const recipients = [otherTeam?.email, ...directors.map(d => d.email)].filter(Boolean);
+  const uniqueRecipients = [...new Set(recipients)];
+  if (uniqueRecipients.length) {
+    await sendEmail({
+      to: uniqueRecipients,
+      subject: `Game changed by manual override — Game #${gameId}`,
+      text: [
+        `${requestingTeam?.label || requestingTeam?.name || 'A coach'} changed Game #${gameId} directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`,
+        '',
+        `New date: ${updatedGame.day} ${updatedGame.date}`, `New time: ${updatedGame.time}`, `Field: ${updatedGame.field_name}`,
+        '',
+        `Confirmed with: ${cr.manual_override.who}`,
+        `How: ${cr.manual_override.how}`,
+        '', '— Eastlake Scheduler',
+      ].join('\n'),
+    });
+  }
+
+  res.json({ ok: true, game: updatedGame, change_request: cr });
 });
 
 // ── Missing coach info submission ─────────────────────────────────────────────
@@ -1538,6 +1887,96 @@ app.post('/api/import-schedule', requireAdmin, express.text({ type: '*/*', limit
   res.json({ ok: true, total_games: games.length, warnings });
 });
 
+// Bulk-finalizes the season's games (admin action, not automatic — NOTES.md:
+// "admin finalizes ... when the deadline hits"). Leaves any still-`pending`
+// game untouched so an in-flight change request isn't silently steamrolled;
+// reports those back so admin knows to resolve them first.
+app.get('/api/change-requests', requireAdmin, (req, res) => {
+  res.json(readChangeRequests());
+});
+
+app.post('/api/finalize-games', requireAdmin, (req, res) => {
+  let schedData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read schedule.json' }); }
+
+  let finalized = 0;
+  const skipped = [];
+  for (const g of schedData.games) {
+    const status = g.status || 'scheduled';
+    if (status === 'pending') { skipped.push(g.game_id); continue; }
+    g.status = 'finalized';
+    finalized++;
+  }
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write schedule.json' }); }
+
+  res.json({ ok: true, finalized, skipped_pending: skipped });
+});
+
 app.listen(PORT, () => {
   console.log(`Eastlake League Scheduler running at http://localhost:${PORT}`);
 });
+
+// ── Escalation timer ──────────────────────────────────────────────────────────
+// Purely additive notifications — never changes a request's status, so the other
+// coach's approve/reject links keep working throughout. Idempotent via the
+// *_notified_at flags, so a missed tick (server restart) just delays the next
+// email rather than duplicating or losing one.
+const ESCALATION_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+async function checkEscalations() {
+  const list = readChangeRequests();
+  let seasonData;
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { return; }
+  const teams = seasonData.teams || [];
+  const directors = seasonData.directors || [];
+  let changed = false;
+
+  for (const cr of list) {
+    if (cr.status !== 'awaiting_other_coach' || !cr.requested_at) continue;
+    const daysElapsed = daysBetween(cr.requested_at, new Date().toISOString());
+    const otherTeam = teams.find(t => String(t.id) === String(cr.other_team_id));
+    const requestingTeam = teams.find(t => String(t.id) === String(cr.requesting_team_id));
+
+    if (daysElapsed >= 3 && !cr.director_notified_at) {
+      const otherDirectors = directors.filter(d => d.active !== false && d.program_id === otherTeam?.program_id);
+      const emails = otherDirectors.map(d => d.email).filter(Boolean);
+      if (emails.length) {
+        await sendEmail({
+          to: emails,
+          subject: `Action needed: Game #${cr.game_id} change request unanswered`,
+          text: [
+            `${otherTeam?.label || otherTeam?.name || 'One of your coaches'} hasn't responded to a change request from ${requestingTeam?.label || requestingTeam?.name || 'another coach'} for Game #${cr.game_id} (requested ${daysElapsed} days ago).`,
+            `Could you help nudge them to approve or reject it?`,
+            '', '— Eastlake Scheduler',
+          ].join('\n'),
+        });
+      }
+      cr.director_notified_at = new Date().toISOString();
+      changed = true;
+    }
+
+    if (daysElapsed >= 5 && !cr.admin_notified_at) {
+      if (ADMIN_EMAIL) {
+        await sendEmail({
+          to: ADMIN_EMAIL,
+          subject: `Escalation: Game #${cr.game_id} change request still unanswered`,
+          text: [
+            `A change request for Game #${cr.game_id} has gone unanswered for ${daysElapsed} days (director was already notified).`,
+            `Requesting team: ${requestingTeam?.label || requestingTeam?.name}`,
+            `Other team: ${otherTeam?.label || otherTeam?.name}`,
+            `Reason: ${cr.reason}`,
+            '', '— Eastlake Scheduler',
+          ].join('\n'),
+        });
+      }
+      cr.admin_notified_at = new Date().toISOString();
+      changed = true;
+    }
+  }
+
+  if (changed) writeChangeRequests(list);
+}
+
+setInterval(() => { checkEscalations().catch(err => console.error('Escalation check failed:', err.message)); }, ESCALATION_CHECK_INTERVAL_MS);

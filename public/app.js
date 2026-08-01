@@ -20,11 +20,13 @@ document.querySelectorAll('.top-nav-btn').forEach(btn => {
     document.getElementById('page-teams').classList.toggle('hidden', currentPage !== 'teams');
     document.getElementById('page-editor').classList.toggle('hidden', currentPage !== 'editor');
     document.getElementById('page-changes').classList.toggle('hidden', currentPage !== 'changes');
+    document.getElementById('page-requests').classList.toggle('hidden', currentPage !== 'requests');
     document.getElementById('page-fields').classList.toggle('hidden', currentPage !== 'fields');
     document.getElementById('page-programs').classList.toggle('hidden', currentPage !== 'programs');
     if (currentPage === 'teams') renderTeamsPage();
     if (currentPage === 'editor') renderSeasonEditor();
     if (currentPage === 'changes') renderChangesPage();
+    if (currentPage === 'requests') renderRequestsPage();
     if (currentPage === 'fields') renderFieldsPage();
     if (currentPage === 'programs') renderProgramsPage();
   });
@@ -2338,6 +2340,64 @@ async function initVerifyBanner() {
     } catch { e.target.textContent = 'Network error — try again'; e.target.disabled = false; }
   });
 }
+
+// ── Change Requests (admin visibility) ────────────────────────────────────────
+
+async function renderRequestsPage() {
+  const container = document.getElementById('requests-content');
+  container.innerHTML = '<p style="padding:24px;color:#94a3b8">Loading…</p>';
+  let list;
+  try { list = await fetchJSON('api/change-requests'); }
+  catch (e) { container.innerHTML = `<p class="changes-empty">Error loading change requests: ${esc(e.message)}</p>`; return; }
+  if (!list.length) { container.innerHTML = '<p class="changes-empty">No change requests yet.</p>'; return; }
+
+  const teams = seasonData?.teams || [];
+  const teamName_ = id => (teams.find(t => String(t.id) === String(id))?.label) || (teams.find(t => String(t.id) === String(id))?.name) || id;
+  const statusBadge = st => {
+    const map = {
+      awaiting_requester_confirm: ['Awaiting requester', '#f1f5f9', '#475569'],
+      awaiting_other_coach:       ['Awaiting other coach', '#fef3c7', '#92400e'],
+      confirmed:                  ['Confirmed', '#dcfce7', '#166534'],
+      rejected:                   ['Rejected', '#fef2f2', '#991b1b'],
+      cancelled:                  ['Cancelled', '#f1f5f9', '#64748b'],
+    };
+    const [label, bg, fg] = map[st] || [st, '#f1f5f9', '#475569'];
+    return `<span style="background:${bg};color:${fg};border-radius:4px;padding:2px 8px;font-size:12px;font-weight:600">${esc(label)}</span>`;
+  };
+
+  const sorted = [...list].sort((a, b) => (b.submitted_at || '').localeCompare(a.submitted_at || ''));
+  container.innerHTML = `<table class="fields-table">
+    <thead><tr><th>Game</th><th>From</th><th>To</th><th>Reason</th><th>Status</th><th>Submitted</th><th>Escalation</th></tr></thead>
+    <tbody>
+    ${sorted.map(cr => {
+      const escalation = cr.manual_override
+        ? `Manual override — ${esc(cr.manual_override.who)} (${esc(cr.manual_override.how)})`
+        : [cr.director_notified_at ? 'Director notified' : null, cr.admin_notified_at ? 'Admin notified' : null].filter(Boolean).join(', ') || '—';
+      return `<tr>
+        <td>#${cr.game_id}</td>
+        <td>${esc(teamName_(cr.requesting_team_id))}</td>
+        <td>${esc(teamName_(cr.other_team_id))}</td>
+        <td>${esc(cr.reason)}</td>
+        <td>${statusBadge(cr.status)}</td>
+        <td>${cr.submitted_at ? new Date(cr.submitted_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}</td>
+        <td style="font-size:12px">${escalation}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table>`;
+}
+
+document.getElementById('btn-finalize').addEventListener('click', async () => {
+  if (!confirm('Finalize all Scheduled and Confirmed games? Games with a change request still in progress (Pending) are left alone.')) return;
+  try {
+    const res = await fetch('api/finalize-games', { method: 'POST' });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || 'Finalize failed.'); return; }
+    let msg = `Finalized ${data.finalized} game${data.finalized !== 1 ? 's' : ''}.`;
+    if (data.skipped_pending?.length) msg += ` ${data.skipped_pending.length} game(s) still pending a change request were left alone: #${data.skipped_pending.join(', #')}.`;
+    alert(msg);
+  } catch (e) { alert('Network error. Try again.'); }
+});
 
 initVerifyBanner();
 
