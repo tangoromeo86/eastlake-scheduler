@@ -85,6 +85,24 @@ function clearSession(res) {
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0`);
 }
 
+// ── Magic-link verification tokens (in-memory, short-lived) ──────────────────
+const VERIFY_TOKEN_TTL_MS = 15 * 60 * 1000;
+const verifyTokens = new Map(); // token -> { email, exp }
+
+function createVerifyToken(email) {
+  const token = crypto.randomBytes(24).toString('base64url');
+  verifyTokens.set(token, { email, exp: Date.now() + VERIFY_TOKEN_TTL_MS });
+  return token;
+}
+
+function redeemVerifyToken(token, email) {
+  const entry = verifyTokens.get(token);
+  if (!entry) return false;
+  verifyTokens.delete(token); // one-time use
+  if (entry.exp < Date.now()) return false;
+  return entry.email === email;
+}
+
 function requireAuth(req, res, next) {
   if (getSession(req)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not authenticated' });
@@ -98,14 +116,30 @@ function requireAdmin(req, res, next) {
   res.redirect(BASE_PATH + '/login');
 }
 
-// Look up a coach or director by email in season.json
+function requireDirector(req, res, next) {
+  const s = getSession(req);
+  if (s?.role === 'admin' || s?.role === 'director') return next();
+  if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Director access required' });
+  res.redirect(BASE_PATH + '/login');
+}
+
+// Verified = proved ownership of the email via magic link (or admin password).
+// Viewing only needs requireAuth; making a change needs requireVerified.
+function requireVerified(req, res, next) {
+  const s = getSession(req);
+  if (s?.verified) return next();
+  if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Please verify your email before making changes' });
+  res.redirect(BASE_PATH + '/login');
+}
+
+// Look up a director or coach by email in season.json
 function findByEmail(email) {
   try {
     const data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
+    const dir = (data.directors || []).find(d => (d.email || '').toLowerCase().trim() === email && d.active !== false);
+    if (dir) return { role: 'director', name: dir.name || 'Director', phone: dir.phone || '', program_id: dir.program_id || null };
     const team = (data.teams || []).find(t => (t.email || '').toLowerCase().trim() === email);
     if (team) return { role: 'coach', name: team.coach || team.label || 'Coach', team_id: team.id, phone: team.phone || '' };
-    const dir = (data.directors || []).find(d => (d.email || '').toLowerCase().trim() === email);
-    if (dir) return { role: 'coach', name: dir.name || 'Director', phone: dir.phone || '' };
   } catch {}
   return null;
 }
@@ -288,14 +322,44 @@ app.post('/api/auth/login', (req, res) => {
 
   if (ADMIN_EMAIL && email === ADMIN_EMAIL) {
     if (password !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Incorrect password' });
-    setSession(res, { email, role: 'admin', name: 'Admin' });
+    // Password already proves identity — no separate verify step needed.
+    setSession(res, { email, role: 'admin', name: 'Admin', verified: true });
     return res.json({ ok: true, redirect: BASE_PATH + (next === 'admin' ? '/admin' : '/') });
   }
 
   const match = findByEmail(email);
   if (!match) return res.status(401).json({ error: 'Email not recognized' });
-  setSession(res, { email, role: match.role, name: match.name, phone: match.phone || '', team_id: match.team_id || null });
+  // Email-only login grants view access. Making changes requires verifying via magic link.
+  setSession(res, { email, role: match.role, name: match.name, phone: match.phone || '', team_id: match.team_id || null, program_id: match.program_id || null, verified: false });
   return res.json({ ok: true, redirect: BASE_PATH + '/' });
+});
+
+// Request a magic-link email to upgrade the current session to "verified" (can make changes)
+app.post('/api/auth/request-verify', requireAuth, async (req, res) => {
+  const s = getSession(req);
+  if (s.verified) return res.json({ ok: true, alreadyVerified: true });
+  const token = createVerifyToken(s.email);
+  const next = (req.body && req.body.next) || '';
+  const verifyUrl = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/auth/verify?token=${token}${next ? `&next=${encodeURIComponent(next)}` : ''}`;
+  const result = await sendEmail({
+    to: s.email,
+    subject: 'Verify your email — Eastlake League Scheduler',
+    text: `Hi ${s.name},\n\nClick the link below to verify your email so you can make schedule changes:\n\n${verifyUrl}\n\nThis link expires in 15 minutes and can only be used once.\n\n— Eastlake Scheduler`,
+  });
+  if (!result.ok) return res.status(500).json({ error: 'Could not send verification email', reason: result.reason });
+  res.json({ ok: true });
+});
+
+// Redeem a magic link — upgrades the current session to verified:true
+app.get('/api/auth/verify', (req, res) => {
+  const s = getSession(req);
+  const token = req.query.token || '';
+  if (!s) return res.redirect(BASE_PATH + '/login');
+  if (!token || !redeemVerifyToken(token, s.email)) {
+    return res.status(400).send('This verification link is invalid or has expired. Please request a new one.');
+  }
+  setSession(res, { ...s, verified: true });
+  res.redirect(BASE_PATH + (req.query.next || '/'));
 });
 
 // Return current session info (null if not logged in)
@@ -308,6 +372,8 @@ app.get('/api/auth/me', (req, res) => {
     role:       s.role,
     phone:      s.phone || '',
     team_id:    s.team_id || null,
+    program_id: s.program_id || null,
+    verified:   !!s.verified,
     request_to: ADMIN_EMAIL,  // only exposed to authenticated users
   });
 });
@@ -879,7 +945,7 @@ app.patch('/api/division/:id', requireAdmin, (req, res) => {
 
 // ── Change request email (coach-initiated) ────────────────────────────────────
 
-app.post('/api/change-request', requireAuth, (req, res) => {
+app.post('/api/change-request', requireVerified, (req, res) => {
   const s = getSession(req);
   const { game_id, reason, details, preferred_date, preferred_time, preferred_field } = req.body;
   if (!game_id || !reason) return res.status(400).json({ error: 'game_id and reason required' });
@@ -904,7 +970,7 @@ app.post('/api/change-request', requireAuth, (req, res) => {
 
 // ── Missing coach info submission ─────────────────────────────────────────────
 
-app.post('/api/missing-info', requireAuth, (req, res) => {
+app.post('/api/missing-info', requireVerified, (req, res) => {
   const s = getSession(req);
   const { team_name, division_name, coach, email, phone } = req.body;
   if (!team_name) return res.status(400).json({ error: 'team_name required' });
@@ -1022,6 +1088,133 @@ app.delete('/api/season/fields/:id', requireAdmin, (req, res) => {
   const before = (data.fields || []).length;
   data.fields = (data.fields || []).filter(f => String(f.id) !== req.params.id);
   if (data.fields.length === before) return res.status(404).json({ error: 'Field not found' });
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true });
+});
+
+// ── Program CRUD (admin) ────────────────────────────────────────────────────────
+
+app.post('/api/season/programs', requireAdmin, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Program name is required' });
+  const p = { id: 'program-' + Date.now(), name: name.trim(), created_at: new Date().toISOString() };
+  data.programs = [...(data.programs || []), p];
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true, program: p });
+});
+
+app.put('/api/season/programs/:id', requireAdmin, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const idx = (data.programs || []).findIndex(p => String(p.id) === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Program not found' });
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Program name is required' });
+  data.programs[idx] = { ...data.programs[idx], name: name.trim() };
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true, program: data.programs[idx] });
+});
+
+app.delete('/api/season/programs/:id', requireAdmin, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const inUse = (data.directors || []).some(d => d.program_id === req.params.id);
+  if (inUse) return res.status(400).json({ error: 'Cannot delete a program with directors assigned to it' });
+  const before = (data.programs || []).length;
+  data.programs = (data.programs || []).filter(p => String(p.id) !== req.params.id);
+  if (data.programs.length === before) return res.status(404).json({ error: 'Program not found' });
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true });
+});
+
+// ── Director CRUD (admin) ───────────────────────────────────────────────────────
+
+app.post('/api/season/directors', requireAdmin, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const { name, email, phone, program_id } = req.body;
+  const cleanEmail = (email || '').toLowerCase().trim();
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Director name is required' });
+  if (!cleanEmail) return res.status(400).json({ error: 'Director email is required' });
+  if (!program_id || !(data.programs || []).some(p => String(p.id) === String(program_id))) {
+    return res.status(400).json({ error: 'A valid program_id is required' });
+  }
+  if ((data.directors || []).some(d => (d.email || '').toLowerCase().trim() === cleanEmail)) {
+    return res.status(400).json({ error: 'A director with that email already exists' });
+  }
+  const d = {
+    id: 'director-' + Date.now(),
+    name: name.trim(),
+    email: cleanEmail,
+    phone: (phone || '').trim(),
+    program_id,
+    active: true,
+    created_at: new Date().toISOString(),
+  };
+  data.directors = [...(data.directors || []), d];
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true, director: d });
+});
+
+app.put('/api/season/directors/:id', requireAdmin, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const idx = (data.directors || []).findIndex(d => String(d.id) === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Director not found' });
+  const { name, email, phone, program_id, active } = req.body;
+  const cleanEmail = (email || '').toLowerCase().trim();
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Director name is required' });
+  if (!cleanEmail) return res.status(400).json({ error: 'Director email is required' });
+  if (!program_id || !(data.programs || []).some(p => String(p.id) === String(program_id))) {
+    return res.status(400).json({ error: 'A valid program_id is required' });
+  }
+  if ((data.directors || []).some((d, i) => i !== idx && (d.email || '').toLowerCase().trim() === cleanEmail)) {
+    return res.status(400).json({ error: 'A director with that email already exists' });
+  }
+  data.directors[idx] = {
+    ...data.directors[idx],
+    name: name.trim(),
+    email: cleanEmail,
+    phone: (phone || '').trim(),
+    program_id,
+    active: active !== false,
+  };
+  const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
+  fs.copyFileSync(SEASON_FILE, backup);
+  try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  res.json({ ok: true, director: data.directors[idx] });
+});
+
+app.delete('/api/season/directors/:id', requireAdmin, (req, res) => {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
+  const before = (data.directors || []).length;
+  data.directors = (data.directors || []).filter(d => String(d.id) !== req.params.id);
+  if (data.directors.length === before) return res.status(404).json({ error: 'Director not found' });
   const backup = SEASON_FILE.replace('.json', `.backup-${Date.now()}.json`);
   fs.copyFileSync(SEASON_FILE, backup);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }

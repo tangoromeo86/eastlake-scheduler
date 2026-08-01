@@ -29,6 +29,7 @@
     <button class="top-nav-btn" data-page="editor">&#9998; Editor</button>
     <button class="top-nav-btn" data-page="changes" id="nav-changes">&#128221; Changes</button>
     <button class="top-nav-btn" data-page="fields">&#127967; Fields</button>
+    <button class="top-nav-btn" data-page="programs">&#127961; Programs</button>
   </nav>
 
   <input type="file" id="season-file-input" accept=".json,application/json" style="display:none">
@@ -206,6 +207,51 @@
       </div>
     </div>
     <div id="fields-list"></div>
+  </div>
+
+  <div id="page-programs" class="page-section hidden">
+    <div class="changes-toolbar">
+      <span class="changes-toolbar-title">&#127961; City Programs</span>
+      <button id="btn-add-program" class="btn btn-primary">+ Add Program</button>
+    </div>
+    <div id="program-editor-form" class="field-editor-form hidden">
+      <div class="field-form-inner">
+        <h3 id="program-form-title">Add Program</h3>
+        <div class="field-form-row">
+          <label>City / Program Name *<input id="pfe-name" type="text" placeholder="e.g. Chardon"></label>
+        </div>
+        <div class="field-form-actions">
+          <button id="pfe-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="pfe-save" class="btn btn-primary">Save Program</button>
+        </div>
+        <div id="pfe-error" class="field-form-error hidden"></div>
+      </div>
+    </div>
+    <div id="programs-list"></div>
+
+    <div class="changes-toolbar" style="margin-top:32px">
+      <span class="changes-toolbar-title">&#128100; Directors</span>
+      <button id="btn-add-director" class="btn btn-primary">+ Add Director</button>
+    </div>
+    <div id="director-editor-form" class="field-editor-form hidden">
+      <div class="field-form-inner">
+        <h3 id="director-form-title">Add Director</h3>
+        <div class="field-form-row">
+          <label>Name *<input id="dfe-name" type="text" placeholder="e.g. Jane Smith"></label>
+          <label>Program *<select id="dfe-program"></select></label>
+        </div>
+        <div class="field-form-row">
+          <label>Email *<input id="dfe-email" type="email" placeholder="jane@example.com"></label>
+          <label>Phone<input id="dfe-phone" type="text" placeholder="(555) 555-5555"></label>
+        </div>
+        <div class="field-form-actions">
+          <button id="dfe-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="dfe-save" class="btn btn-primary">Save Director</button>
+        </div>
+        <div id="dfe-error" class="field-form-error hidden"></div>
+      </div>
+    </div>
+    <div id="directors-list"></div>
   </div>
 
   <!-- Game Edit Modal -->

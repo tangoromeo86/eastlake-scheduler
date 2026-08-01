@@ -31,6 +31,7 @@ async function init() {
   (scheduleData.games || []).forEach(g => { gamesById[g.game_id] = g; });
 
   updateHeader();
+  initVerifyBanner();
   renderSeasonBar(seasonData);
 
   if ((scheduleData.games || []).length) {
@@ -82,6 +83,31 @@ function updateHeader() {
   ['matrix','stats'].forEach(v => {
     const btn = document.querySelector(`.vbar-btn[data-view="${v}"]`);
     if (btn) btn.classList.toggle('hidden', !isAdmin);
+  });
+}
+
+// ── Verify-email banner (view vs. act) ───────────────────────────────────────────
+function initVerifyBanner() {
+  if (!session || session.verified) return;
+
+  const banner = document.createElement('div');
+  banner.id = 'verify-banner';
+  banner.style.cssText = 'background:#fef3c7;border-bottom:1px solid #f59e0b;color:#92400e;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px;justify-content:center';
+  banner.innerHTML = `<span>Verify your email to make schedule changes.</span>
+    <button id="verify-banner-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">Send verification link</button>`;
+  document.body.prepend(banner);
+
+  document.getElementById('verify-banner-btn').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'Sending…';
+    try {
+      const res = await fetch('api/auth/request-verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ next: location.pathname }),
+      });
+      const data = await res.json();
+      e.target.textContent = data.ok ? 'Check your email!' : (data.error || 'Failed — try again');
+    } catch { e.target.textContent = 'Network error — try again'; e.target.disabled = false; }
   });
 }
 

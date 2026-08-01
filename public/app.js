@@ -21,10 +21,12 @@ document.querySelectorAll('.top-nav-btn').forEach(btn => {
     document.getElementById('page-editor').classList.toggle('hidden', currentPage !== 'editor');
     document.getElementById('page-changes').classList.toggle('hidden', currentPage !== 'changes');
     document.getElementById('page-fields').classList.toggle('hidden', currentPage !== 'fields');
+    document.getElementById('page-programs').classList.toggle('hidden', currentPage !== 'programs');
     if (currentPage === 'teams') renderTeamsPage();
     if (currentPage === 'editor') renderSeasonEditor();
     if (currentPage === 'changes') renderChangesPage();
     if (currentPage === 'fields') renderFieldsPage();
+    if (currentPage === 'programs') renderProgramsPage();
   });
 });
 
@@ -2077,5 +2079,233 @@ async function deleteField(fieldId, fieldName) {
     renderFieldsPage();
   } catch (e) { alert('Network error. Try again.'); }
 }
+
+// ── Programs & Directors ────────────────────────────────────────────────────────
+
+let editingProgramId = null;
+let editingDirectorId = null;
+
+function renderProgramsPage() {
+  renderProgramsList();
+  renderDirectorsList();
+  populateDirectorProgramSelect();
+}
+
+function renderProgramsList() {
+  const programs = [...(seasonData?.programs || [])].sort((a, b) => a.name.localeCompare(b.name));
+  const directors = seasonData?.directors || [];
+  const list = document.getElementById('programs-list');
+
+  if (!programs.length) {
+    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No programs defined. Add one above.</p>';
+    return;
+  }
+
+  const dirCount = {};
+  directors.forEach(d => { dirCount[d.program_id] = (dirCount[d.program_id] || 0) + 1; });
+
+  list.innerHTML = `<table class="fields-table">
+    <thead><tr><th>Program</th><th>Directors</th><th></th></tr></thead>
+    <tbody>
+    ${programs.map(p => `<tr>
+        <td><strong>${esc(p.name)}</strong></td>
+        <td>${dirCount[p.id] ? `<span class="field-used-badge">${dirCount[p.id]} director${dirCount[p.id] !== 1 ? 's' : ''}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
+        <td><div class="field-row-actions">
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openProgramEdit('${String(p.id)}')">Edit</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteProgram('${String(p.id)}','${esc(p.name)}')">Delete</button>
+        </div></td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+function openProgramAdd() {
+  editingProgramId = null;
+  document.getElementById('program-form-title').textContent = 'Add Program';
+  document.getElementById('pfe-name').value = '';
+  document.getElementById('pfe-error').classList.add('hidden');
+  document.getElementById('program-editor-form').classList.remove('hidden');
+  document.getElementById('pfe-name').focus();
+}
+
+function openProgramEdit(programId) {
+  const program = (seasonData?.programs || []).find(p => String(p.id) === programId);
+  if (!program) return;
+  editingProgramId = programId;
+  document.getElementById('program-form-title').textContent = 'Edit Program';
+  document.getElementById('pfe-name').value = program.name || '';
+  document.getElementById('pfe-error').classList.add('hidden');
+  document.getElementById('program-editor-form').classList.remove('hidden');
+  document.getElementById('pfe-name').focus();
+}
+
+document.getElementById('btn-add-program').addEventListener('click', openProgramAdd);
+
+document.getElementById('pfe-cancel').addEventListener('click', () => {
+  document.getElementById('program-editor-form').classList.add('hidden');
+});
+
+document.getElementById('pfe-save').addEventListener('click', async () => {
+  const errEl = document.getElementById('pfe-error');
+  errEl.classList.add('hidden');
+  const body = { name: document.getElementById('pfe-name').value.trim() };
+  if (!body.name) { errEl.textContent = 'Program name is required.'; errEl.classList.remove('hidden'); return; }
+  const url    = editingProgramId ? `api/season/programs/${editingProgramId}` : 'api/season/programs';
+  const method = editingProgramId ? 'PUT' : 'POST';
+  try {
+    const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
+    seasonData = await fetchJSON('api/season');
+    document.getElementById('program-editor-form').classList.add('hidden');
+    renderProgramsPage();
+  } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
+});
+
+async function deleteProgram(programId, programName) {
+  if (!confirm(`Delete program "${programName}"? This cannot be undone.`)) return;
+  try {
+    const res  = await fetch(`api/season/programs/${programId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    seasonData = await fetchJSON('api/season');
+    renderProgramsPage();
+  } catch (e) { alert('Network error. Try again.'); }
+}
+
+function populateDirectorProgramSelect() {
+  const sel = document.getElementById('dfe-program');
+  const programs = [...(seasonData?.programs || [])].sort((a, b) => a.name.localeCompare(b.name));
+  const current = sel.value;
+  sel.innerHTML = programs.map(p => `<option value="${String(p.id)}">${esc(p.name)}</option>`).join('');
+  if (current) sel.value = current;
+}
+
+function renderDirectorsList() {
+  const directors = [...(seasonData?.directors || [])].sort((a, b) => a.name.localeCompare(b.name));
+  const programs = seasonData?.programs || [];
+  const programName = id => programs.find(p => String(p.id) === String(id))?.name || '—';
+  const list = document.getElementById('directors-list');
+
+  if (!directors.length) {
+    list.innerHTML = '<p style="color:#94a3b8;padding:24px">No directors defined. Add one above.</p>';
+    return;
+  }
+
+  list.innerHTML = `<table class="fields-table">
+    <thead><tr><th>Name</th><th>Program</th><th>Email</th><th>Phone</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    ${directors.map(d => `<tr>
+        <td><strong>${esc(d.name)}</strong></td>
+        <td>${esc(programName(d.program_id))}</td>
+        <td>${esc(d.email)}</td>
+        <td>${esc(d.phone || '—')}</td>
+        <td>${d.active === false ? '<span style="color:#dc2626">Inactive</span>' : '<span style="color:#16a34a">Active</span>'}</td>
+        <td><div class="field-row-actions">
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="openDirectorEdit('${String(d.id)}')">Edit</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;color:#dc2626" onclick="deleteDirector('${String(d.id)}','${esc(d.name)}')">Delete</button>
+        </div></td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+function openDirectorAdd() {
+  if (!(seasonData?.programs || []).length) { alert('Add a program first.'); return; }
+  editingDirectorId = null;
+  document.getElementById('director-form-title').textContent = 'Add Director';
+  document.getElementById('dfe-name').value = '';
+  document.getElementById('dfe-email').value = '';
+  document.getElementById('dfe-phone').value = '';
+  populateDirectorProgramSelect();
+  document.getElementById('dfe-error').classList.add('hidden');
+  document.getElementById('director-editor-form').classList.remove('hidden');
+  document.getElementById('dfe-name').focus();
+}
+
+function openDirectorEdit(directorId) {
+  const director = (seasonData?.directors || []).find(d => String(d.id) === directorId);
+  if (!director) return;
+  editingDirectorId = directorId;
+  document.getElementById('director-form-title').textContent = 'Edit Director';
+  document.getElementById('dfe-name').value = director.name || '';
+  document.getElementById('dfe-email').value = director.email || '';
+  document.getElementById('dfe-phone').value = director.phone || '';
+  populateDirectorProgramSelect();
+  document.getElementById('dfe-program').value = String(director.program_id || '');
+  document.getElementById('dfe-error').classList.add('hidden');
+  document.getElementById('director-editor-form').classList.remove('hidden');
+  document.getElementById('dfe-name').focus();
+}
+
+document.getElementById('btn-add-director').addEventListener('click', openDirectorAdd);
+
+document.getElementById('dfe-cancel').addEventListener('click', () => {
+  document.getElementById('director-editor-form').classList.add('hidden');
+});
+
+document.getElementById('dfe-save').addEventListener('click', async () => {
+  const errEl = document.getElementById('dfe-error');
+  errEl.classList.add('hidden');
+  const body = {
+    name:       document.getElementById('dfe-name').value.trim(),
+    email:      document.getElementById('dfe-email').value.trim(),
+    phone:      document.getElementById('dfe-phone').value.trim(),
+    program_id: document.getElementById('dfe-program').value,
+  };
+  if (!body.name)  { errEl.textContent = 'Director name is required.'; errEl.classList.remove('hidden'); return; }
+  if (!body.email) { errEl.textContent = 'Director email is required.'; errEl.classList.remove('hidden'); return; }
+  const url    = editingDirectorId ? `api/season/directors/${editingDirectorId}` : 'api/season/directors';
+  const method = editingDirectorId ? 'PUT' : 'POST';
+  try {
+    const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
+    seasonData = await fetchJSON('api/season');
+    document.getElementById('director-editor-form').classList.add('hidden');
+    renderProgramsPage();
+  } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
+});
+
+async function deleteDirector(directorId, directorName) {
+  if (!confirm(`Delete director "${directorName}"? This cannot be undone.`)) return;
+  try {
+    const res  = await fetch(`api/season/directors/${directorId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || 'Delete failed.'); return; }
+    seasonData = await fetchJSON('api/season');
+    renderProgramsPage();
+  } catch (e) { alert('Network error. Try again.'); }
+}
+
+// ── Verify-email banner (view vs. act) ───────────────────────────────────────────
+
+async function initVerifyBanner() {
+  let session;
+  try { session = await fetchJSON('api/auth/me'); } catch { return; }
+  if (!session || session.verified) return;
+
+  const banner = document.createElement('div');
+  banner.id = 'verify-banner';
+  banner.style.cssText = 'background:#fef3c7;border-bottom:1px solid #f59e0b;color:#92400e;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px;justify-content:center';
+  banner.innerHTML = `<span>Verify your email to make schedule changes.</span>
+    <button id="verify-banner-btn" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">Send verification link</button>`;
+  document.body.prepend(banner);
+
+  document.getElementById('verify-banner-btn').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'Sending…';
+    try {
+      const res = await fetch('api/auth/request-verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ next: location.pathname }),
+      });
+      const data = await res.json();
+      e.target.textContent = data.ok ? 'Check your email!' : (data.error || 'Failed — try again');
+    } catch { e.target.textContent = 'Network error — try again'; e.target.disabled = false; }
+  });
+}
+
+initVerifyBanner();
 
 init();
