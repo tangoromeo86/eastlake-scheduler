@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node test/validate.test.js"
+    "test": "node test/validate.test.js && node test/scheduler.test.js",
+    "test:ui": "node test/browser.test.js"
   },
   "dependencies": {
     "express": "^4.18.2",

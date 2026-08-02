@@ -1325,9 +1325,13 @@ input.has-error:focus, select.has-error:focus {
 /* Larger tap targets on touch devices — the 7px-padded buttons were under the
    44px minimum, which matters on the coach pages. */
 @media (pointer: coarse) {
-  .btn { padding: 11px 18px; }
-  .btn-sm { padding: 8px 13px; }
+  .btn { padding: 11px 18px; min-height: 44px; }
+  /* Row-action buttons (Edit/Delete) measured 30px on an iPhone — well under the
+     44px guideline, and they sit in dense table rows where a mis-tap on Delete
+     is the expensive mistake. */
+  .btn-sm { padding: 9px 14px; min-height: 40px; }
   input, select { padding: 11px; font-size: 16px; } /* 16px stops iOS zooming on focus */
+  .row-actions { gap: 8px; }
 }
 
 /* ── Cards and tables ────────────────────────────────────────────────────── */
@@ -1418,3 +1422,24 @@ input.has-error:focus, select.has-error:focus {
 }
 .team-card-table th { color: var(--ink-3); font-weight: 600; font-size: 12px; }
 .team-card-table tr:last-child td { border-bottom: none; }
+
+/* ── Typed confirmation ──────────────────────────────────────────────────────
+   Seen on a phone, the prompt and the input label were saying the same thing
+   twice and the label wrapped over three lines. The message carries the
+   instruction; the input just takes the word. */
+.confirm-msg { font-size: 14.5px; color: var(--ink-2); line-height: 1.55; }
+.confirm-row { margin: 16px 0 12px; }
+.confirm-row input {
+  font-size: 16px;
+  letter-spacing: .02em;
+}
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.confirm-actions .btn { flex: 1; justify-content: center; }
+@media (min-width: 560px) {
+  .confirm-actions { justify-content: flex-end; }
+  .confirm-actions .btn { flex: 0 0 auto; }
+}

@@ -50,18 +50,21 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closePanel()
 // easy to click through.
 function confirmTyped(title, message, word) {
   return new Promise(resolve => {
+    // The message already names the word, so the input carries no second copy of
+    // the instruction — seen side by side on a phone it read as a stutter.
     openPanel(title, `
-      <p style="font-size:14px;color:#475569;line-height:1.55">${message}</p>
-      <div class="field-form-row" style="margin-top:14px">
-        <label>Type <strong>${uiEsc(word)}</strong> to confirm
-          <input id="ui-confirm-input" type="text" autocomplete="off"></label>
-      </div>
-      <div class="field-form-actions">
-        <button class="btn btn-secondary" id="ui-confirm-no">Cancel</button>
-        <button class="btn btn-danger" id="ui-confirm-yes">Confirm</button>
+      <p class="confirm-msg">${message}</p>
+      <div class="confirm-row">
+        <input id="ui-confirm-input" type="text" autocomplete="off"
+               autocapitalize="none" autocorrect="off" spellcheck="false"
+               aria-label="Type ${uiEsc(word)} to confirm" placeholder="${uiEsc(word)}">
       </div>
       <div id="ui-confirm-err" class="notice notice-bad" style="display:none">
-        That didn't match — nothing has been changed.</div>`);
+        That didn't match — nothing has been changed.</div>
+      <div class="confirm-actions">
+        <button class="btn btn-secondary" id="ui-confirm-no">Cancel</button>
+        <button class="btn btn-danger" id="ui-confirm-yes">Confirm</button>
+      </div>`);
     const done = (v) => { closePanel(); resolve(v); };
     document.getElementById('ui-confirm-no').onclick = () => done(false);
     document.getElementById('ui-confirm-yes').onclick = () => {
@@ -69,7 +72,15 @@ function confirmTyped(title, message, word) {
       if (typed === String(word).toLowerCase()) return done(true);
       document.getElementById('ui-confirm-err').style.display = '';
     };
-    setTimeout(() => document.getElementById('ui-confirm-input')?.focus(), 50);
+    const input = document.getElementById('ui-confirm-input');
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); document.getElementById('ui-confirm-yes').click(); }
+    });
+    // Clear the mismatch warning as soon as they start correcting it.
+    input.addEventListener('input', () => {
+      document.getElementById('ui-confirm-err').style.display = 'none';
+    });
+    setTimeout(() => input.focus(), 50);
   });
 }
 
