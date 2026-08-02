@@ -7,7 +7,9 @@
     "start": "node server.js",
     "dev": "node server.js",
     "test": "node test/validate.test.js && node test/scheduler.test.js",
-    "test:ui": "node test/browser.test.js"
+    "test:ui": "node test/browser.test.js",
+    "test:e2e": "bash test/e2e.sh",
+    "test:all": "npm test && npm run test:e2e && npm run test:ui"
   },
   "dependencies": {
     "express": "^4.18.2",
