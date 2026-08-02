@@ -849,11 +849,11 @@ function renderMissingInfoForm(sent) {
     </div>
     <div class="modal-field">
       <label>Email${miTeam.email ? '' : ' <span style="color:#ea580c">*</span>'}</label>
-      <input type="text" id="mi-email" value="${esc(miTeam.email || '')}" placeholder="coach@example.com">
+      <input type="email" inputmode="email" autocomplete="email" spellcheck="false" id="mi-email" value="${esc(miTeam.email || '')}" placeholder="coach@example.com">
     </div>
     <div class="modal-field">
       <label>Phone${miTeam.phone ? '' : ' <span style="color:#ea580c">*</span>'}</label>
-      <input type="text" id="mi-phone" value="${esc(miTeam.phone || '')}" placeholder="(555) 555-5555">
+      <input type="tel" inputmode="tel" autocomplete="tel" id="mi-phone" value="${esc(miTeam.phone || '')}" placeholder="(555) 555-5555">
     </div>
     <div id="mi-error" style="color:#dc2626;font-size:12px;margin-bottom:10px;display:none"></div>
     <div class="modal-actions">

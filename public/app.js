@@ -1569,10 +1569,10 @@ function buildTeamEditorRow(team, fieldOptions) {
           <input type="text" id="ef-coach-${id}" value="${esc(team.coach || '')}">
         </label>
         <label class="editor-label">Phone
-          <input type="text" id="ef-phone-${id}" value="${esc(team.phone || '')}">
+          <input type="tel" inputmode="tel" autocomplete="tel" id="ef-phone-${id}" value="${esc(team.phone || '')}">
         </label>
         <label class="editor-label">Email
-          <input type="text" id="ef-email-${id}" value="${esc(team.email || '')}">
+          <input type="email" inputmode="email" autocomplete="email" spellcheck="false" id="ef-email-${id}" value="${esc(team.email || '')}">
         </label>
         <label class="editor-label">Home Field
           <select id="ef-field-${id}">

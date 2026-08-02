@@ -98,8 +98,8 @@ async function loadChangeSlots(gameId) {
       return;
     }
     box.innerHTML = data.slots.map((s, i) => `
-      <label class="cr-slot" style="display:block;background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin:6px 0;cursor:pointer;font-size:14px">
-        <input type="radio" name="cr-slot" value="${i}" style="margin-right:10px">${esc(crSlotLabel(s))}
+      <label class="cr-slot">
+        <input type="radio" name="cr-slot" value="${i}">${esc(crSlotLabel(s))}
       </label>`).join('');
     box.querySelectorAll('input[name="cr-slot"]').forEach(r => {
       r.addEventListener('change', () => {
@@ -269,11 +269,21 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     target_games:  document.getElementById('mte-target').value || undefined,
     availability:  readAvailabilityGrid('mte-availability'),
   };
-  if (!body.label) { errEl.textContent = 'Team name is required.'; errEl.classList.remove('hidden'); return; }
+  clearFieldErrors('mte-form');
+  if (!validateForm([
+    { id: 'mte-label',  label: 'Team name',       required: true },
+    { id: 'mte-coach',  label: 'Coach name',      required: false },
+    { id: 'mte-email',  label: 'Coach email',     required: true,  type: 'email' },
+    { id: 'mte-phone',  label: 'Coach phone',     required: false, type: 'phone' },
+    { id: 'mte-target', label: 'Games this season', required: false, type: 'int', min: 1, max: 20 },
+  ])) return;
   try {
     const res  = await fetch(`api/teams/${myTeam.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json();
-    if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
+    if (!data.ok) {
+      if (!applyServerError(data)) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); }
+      return;
+    }
     myTeam = data.team;
     document.getElementById('team-title').textContent = myTeam.label || 'My Team';
     renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots);

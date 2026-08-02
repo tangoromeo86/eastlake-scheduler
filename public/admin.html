@@ -209,7 +209,7 @@
           <label style="flex:1">Notes <span class="field-form-hint">(parking, entrance, directions)</span><input id="ffe-notes" type="text" placeholder="e.g. Field is behind the school, park in rear lot"></label>
         </div>
         <div class="field-form-row">
-          <label>Coordinates <span class="field-form-hint">(paste from Google Maps, e.g. 41.535017, -81.461610)</span><input id="ffe-coords" type="text" placeholder="41.535017, -81.461610"></label>
+          <label>Coordinates <span class="field-form-hint">(paste from Google Maps, e.g. 41.535017, -81.461610)</span><input id="ffe-coords" inputmode="decimal" autocomplete="off" spellcheck="false" type="text" placeholder="41.535017, -81.461610"></label>
         </div>
         <div class="field-form-actions">
           <button id="ffe-cancel" class="btn btn-secondary">Cancel</button>
@@ -253,8 +253,8 @@
           <label>Program *<select id="dfe-program"></select></label>
         </div>
         <div class="field-form-row">
-          <label>Email *<input id="dfe-email" type="email" placeholder="jane@example.com"></label>
-          <label>Phone<input id="dfe-phone" type="text" placeholder="(555) 555-5555"></label>
+          <label>Email *<input id="dfe-email" type="email" inputmode="email" autocomplete="email" spellcheck="false" placeholder="jane@example.com"></label>
+          <label>Phone<input id="dfe-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 555-5555"></label>
         </div>
         <div class="field-form-actions">
           <button id="dfe-cancel" class="btn btn-secondary">Cancel</button>

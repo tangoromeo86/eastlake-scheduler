@@ -4,6 +4,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const V = require('./lib/validate');
 const { Resend } = require('resend');
 const { scheduleAll, validateGameEdit, dayName, teamName,
         resolveTeamAvailability, resolveFieldAvailability, nearestSaturdaySlot,
@@ -263,6 +264,46 @@ function findByEmail(email) {
     if (team) return { role: 'coach', name: team.coach || team.label || 'Coach', team_id: team.id, phone: team.phone || '' };
   } catch {}
   return null;
+}
+
+
+// ── Referential integrity ────────────────────────────────────────────────────
+// Teams and fields used to delete unconditionally, leaving the schedule holding
+// ids that no longer resolve — games rendering as blank teams, and stats
+// silently wrong. These report what is blocking so the user can act on it.
+
+function readScheduleSafe() {
+  try { return JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { return null; }
+}
+function readChangeRequestsSafe() {
+  try { return JSON.parse(fs.readFileSync(CHANGE_REQUESTS_FILE, 'utf8')); } catch { return []; }
+}
+function openRequestsFor(pred) {
+  const list = readChangeRequestsSafe();
+  const arr = Array.isArray(list) ? list : (list.requests || []);
+  return arr.filter(r => !['approved', 'applied', 'cancelled', 'rejected'].includes(r.status) && pred(r));
+}
+
+// Returns an array of human-readable blockers ([] means safe to delete).
+function teamDeleteBlockers(teamId, seasonData) {
+  const blockers = [];
+  const sched = readScheduleSafe();
+  const games = (sched?.games || []).filter(g =>
+    String(g.home_team_id) === String(teamId) || String(g.away_team_id) === String(teamId));
+  if (games.length) blockers.push(`${games.length} scheduled game${games.length === 1 ? '' : 's'}`);
+  const reqs = openRequestsFor(r => String(r.team_id) === String(teamId));
+  if (reqs.length) blockers.push(`${reqs.length} open change request${reqs.length === 1 ? '' : 's'}`);
+  return blockers;
+}
+
+function fieldDeleteBlockers(fieldId, seasonData) {
+  const blockers = [];
+  const sched = readScheduleSafe();
+  const games = (sched?.games || []).filter(g => String(g.field_id) === String(fieldId));
+  if (games.length) blockers.push(`${games.length} scheduled game${games.length === 1 ? '' : 's'}`);
+  const homeTo = (seasonData.teams || []).filter(t => String(t.home_field_id) === String(fieldId));
+  if (homeTo.length) blockers.push(`${homeTo.length} team${homeTo.length === 1 ? '' : 's'} using it as a home field`);
+  return blockers;
 }
 
 // ── Login page HTML ───────────────────────────────────────────────────────────
@@ -1778,14 +1819,17 @@ app.post('/api/season/fields', requireDirector, requireVerified, (req, res) => {
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
   const s = getSession(req);
   const { name, sub_field, address, notes, coordinates, program_id, availability } = req.body;
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Venue name is required' });
+  const vName = V.validateName(name, { label: 'Venue name' });
+  if (!vName.ok) return res.status(400).json({ error: vName.error, field: 'name' });
+  const vCoords = V.validateCoordinates(coordinates);
+  if (!vCoords.ok) return res.status(400).json({ error: vCoords.error, field: 'coordinates' });
   // Directors can only create fields for their own program; admin may set any program_id (or none, for a shared field).
   const fieldProgramId = s.role === 'director' ? s.program_id : (program_id || null);
-  const f = { id: 'field-' + Date.now(), name: name.trim(), address: (address || '').trim() };
+  const f = { id: 'field-' + Date.now(), name: vName.value, address: (address || '').trim() };
   if (fieldProgramId) f.program_id = fieldProgramId;
   if (sub_field?.trim()) f.sub_field = sub_field.trim();
   if (notes?.trim()) f.notes = notes.trim();
-  if (coordinates?.trim()) f.coordinates = coordinates.replace(/\s/g, '');
+  if (vCoords.value) f.coordinates = vCoords.value;
   if (availability && typeof availability === 'object') f.availability = availability;
   data.fields = [...(data.fields || []), f];
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
@@ -1802,11 +1846,14 @@ app.put('/api/season/fields/:id', requireDirector, requireVerified, (req, res) =
   if (idx === -1) return res.status(404).json({ error: 'Field not found' });
   if (!canManageProgram(s, data.fields[idx].program_id)) return res.status(403).json({ error: 'You can only edit fields in your own program' });
   const { name, sub_field, address, notes, coordinates, availability } = req.body;
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Venue name is required' });
-  const updated = { ...data.fields[idx], name: name.trim(), address: (address || '').trim() };
+  const vName = V.validateName(name, { label: 'Venue name' });
+  if (!vName.ok) return res.status(400).json({ error: vName.error, field: 'name' });
+  const vCoords = V.validateCoordinates(coordinates);
+  if (!vCoords.ok) return res.status(400).json({ error: vCoords.error, field: 'coordinates' });
+  const updated = { ...data.fields[idx], name: vName.value, address: (address || '').trim() };
   if (sub_field?.trim()) updated.sub_field = sub_field.trim(); else delete updated.sub_field;
   if (notes?.trim()) updated.notes = notes.trim(); else delete updated.notes;
-  if (coordinates?.trim()) updated.coordinates = coordinates.replace(/\s/g, ''); else delete updated.coordinates;
+  if (vCoords.value) updated.coordinates = vCoords.value; else delete updated.coordinates;
   if (availability && typeof availability === 'object') updated.availability = availability;
   delete updated.weekend_venue; delete updated.weekend_address;
   data.fields[idx] = updated;
@@ -1840,6 +1887,13 @@ app.delete('/api/season/fields/:id', requireDirector, requireVerified, (req, res
   const existing = (data.fields || []).find(f => String(f.id) === req.params.id);
   if (!existing) return res.status(404).json({ error: 'Field not found' });
   if (!canManageProgram(s, existing.program_id)) return res.status(403).json({ error: 'You can only delete fields in your own program' });
+  const blockers = fieldDeleteBlockers(existing.id, data);
+  if (blockers.length && req.query.force !== 'true') {
+    return res.status(409).json({
+      error: `"${existing.name}" still has ${blockers.join(' and ')}. Reassign those first, or the schedule will reference a venue that no longer exists.`,
+      blockers, can_force: true,
+    });
+  }
   const before = (data.fields || []).length;
   data.fields = (data.fields || []).filter(f => String(f.id) !== req.params.id);
   if (data.fields.length === before) return res.status(404).json({ error: 'Field not found' });
@@ -1858,9 +1912,31 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
   const s = getSession(req);
   const { label, coach, email, phone, division_id, home_field_id, program_id, target_games } = req.body;
-  if (!label || !label.trim()) return res.status(400).json({ error: 'Team name is required' });
+  const vLabel = V.validateName(label, { label: 'Team name' });
+  if (!vLabel.ok) return res.status(400).json({ error: vLabel.error, field: 'label' });
+  const vCoach = V.validateName(coach, { label: 'Coach name', required: false });
+  if (!vCoach.ok) return res.status(400).json({ error: vCoach.error, field: 'coach' });
+  // Optional: directors routinely register a team before the coach is confirmed.
+  // The team is flagged as having no contact until one is added.
+  const vEmail = V.validateEmail(email, { required: false, label: 'Coach email' });
+  if (!vEmail.ok) return res.status(400).json({ error: vEmail.error, field: 'email' });
+  const vPhone = V.validatePhone(phone, { label: 'Coach phone' });
+  const vTarget = V.validateTargetGames(target_games);
+  if (!vTarget.ok) return res.status(400).json({ error: vTarget.error, field: 'target_games' });
   if (!division_id || !(data.divisions || []).some(d => String(d.id) === String(division_id))) {
-    return res.status(400).json({ error: 'A valid division_id is required' });
+    return res.status(400).json({ error: 'A valid division_id is required', field: 'division_id' });
+  }
+  // Email is the login, and findByEmail takes the first match — so a duplicate
+  // would leave the second team permanently unreachable by its own coach.
+  const dupTeam = vEmail.value && (data.teams || []).find(t => (t.email || '').toLowerCase().trim() === vEmail.value);
+  if (dupTeam) {
+    return res.status(400).json({ field: 'email',
+      error: `${vEmail.value} is already the contact for "${dupTeam.label}". Each team needs its own email, because the address is how that coach signs in. For someone coaching two teams, a plus-address like name+u10@gmail.com works and still reaches the same inbox.` });
+  }
+  const dupDir = vEmail.value && (data.directors || []).find(d => (d.email || '').toLowerCase().trim() === vEmail.value);
+  if (dupDir) {
+    return res.status(400).json({ field: 'email',
+      error: `${vEmail.value} is already registered as a director. Use a different address for the coach — a director signing in with this address lands on the director page, not the team page.` });
   }
   const teamProgramId = s.role === 'director' ? s.program_id : (program_id || null);
   if (!canManageProgram(s, teamProgramId)) return res.status(403).json({ error: 'You can only add teams to your own program' });
@@ -1873,15 +1949,15 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
   }
   const t = {
     id: 'team-' + Date.now(),
-    label: label.trim(),
-    coach: (coach || '').trim(),
-    email: (email || '').toLowerCase().trim(),
-    phone: (phone || '').trim(),
+    label: vLabel.value,
+    coach: vCoach.value,
+    email: vEmail.value,
+    phone: vPhone.value,
     division_id,
     home_field_id: home_field_id || null,
     program_id: teamProgramId,
     confirmed: true,
-    ...(target_games ? { target_games: Math.max(1, Math.min(20, Number(target_games) || 0)) } : {}),
+    ...(vTarget.value !== undefined ? { target_games: vTarget.value } : {}),
   };
   data.teams = [...(data.teams || []), t];
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
@@ -1901,9 +1977,15 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   const { label, coach, email, phone, home_field_id, availability, target_games } = req.body;
   // Coaches can't move their own team to a different division — only a director/admin can.
   const division_id = s.role === 'coach' ? existing.division_id : req.body.division_id;
-  if (!label || !label.trim()) return res.status(400).json({ error: 'Team name is required' });
+  const vLabel = V.validateName(label, { label: 'Team name' });
+  if (!vLabel.ok) return res.status(400).json({ error: vLabel.error, field: 'label' });
+  const vCoach = V.validateName(coach, { label: 'Coach name', required: false });
+  if (!vCoach.ok) return res.status(400).json({ error: vCoach.error, field: 'coach' });
+  const vPhone = V.validatePhone(phone, { label: 'Coach phone' });
+  const vTarget = V.validateTargetGames(target_games);
+  if (!vTarget.ok) return res.status(400).json({ error: vTarget.error, field: 'target_games' });
   if (!division_id || !(data.divisions || []).some(d => String(d.id) === String(division_id))) {
-    return res.status(400).json({ error: 'A valid division_id is required' });
+    return res.status(400).json({ error: 'A valid division_id is required', field: 'division_id' });
   }
   const teamProgramId = existing.program_id;
   if (home_field_id) {
@@ -1914,20 +1996,37 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
     }
   }
 
-  const newEmail = (email || '').toLowerCase().trim();
-  const emailChanged = newEmail && newEmail !== existing.email;
+  // Only validate the email when it's actually changing, so a team saved with a
+  // legacy-format address on file isn't blocked from editing anything else.
+  const rawEmail = V.cleanEmail(email);
+  const emailChanged = rawEmail && rawEmail !== existing.email;
+  let newEmail = rawEmail;
+  if (emailChanged) {
+    const vEmail = V.validateEmail(email, { required: true, label: 'Coach email' });
+    if (!vEmail.ok) return res.status(400).json({ error: vEmail.error, field: 'email' });
+    newEmail = vEmail.value;
+    const dupTeam = (data.teams || []).find(t =>
+      String(t.id) !== String(existing.id) && (t.email || '').toLowerCase().trim() === newEmail);
+    if (dupTeam) {
+      return res.status(400).json({ field: 'email',
+        error: `${newEmail} is already the contact for "${dupTeam.label}". Each team needs its own email, because the address is how that coach signs in.` });
+    }
+    const dupDir = (data.directors || []).find(d => (d.email || '').toLowerCase().trim() === newEmail);
+    if (dupDir) {
+      return res.status(400).json({ field: 'email',
+        error: `${newEmail} is already registered as a director. Use a different address for the coach.` });
+    }
+  }
 
   data.teams[idx] = {
     ...existing,
-    label: label.trim(),
-    coach: (coach || '').trim(),
-    phone: (phone || '').trim(),
+    label: vLabel.value,
+    coach: vCoach.value,
+    phone: vPhone.value,
     division_id,
     home_field_id: home_field_id || null,
     ...(availability && typeof availability === 'object' ? { availability } : {}),
-    ...(target_games !== undefined
-        ? { target_games: Math.max(1, Math.min(20, Number(target_games) || 0)) || undefined }
-        : {}),
+    ...(target_games !== undefined ? { target_games: vTarget.value } : {}),
     // email is intentionally left as-is here — see confirm-email flow below
   };
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
@@ -1967,6 +2066,13 @@ app.delete('/api/teams/:id', requireDirector, requireVerified, (req, res) => {
   const existing = (data.teams || []).find(t => String(t.id) === req.params.id);
   if (!existing) return res.status(404).json({ error: 'Team not found' });
   if (!canManageProgram(s, existing.program_id)) return res.status(403).json({ error: 'You can only delete teams in your own program' });
+  const blockers = teamDeleteBlockers(existing.id, data);
+  if (blockers.length && req.query.force !== 'true') {
+    return res.status(409).json({
+      error: `"${existing.label}" still has ${blockers.join(' and ')}. Deleting it now would leave games pointing at a team that no longer exists.`,
+      blockers, can_force: true,
+    });
+  }
   data.teams = (data.teams || []).filter(t => String(t.id) !== req.params.id);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
@@ -2033,20 +2139,28 @@ app.post('/api/season/directors', requireAdmin, (req, res) => {
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
   const { name, email, phone, program_id } = req.body;
-  const cleanEmail = (email || '').toLowerCase().trim();
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Director name is required' });
-  if (!cleanEmail) return res.status(400).json({ error: 'Director email is required' });
+  const vName = V.validateName(name, { label: 'Director name' });
+  if (!vName.ok) return res.status(400).json({ error: vName.error, field: 'name' });
+  const vEmail = V.validateEmail(email, { required: true, label: 'Director email' });
+  if (!vEmail.ok) return res.status(400).json({ error: vEmail.error, field: 'email' });
+  const vPhone = V.validatePhone(phone, { label: 'Director phone' });
+  const cleanEmail = vEmail.value;
   if (!program_id || !(data.programs || []).some(p => String(p.id) === String(program_id))) {
-    return res.status(400).json({ error: 'A valid program_id is required' });
+    return res.status(400).json({ error: 'A valid program_id is required', field: 'program_id' });
   }
   if ((data.directors || []).some(d => (d.email || '').toLowerCase().trim() === cleanEmail)) {
-    return res.status(400).json({ error: 'A director with that email already exists' });
+    return res.status(400).json({ error: 'A director with that email already exists', field: 'email' });
+  }
+  const clashTeam = (data.teams || []).find(t => (t.email || '').toLowerCase().trim() === cleanEmail);
+  if (clashTeam) {
+    return res.status(400).json({ field: 'email',
+      error: `${cleanEmail} is already the coach contact for "${clashTeam.label}". One address can't be both — signing in would only ever reach the director page.` });
   }
   const d = {
     id: 'director-' + Date.now(),
-    name: name.trim(),
+    name: vName.value,
     email: cleanEmail,
-    phone: (phone || '').trim(),
+    phone: vPhone.value,
     program_id,
     active: true,
     created_at: new Date().toISOString(),

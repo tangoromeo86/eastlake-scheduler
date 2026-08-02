@@ -116,8 +116,8 @@ async function loadChangeSlots(gameId) {
       return;
     }
     box.innerHTML = data.slots.map((s, i) => `
-      <label class="cr-slot" style="display:block;background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin:6px 0;cursor:pointer;font-size:14px">
-        <input type="radio" name="cr-slot" value="${i}" style="margin-right:10px">${esc(crSlotLabel(s))}
+      <label class="cr-slot">
+        <input type="radio" name="cr-slot" value="${i}">${esc(crSlotLabel(s))}
       </label>`).join('');
     box.querySelectorAll('input[name="cr-slot"]').forEach(r => {
       r.addEventListener('change', () => {
@@ -298,16 +298,30 @@ function renderTeamsList() {
     return;
   }
 
-  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
+  // A team with no email has no coach who can sign in, set availability, or be
+  // reached about a change — it is registered but inert. Worth saying plainly.
+  const noEmail = teams.filter(t => !(t.email || '').trim());
+  const noField = teams.filter(t => !t.home_field_id);
+  const noAvail = teams.filter(t => !t.availability || !Object.keys(t.availability).length);
+  const gaps = [];
+  if (noEmail.length) gaps.push(`${noEmail.length} without a coach email — that coach can't sign in or be contacted about changes`);
+  if (noField.length) gaps.push(`${noField.length} without a home field`);
+  if (noAvail.length) gaps.push(`${noAvail.length} with no availability set — they'll be scheduled on the default pattern`);
+  const banner = gaps.length
+    ? `<div class="notice notice-warn section-gap"><strong>Before the schedule runs:</strong><ul style="margin:6px 0 0 18px">${
+        gaps.map(g => `<li>${esc(g)}</li>`).join('')}</ul></div>`
+    : `<div class="notice notice-good section-gap">All ${teams.length} teams have a coach, a home field and availability set.</div>`;
+
+  list.innerHTML = banner + `<div class="table-wrap"><table class="fields-table">
     <thead><tr><th>Team</th><th>Division</th><th>Coach</th><th>Email</th><th>Phone</th><th>Home Field</th><th></th></tr></thead>
     <tbody>
     ${teams.map(t => `<tr>
         <td><strong>${esc(teamLabel(t))}</strong></td>
         <td>${esc(divName(t.division_id))}</td>
         <td>${esc(t.coach || '—')}</td>
-        <td>${esc(t.email || '—')}</td>
+        <td>${t.email ? esc(t.email) : '<span class="pill pill-wait">no email</span>'}</td>
         <td>${esc(t.phone || '—')}</td>
-        <td>${esc(fieldName(t.home_field_id))}</td>
+        <td>${t.home_field_id ? esc(fieldName(t.home_field_id)) : '<span class="pill pill-wait">not set</span>'}</td>
         <td><div class="row-actions">
           <button class="btn btn-secondary btn-sm" onclick="openTeamEdit('${String(t.id)}')">Edit</button>
           <button class="btn btn-secondary btn-sm danger-text" onclick="deleteTeam('${String(t.id)}','${esc(teamLabel(t))}')">Delete</button>
@@ -372,13 +386,23 @@ document.getElementById('tfe-save').addEventListener('click', async () => {
     target_games:  document.getElementById('tfe-target').value || undefined,
     availability:  readAvailabilityGrid('tfe-availability'),
   };
-  if (!body.label) { errEl.textContent = 'Team name is required.'; errEl.classList.remove('hidden'); return; }
+  clearFieldErrors('team-editor-form');
+  if (!validateForm([
+    { id: 'tfe-label',  label: 'Team name',        required: true },
+    { id: 'tfe-coach',  label: 'Coach name',       required: false },
+    { id: 'tfe-email',  label: 'Coach email',      required: false, type: 'email' },
+    { id: 'tfe-phone',  label: 'Coach phone',      required: false, type: 'phone' },
+    { id: 'tfe-target', label: 'Games this season', required: false, type: 'int', min: 1, max: 20 },
+  ])) return;
   const url    = editingTeamId ? `api/teams/${editingTeamId}` : 'api/teams';
   const method = editingTeamId ? 'PUT' : 'POST';
   try {
     const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json();
-    if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
+    if (!data.ok) {
+      if (!applyServerError(data)) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); }
+      return;
+    }
     seasonData = await fetchJSON('api/season');
     document.getElementById('team-editor-form').classList.add('hidden');
     renderTeamsList();
@@ -392,13 +416,8 @@ document.getElementById('tfe-save').addEventListener('click', async () => {
 });
 
 async function deleteTeam(teamId, teamName) {
-  const ok = await confirmTyped('Delete team',
-    `This removes <strong>${esc(teamName)}</strong> and cannot be undone. Any games already scheduled for them will need regenerating.`, 'delete');
-  if (!ok) return;
   try {
-    const res  = await fetch(`api/teams/${teamId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!data.ok) { toast(data.error || 'Delete failed.', 'bad'); return; }
+    if (!await deleteWithBlockers(`api/teams/${teamId}`, teamName, 'delete')) return;
     seasonData = await fetchJSON('api/season');
     renderTeamsList();
     populateFieldSelect();
@@ -485,13 +504,20 @@ document.getElementById('ffe-save').addEventListener('click', async () => {
     coordinates: document.getElementById('ffe-coords').value.trim(),
     availability: readFieldAvailabilityGrid('ffe-availability'),
   };
-  if (!body.name) { errEl.textContent = 'Venue name is required.'; errEl.classList.remove('hidden'); return; }
+  clearFieldErrors('field-editor-form');
+  if (!validateForm([
+    { id: 'ffe-name',   label: 'Venue name',  required: true },
+    { id: 'ffe-coords', label: 'Coordinates', required: false, type: 'coords' },
+  ])) return;
   const url    = editingFieldId ? `api/season/fields/${editingFieldId}` : 'api/season/fields';
   const method = editingFieldId ? 'PUT' : 'POST';
   try {
     const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json();
-    if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
+    if (!data.ok) {
+      if (!applyServerError(data)) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); }
+      return;
+    }
     seasonData = await fetchJSON('api/season');
     document.getElementById('field-editor-form').classList.add('hidden');
     renderFieldsList();
@@ -500,13 +526,8 @@ document.getElementById('ffe-save').addEventListener('click', async () => {
 });
 
 async function deleteField(fieldId, fieldName) {
-  const ok = await confirmTyped('Delete field',
-    `This removes <strong>${esc(fieldName)}</strong> and cannot be undone. Teams using it as their home field will need a new one.`, 'delete');
-  if (!ok) return;
   try {
-    const res  = await fetch(`api/season/fields/${fieldId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!data.ok) { toast(data.error || 'Delete failed.', 'bad'); return; }
+    if (!await deleteWithBlockers(`api/season/fields/${fieldId}`, fieldName, 'delete')) return;
     seasonData = await fetchJSON('api/season');
     renderFieldsList();
     populateFieldSelect();

@@ -20,7 +20,7 @@
     <div id="pending-email-note" class="field-form-error hidden" style="background:#fef3c7;border-color:#f59e0b;color:#92400e"></div>
 
     <div class="field-editor-form">
-      <div class="field-form-inner">
+      <div class="field-form-inner" id="mte-form">
         <div class="field-form-row">
           <label>Team Name *<input id="mte-label" type="text" placeholder="e.g. Wildcats U10"></label>
         </div>
@@ -29,8 +29,8 @@
           <label>Home Field<select id="mte-field"><option value="">— None yet —</option></select></label>
         </div>
         <div class="field-form-row">
-          <label>Coach Email<input id="mte-email" type="email" placeholder="jane@example.com"></label>
-          <label>Coach Phone<input id="mte-phone" type="text" placeholder="(555) 555-5555"></label>
+          <label>Coach Email<input id="mte-email" type="email" inputmode="email" autocomplete="email" spellcheck="false" placeholder="jane@example.com"></label>
+          <label>Coach Phone<input id="mte-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 555-5555"></label>
           <label>Games this season <span class="field-form-hint">(blank = league default)</span><input id="mte-target" type="number" min="1" max="20"></label>
         </div>
         <h3 style="margin-top:20px">Weekly Availability</h3>
@@ -40,7 +40,7 @@
           <button id="mte-save" class="btn btn-primary">Save Changes</button>
         </div>
         <div id="mte-error" class="field-form-error hidden"></div>
-        <div id="mte-success" class="field-form-error hidden" style="background:#dcfce7;border-color:#16a34a;color:#166534"></div>
+        <div id="mte-success" class="field-form-ok hidden"></div>
       </div>
     </div>
 

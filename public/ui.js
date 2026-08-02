@@ -135,3 +135,132 @@ async function showGameHistory(gameId) {
   }
   openPanel(`Game #${gameId}`, html);
 }
+
+// ── Form validation ─────────────────────────────────────────────────────────
+// Mirrors lib/validate.js so obvious mistakes are caught before a round-trip,
+// and pins the message to the field that caused it. The server still validates
+// everything — this is for speed of feedback, not security.
+
+const UI_EMAIL_RE = /^[^\s@,;<>()[\]\\]+@[^\s@,;<>()[\]\\]+\.[a-z]{2,}$/i;
+
+// Attaches (or clears) an error message directly under one input.
+function fieldError(inputId, message) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const label = input.closest('label') || input.parentElement;
+  let note = label.querySelector('.field-err');
+  if (!message) {
+    input.classList.remove('has-error');
+    input.removeAttribute('aria-invalid');
+    if (note) note.remove();
+    return;
+  }
+  input.classList.add('has-error');
+  input.setAttribute('aria-invalid', 'true');
+  if (!note) {
+    note = document.createElement('div');
+    note.className = 'field-err';
+    label.appendChild(note);
+  }
+  note.textContent = message;
+}
+
+// Non-blocking advisory shown under a field.
+function fieldNote(inputId, message) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const label = input.closest('label') || input.parentElement;
+  let note = label.querySelector('.field-note');
+  if (!message) { if (note) note.remove(); return; }
+  if (!note) {
+    note = document.createElement('div');
+    note.className = 'field-note';
+    label.appendChild(note);
+  }
+  note.textContent = message;
+}
+
+function clearFieldErrors(scopeEl) {
+  const root = typeof scopeEl === 'string' ? document.getElementById(scopeEl) : (scopeEl || document);
+  if (!root) return;
+  root.querySelectorAll('.field-err, .field-note').forEach(n => n.remove());
+  root.querySelectorAll('.has-error').forEach(n => {
+    n.classList.remove('has-error');
+    n.removeAttribute('aria-invalid');
+  });
+}
+
+// Puts a server error on its field when the response names one, so the user
+// isn't left scanning a long form for what went wrong.
+function applyServerError(data, fallbackEl) {
+  if (data && data.field && document.getElementById(data.field)) {
+    fieldError(data.field, data.error);
+    document.getElementById(data.field).focus();
+    return true;
+  }
+  return false;
+}
+
+// Client-side checks. Returns true if everything passed.
+// spec: [{ id, label, required, type: 'email'|'phone'|'coords'|'int'|'text', min, max }]
+function validateForm(spec) {
+  let firstBad = null;
+  for (const f of spec) {
+    const el = document.getElementById(f.id);
+    if (!el) continue;
+    fieldError(f.id, null);
+    const raw = (el.value || '').trim();
+    let err = null;
+
+    if (!raw) {
+      if (f.required) err = `${f.label} is required.`;
+    } else if (f.type === 'email' && !UI_EMAIL_RE.test(raw)) {
+      err = `That doesn't look like an email address — check for a missing @ or a typo in the domain.`;
+    } else if (f.type === 'phone') {
+      // Advisory only. Phone formats vary too much to block a save over, but a
+      // short number is worth flagging since it's the fallback contact inside
+      // 7 days of a game.
+      const digits = raw.replace(/\D/g, '');
+      if (digits.length < 10) fieldNote(f.id, `This looks short for a phone number — worth double-checking.`);
+    } else if (f.type === 'coords') {
+      const m = raw.replace(/\s+/g, '').match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/);
+      const url = /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/.test(raw);
+      if (!m && !url) {
+        err = `Should look like "41.535017, -81.461610" — right-click the spot in Google Maps and click the numbers to copy them.`;
+      }
+    } else if (f.type === 'int') {
+      const n = Number(raw);
+      if (!Number.isInteger(n)) err = `${f.label} must be a whole number.`;
+      else if (f.min != null && n < f.min) err = `${f.label} must be at least ${f.min}.`;
+      else if (f.max != null && n > f.max) err = `${f.label} can be at most ${f.max}.`;
+    }
+
+    if (err) { fieldError(f.id, err); if (!firstBad) firstBad = el; }
+  }
+  if (firstBad) {
+    firstBad.focus();
+    firstBad.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    return false;
+  }
+  return true;
+}
+
+// Delete helper for the routes that now 409 with a list of blockers rather than
+// silently orphaning schedule rows.
+async function deleteWithBlockers(url, name, word) {
+  if (!await confirmTyped(`Delete ${name}?`,
+      `This can't be undone. Type <strong>${word}</strong> below to confirm.`, word)) return false;
+  let res = await fetch(url, { method: 'DELETE' });
+  let data = await res.json().catch(() => ({}));
+  if (res.status === 409 && data.can_force) {
+    const ok = await confirmTyped('Still in use — delete anyway?',
+      `${uiEsc(data.error)}<br><br>You can force this, but you should expect to re-run the scheduler afterwards. Type <strong>force</strong> to go ahead.`,
+      'force');
+    if (!ok) return false;
+    res = await fetch(url + (url.includes('?') ? '&' : '?') + 'force=true', { method: 'DELETE' });
+    data = await res.json().catch(() => ({}));
+  }
+  if (!res.ok || !data.ok) { toast(data.error || 'Delete failed.', 'bad'); return false; }
+  toast(`${name} deleted.`);
+  return true;
+}
