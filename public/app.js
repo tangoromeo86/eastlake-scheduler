@@ -1618,6 +1618,9 @@ function buildTeamEditorRow(team, fieldOptions) {
             ${fieldOptions}
           </select>
         </label>
+        <label class="editor-label">First available day <span class="editor-hint">blank = whole season</span>
+          <input type="date" id="ef-earliest-${id}" value="${esc(team.earliest_date || '')}">
+        </label>
       </div>
       <div class="editor-form-bottom">
         <label class="editor-label editor-label-wide">Blackout Dates <span class="editor-hint">one per line, YYYY-MM-DD</span>
@@ -1679,6 +1682,7 @@ async function saveTeamForm(teamId) {
   const email      = document.getElementById(`ef-email-${teamId}`)?.value.trim();
   const home_field_id = document.getElementById(`ef-field-${teamId}`)?.value;
   const confirmed  = document.getElementById(`ef-confirmed-${teamId}`)?.checked;
+  const earliest_date = document.getElementById(`ef-earliest-${teamId}`)?.value || '';
   const blackoutRaw = document.getElementById(`ef-blackouts-${teamId}`)?.value || '';
   const blackout_dates = blackoutRaw.split('\n').map(s => s.trim()).filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
 
@@ -1686,7 +1690,7 @@ async function saveTeamForm(teamId) {
     const res = await fetch(`api/team/${teamId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label, coach, phone, email, home_field_id, confirmed, blackout_dates }),
+      body: JSON.stringify({ label, coach, phone, email, home_field_id, confirmed, earliest_date, blackout_dates }),
     });
     const data = await res.json();
     if (!res.ok) {

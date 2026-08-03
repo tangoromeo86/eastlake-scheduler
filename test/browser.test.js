@@ -374,6 +374,40 @@ async function loginAs(page, email, password) {
       ? ok('availability is collapsed by default when adding a team')
       : bad('availability was expanded on Add', `open=${addOpenState}`);
 
+    // Unlike availability, the season-start-date field is a director decision
+    // made up front — it must be immediately visible, not tucked behind the
+    // same disclosure.
+    const earliestVisible = await dpage.locator('#tfe-earliest').isVisible().catch(() => false);
+    earliestVisible
+      ? ok('first-available-day field is visible immediately on Add, not collapsed')
+      : bad('first-available-day field is hidden on Add', '');
+
+    // Round trip: set it on create, confirm it's still there on re-edit.
+    await dpage.fill('#tfe-label', 'Late Start Team');
+    await dpage.fill('#tfe-earliest', '2026-10-05');
+    const [createRes] = await Promise.all([
+      dpage.waitForResponse(r => r.url().includes('/api/teams') && r.request().method() === 'POST', { timeout: 5000 }).catch(() => null),
+      dpage.click('#tfe-save'),
+    ]);
+    await dpage.waitForTimeout(400);
+    if (createRes && createRes.ok()) {
+      await dpage.goto(`${BASE}/director`, { waitUntil: 'networkidle' });
+      await dpage.waitForTimeout(300);
+      const lateEditBtn = dpage.locator('tr:has-text("Late Start Team") button:has-text("Edit")').first();
+      if (await lateEditBtn.count()) {
+        await lateEditBtn.click();
+        await dpage.waitForTimeout(250);
+        const roundTripped = await dpage.locator('#tfe-earliest').inputValue();
+        roundTripped === '2026-10-05'
+          ? ok('first-available-day value round-trips through save and re-edit')
+          : bad('first-available-day did not round-trip', `got "${roundTripped}"`);
+      } else {
+        bad('could not find the newly created team to verify round-trip', '');
+      }
+    } else {
+      bad('creating the round-trip test team failed', createRes ? `status ${createRes.status()}` : 'no response');
+    }
+
     await dpage.locator('#team-editor-form #tfe-cancel').click();
     await dpage.waitForTimeout(200);
     const editBtn = dpage.locator('button:has-text("Edit")').first();

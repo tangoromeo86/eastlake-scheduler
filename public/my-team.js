@@ -46,6 +46,7 @@ async function init() {
   document.getElementById('mte-email').value = myTeam.email || '';
   document.getElementById('mte-phone').value = myTeam.phone || '';
   document.getElementById('mte-target').value = myTeam.target_games || '';
+  document.getElementById('mte-earliest').value = myTeam.earliest_date || '';
   populateFieldSelect();
   renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots);
 
@@ -304,6 +305,7 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     phone:         document.getElementById('mte-phone').value.trim(),
     home_field_id: document.getElementById('mte-field').value || null,
     target_games:  document.getElementById('mte-target').value || undefined,
+    earliest_date: document.getElementById('mte-earliest').value || undefined,
     availability:  readAvailabilityGrid('mte-availability'),
   };
   clearFieldErrors('mte-form');

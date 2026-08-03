@@ -1184,7 +1184,11 @@ app.patch('/api/team/:id', requireAdmin, async (req, res) => {
   const team = { ...seasonData.teams[teamIdx] };
   // `email` is deliberately absent — it goes through the confirm-at-new-address
   // flow below rather than being written directly, same as every other route.
-  const allowed = ['label', 'name', 'coach', 'phone', 'home_field_id', 'confirmed', 'blackout_dates', 'program_id', 'availability', 'target_games'];
+  if ('earliest_date' in req.body) {
+    const vEarliest = V.validateEarliestDate(req.body.earliest_date);
+    if (!vEarliest.ok) return res.status(400).json({ error: vEarliest.error, field: 'earliest_date' });
+  }
+  const allowed = ['label', 'name', 'coach', 'phone', 'home_field_id', 'confirmed', 'blackout_dates', 'program_id', 'availability', 'target_games', 'earliest_date'];
   for (const field of allowed) {
     if (!(field in req.body)) continue;
     team[field] = req.body[field];
@@ -2038,7 +2042,7 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
   const s = getSession(req);
-  const { label, coach, email, phone, division_id, home_field_id, program_id, target_games } = req.body;
+  const { label, coach, email, phone, division_id, home_field_id, program_id, target_games, earliest_date } = req.body;
   const vLabel = V.validateName(label, { label: 'Team name' });
   if (!vLabel.ok) return res.status(400).json({ error: vLabel.error, field: 'label' });
   const vCoach = V.validateName(coach, { label: 'Coach name', required: false });
@@ -2050,6 +2054,8 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
   const vPhone = V.validatePhone(phone, { label: 'Coach phone' });
   const vTarget = V.validateTargetGames(target_games);
   if (!vTarget.ok) return res.status(400).json({ error: vTarget.error, field: 'target_games' });
+  const vEarliest = V.validateEarliestDate(earliest_date);
+  if (!vEarliest.ok) return res.status(400).json({ error: vEarliest.error, field: 'earliest_date' });
   if (!division_id || !(data.divisions || []).some(d => String(d.id) === String(division_id))) {
     return res.status(400).json({ error: 'A valid division_id is required', field: 'division_id' });
   }
@@ -2085,6 +2091,7 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
     program_id: teamProgramId,
     confirmed: true,
     ...(vTarget.value !== undefined ? { target_games: vTarget.value } : {}),
+    ...(vEarliest.value !== undefined ? { earliest_date: vEarliest.value } : {}),
   };
   data.teams = [...(data.teams || []), t];
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
@@ -2101,7 +2108,7 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   if (idx === -1) return res.status(404).json({ error: 'Team not found' });
   const existing = data.teams[idx];
   if (!canEditTeam(s, existing)) return res.status(403).json({ error: 'You can only edit your own team' });
-  const { label, coach, email, phone, home_field_id, availability, target_games } = req.body;
+  const { label, coach, email, phone, home_field_id, availability, target_games, earliest_date } = req.body;
   // Coaches can't move their own team to a different division — only a director/admin can.
   const division_id = s.role === 'coach' ? existing.division_id : req.body.division_id;
   const vLabel = V.validateName(label, { label: 'Team name' });
@@ -2111,6 +2118,8 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   const vPhone = V.validatePhone(phone, { label: 'Coach phone' });
   const vTarget = V.validateTargetGames(target_games);
   if (!vTarget.ok) return res.status(400).json({ error: vTarget.error, field: 'target_games' });
+  const vEarliest = V.validateEarliestDate(earliest_date);
+  if (!vEarliest.ok) return res.status(400).json({ error: vEarliest.error, field: 'earliest_date' });
   if (!division_id || !(data.divisions || []).some(d => String(d.id) === String(division_id))) {
     return res.status(400).json({ error: 'A valid division_id is required', field: 'division_id' });
   }
@@ -2154,6 +2163,7 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
     home_field_id: home_field_id || null,
     ...(availability && typeof availability === 'object' ? { availability } : {}),
     ...(target_games !== undefined ? { target_games: vTarget.value } : {}),
+    ...(earliest_date !== undefined ? { earliest_date: vEarliest.value } : {}),
     // email is intentionally left as-is here — see confirm-email flow below
   };
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }

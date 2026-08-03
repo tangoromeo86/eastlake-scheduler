@@ -38,6 +38,9 @@
           <label>Coach Phone<input id="tfe-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 555-5555"></label>
           <label>Games this season <span class="field-form-hint">(blank = league default)</span><input id="tfe-target" type="number" min="1" max="20"></label>
         </div>
+        <div class="field-form-row">
+          <label>Team's first available day <span class="field-form-hint">(blank = whole season — only set this if this team starts later than everyone else)</span><input id="tfe-earliest" type="date"></label>
+        </div>
         <details id="tfe-availability-details" class="av-group" style="margin-top:20px">
           <summary>Weekly Availability <span class="field-form-hint">(usually set by the coach later — open this only if you need to set it now)</span></summary>
           <p class="field-form-hint" style="margin:10px 0">Fields left blank default to "Available for both."</p>

@@ -266,6 +266,35 @@ avgSpread <= spreadLimit
   : bad('travel balance regressed',
         `${avgSpread.toFixed(2)}x, limit ${spreadLimit.toFixed(2)}x (floor ${floor.toFixed(2)}x)`);
 
+// ── Per-team season start date ───────────────────────────────────────────────
+// A program that starts up to 3 weeks later than others sets earliest_date
+// once instead of hand-closing every date in that window — resolveTeamAvailability
+// (lib/scheduler.js:172) is the single choke point every scheduling path
+// funnels through, so this is the one thing that needs to actually work.
+{
+  const lateStart = buildLeague();
+  const lateTeam = lateStart.teams[0];
+  const earliest = '2026-09-28'; // 3 weeks into a season starting 2026-09-07
+  lateTeam.earliest_date = earliest;
+
+  const lateRes = scheduleAll(lateStart);
+  const lateGames = (lateRes.games || []).filter(g =>
+    g.home_team_id === lateTeam.id || g.away_team_id === lateTeam.id);
+  const early = lateGames.filter(g => g.date < earliest);
+
+  early.length === 0
+    ? ok('a team with an earliest_date gets zero games before it', `${lateGames.length} games, all on/after ${earliest}`)
+    : bad('team was scheduled before its own earliest_date', `${early.length} game(s): ${early.map(g => g.date).join(', ')}`);
+
+  // Never forced/overridden: the team still gets its full requested count,
+  // scheduled entirely inside the remaining window — not fewer games, just
+  // later ones. Confirms this constrains *when*, not *whether*.
+  const wanted = lateTeam.target_games || lateStart.season.target_games;
+  lateGames.length === wanted
+    ? ok('the delayed team still gets its full game count, just later', `${lateGames.length}/${wanted}`)
+    : bad('delayed team came up short instead of just starting later', `${lateGames.length}/${wanted}`);
+}
+
 // ── Performance ──────────────────────────────────────────────────────────────
 const avgMs = results.reduce((s, r) => s + r.ms, 0) / results.length;
 avgMs < 10000
