@@ -500,14 +500,16 @@ function renderFieldsList() {
   }
 
   list.innerHTML = `<div class="table-wrap"><table class="fields-table">
-    <thead><tr><th>Field</th><th>Address</th><th>Used By</th><th></th></tr></thead>
+    <thead><tr><th>Field</th><th>Address</th><th>Used By</th><th>Availability</th><th></th></tr></thead>
     <tbody>
     ${fields.map(f => {
       const usage = usageCount[f.id] || 0;
+      const avail = fieldAvailabilitySummary(f);
       return `<tr>
         <td><strong>${esc(f.name)}</strong>${f.sub_field ? `<span class="field-subfield-badge">${esc(f.sub_field)}</span>` : ''}</td>
         <td>${esc(f.address || '—')}</td>
         <td>${usage ? `<span class="field-used-badge">${usage} team${usage !== 1 ? 's' : ''}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
+        <td><span class="pill ${avail.restricted ? 'pill-wait' : 'pill-good'}">${esc(avail.text)}</span></td>
         <td><div class="row-actions">
           <button class="btn btn-secondary btn-sm" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
           <button class="btn btn-secondary btn-sm danger-text" onclick="deleteField('${String(f.id)}','${esc(fieldDisplayName(f))}')">Delete</button>

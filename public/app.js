@@ -2078,11 +2078,12 @@ function renderFieldsPage() {
 
   list.innerHTML = `<div class="table-wrap"><table class="fields-table">
     <thead><tr>
-      <th>Field</th><th>Address</th><th>Notes</th><th>Map</th><th>Used By</th><th></th>
+      <th>Field</th><th>Address</th><th>Notes</th><th>Map</th><th>Used By</th><th>Availability</th><th></th>
     </tr></thead>
     <tbody>
     ${fields.map(f => {
       const usage = usageCount[f.id] || 0;
+      const avail = fieldAvailabilitySummary(f);
       return `<tr>
         <td>
           <strong>${esc(f.name)}</strong>
@@ -2092,6 +2093,7 @@ function renderFieldsPage() {
         <td style="font-size:12px;color:#94a3b8">${esc(f.notes || '—')}</td>
         <td>${fieldMapLink(f, '📍 View') || '<span style="color:#cbd5e1">—</span>'}</td>
         <td>${usage ? `<span class="field-used-badge">${usage} team${usage !== 1 ? 's' : ''}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
+        <td><span class="pill ${avail.restricted ? 'pill-wait' : 'pill-good'}">${esc(avail.text)}</span></td>
         <td><div class="row-actions">
           <button class="btn btn-secondary btn-sm" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
           <button class="btn btn-secondary btn-sm danger-text" onclick="deleteField('${String(f.id)}','${esc(fieldDisplayName(f))}')">Delete</button>
@@ -2102,7 +2104,7 @@ function renderFieldsPage() {
   </table></div>`;
 }
 
-function openFieldAdd() {
+async function openFieldAdd() {
   editingFieldId = null;
   document.getElementById('field-form-title').textContent = 'Add Field';
   document.getElementById('ffe-name').value = '';
@@ -2111,12 +2113,14 @@ function openFieldAdd() {
   document.getElementById('ffe-notes').value = '';
   document.getElementById('ffe-coords').value = '';
   resetFieldGeocodeUI();
+  if (!seasonSlots) { try { seasonSlots = await fetchJSON('api/season/slots'); } catch { seasonSlots = []; } }
+  renderFieldAvailabilityGrid('ffe-availability', null, seasonSlots);
   document.getElementById('ffe-error').classList.add('hidden');
   document.getElementById('field-editor-form').classList.remove('hidden');
   document.getElementById('ffe-name').focus();
 }
 
-function openFieldEdit(fieldId) {
+async function openFieldEdit(fieldId) {
   const field = (seasonData?.fields || []).find(f => String(f.id) === fieldId);
   if (!field) return;
   editingFieldId = fieldId;
@@ -2127,6 +2131,8 @@ function openFieldEdit(fieldId) {
   document.getElementById('ffe-notes').value = field.notes || '';
   document.getElementById('ffe-coords').value = field.coordinates ? field.coordinates.replace(',', ', ') : '';
   resetFieldGeocodeUI();
+  if (!seasonSlots) { try { seasonSlots = await fetchJSON('api/season/slots'); } catch { seasonSlots = []; } }
+  renderFieldAvailabilityGrid('ffe-availability', field.availability, seasonSlots);
   document.getElementById('ffe-error').classList.add('hidden');
   document.getElementById('field-editor-form').classList.remove('hidden');
   document.getElementById('ffe-name').focus();
@@ -2147,14 +2153,22 @@ document.getElementById('ffe-save').addEventListener('click', async () => {
     address:     document.getElementById('ffe-address').value.trim(),
     notes:       document.getElementById('ffe-notes').value.trim(),
     coordinates: document.getElementById('ffe-coords').value.trim(),
+    availability: readFieldAvailabilityGrid('ffe-availability'),
   };
-  if (!body.name) { errEl.textContent = 'Venue name is required.'; errEl.classList.remove('hidden'); return; }
+  clearFieldErrors('field-editor-form');
+  if (!validateForm([
+    { id: 'ffe-name',   label: 'Venue name',  required: true },
+    { id: 'ffe-coords', label: 'Coordinates', required: false, type: 'coords' },
+  ])) return;
   const url    = editingFieldId ? `api/season/fields/${editingFieldId}` : 'api/season/fields';
   const method = editingFieldId ? 'PUT' : 'POST';
   try {
     const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json();
-    if (!data.ok) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); return; }
+    if (!data.ok) {
+      if (!applyServerError(data)) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); }
+      return;
+    }
     // Refresh seasonData fields
     seasonData = await fetchJSON('api/season');
     document.getElementById('field-editor-form').classList.add('hidden');

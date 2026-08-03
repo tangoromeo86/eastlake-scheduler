@@ -141,6 +141,52 @@ async function verifyPage(page, email, srv) {
       ? ok('no JS errors in the admin matrix/calendar views')
       : bad('JS errors in admin views', errs.slice(0, 2).join(' | '));
 
+    // ── Admin can view AND edit a field's availability ───────────────────────
+    // Previously admin.html had no #ffe-availability markup at all — this was
+    // structurally impossible before, not just missing from a list view.
+    await p.waitForTimeout(300);
+    await p.goto(`${BASE}/admin`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await p.waitForLoadState('domcontentloaded').catch(() => {});
+    await p.waitForTimeout(500);
+    const fieldsTab = p.locator('button:has-text("Fields"), [data-page="fields"]').first();
+    if (await fieldsTab.count()) await fieldsTab.click();
+    await p.waitForTimeout(400);
+    const fieldEditBtn = p.locator('#fields-list button:has-text("Edit")').first();
+    if (await fieldEditBtn.count()) {
+      await fieldEditBtn.click();
+      await p.waitForTimeout(400);
+      const gridVisible = await p.locator('#ffe-availability').isVisible().catch(() => false);
+      gridVisible
+        ? ok('field availability grid renders in the admin editor')
+        : bad('field availability grid missing from admin editor', '');
+
+      const patRow = p.locator('#ffe-availability select.fav-pat').first();
+      if (await patRow.count()) {
+        await patRow.selectOption('closed');
+        const [saveRes] = await Promise.all([
+          p.waitForResponse(r => r.url().includes('/api/season/fields/') && r.request().method() === 'PUT', { timeout: 5000 }).catch(() => null),
+          p.click('#ffe-save'),
+        ]);
+        await p.waitForTimeout(400);
+        saveRes && saveRes.ok()
+          ? ok('a saved availability change round-trips through PUT /api/season/fields/:id')
+          : bad('saving field availability failed', saveRes ? `status ${saveRes.status()}` : 'no response');
+
+        // Confirm it actually persisted, not just accepted.
+        await fieldEditBtn.click().catch(() => {});
+        await p.locator('#fields-list button:has-text("Edit")').first().click();
+        await p.waitForTimeout(400);
+        const persisted = await p.locator('#ffe-availability select.fav-pat').first().inputValue().catch(() => null);
+        persisted === 'closed'
+          ? ok('the change actually persisted on re-open, not just accepted')
+          : bad('availability change did not persist', `got "${persisted}"`);
+      } else {
+        bad('no availability pattern selects found in the admin field editor', '');
+      }
+    } else {
+      bad('no field to edit in the admin Fields tab', '');
+    }
+
     // ── Request Change no longer crashes on the coach page ──────────────────
     const coachCtx = await browser.newContext();
     const cp = await coachCtx.newPage();

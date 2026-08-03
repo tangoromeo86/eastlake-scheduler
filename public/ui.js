@@ -446,3 +446,21 @@ function gameStatusBadge(status, confirmations, mySide) {
   }
   return '<span class="pill pill-neutral">Scheduled</span>';
 }
+
+// ── Field availability summary ───────────────────────────────────────────────
+// Overview signal for a Fields table — before this, the only way to know a
+// field had any hosting restrictions at all was to open its edit form. Shared
+// by admin and director (both load ui.js) so the same field shows the same
+// summary in both places rather than two independently-computed versions.
+function fieldAvailabilitySummary(field) {
+  const a = field.availability;
+  if (!a || typeof a !== 'object') return { text: 'Fully open', restricted: false };
+  const patternClosed =
+    Object.values(a.weekday || {}).filter(v => v === false).length +
+    Object.values(a.saturday || {}).filter(v => v === false).length;
+  const dateOverrides = Object.keys(a.dates || {}).length;
+  const parts = [];
+  if (patternClosed) parts.push(`${patternClosed} day${patternClosed !== 1 ? 's' : ''} closed`);
+  if (dateOverrides) parts.push(`${dateOverrides} date exception${dateOverrides !== 1 ? 's' : ''}`);
+  return parts.length ? { text: parts.join(', '), restricted: true } : { text: 'Fully open', restricted: false };
+}
