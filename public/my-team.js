@@ -52,7 +52,19 @@ async function init() {
   try { scheduleData = await fetchJSON('api/schedule'); } catch { scheduleData = { games: [] }; }
   renderGamesList();
 
+  openChangeRequestFromUrl();
   initMyTeamVerifyBanner();
+}
+
+// The public schedule's "Request Change" button used to redirect here blind —
+// no game, no context. It now carries game_id through the URL; this opens
+// that specific game's form directly.
+function openChangeRequestFromUrl() {
+  const gameId = parseInt(new URLSearchParams(window.location.search).get('game_id'), 10);
+  if (!gameId) return;
+  if (!myGames().some(g => g.game_id === gameId)) return;
+  openChangeRequest(gameId);
+  document.getElementById('cr-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // ── Games list + change requests ─────────────────────────────────────────────

@@ -71,7 +71,27 @@ async function init() {
   await loadActiveNegotiations(myProgramGames());
   renderGamesList();
 
+  openChangeRequestFromUrl();
   initDirectorVerifyBanner();
+}
+
+// The public schedule's "Request Change" button used to redirect here blind —
+// no game, no context, just the top of the page. It now carries game_id (and
+// team_id, since a director can manage several teams) through the URL; this
+// opens that specific game's form directly instead of leaving the director to
+// scroll and re-find it themselves.
+function openChangeRequestFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const gameId = parseInt(params.get('game_id'), 10);
+  if (!gameId) return;
+  const teamId = params.get('team_id');
+  const game = myProgramGames().find(g => g.game_id === gameId);
+  if (!game) return;
+  const resolvedTeamId = teamId || [game.home_team_id, game.away_team_id]
+    .find(id => myProgramTeams().some(t => String(t.id) === String(id)));
+  if (!resolvedTeamId) return;
+  openChangeRequest(gameId, String(resolvedTeamId));
+  document.getElementById('cr-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // ── Games list + change requests ─────────────────────────────────────────────

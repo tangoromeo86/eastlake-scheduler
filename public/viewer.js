@@ -333,22 +333,26 @@ function renderGames(divGames) {
   }
   noMsg.classList.add('hidden');
 
-  const reqTh = session ? '<th></th>' : '';
-  // Patch table header to include request column if not already
+  // Patch table header to include a request-change column — only for coaches
+  // and directors, who might actually see a button in some row; admin never
+  // does (this button isn't an admin action), so no point in a trailing empty column.
+  const wantsReqTh = session?.role === 'coach' || session?.role === 'director';
   const thead = document.querySelector('#view-games .games-table-wrap thead tr');
   if (thead) {
     const hasReqTh = thead.querySelector('.req-th');
-    if (session && !hasReqTh) {
+    if (wantsReqTh && !hasReqTh) {
       const th = document.createElement('th');
       th.className = 'req-th';
       thead.appendChild(th);
-    } else if (!session && hasReqTh) {
+    } else if (!wantsReqTh && hasReqTh) {
       hasReqTh.remove();
     }
   }
 
   // Table (desktop)
-  document.getElementById('games-tbody').innerHTML = sorted.map(g => `
+  document.getElementById('games-tbody').innerHTML = sorted.map(g => {
+    const ctx = myRequestChangeContext(g);
+    return `
     <tr class="${g.is_rematch ? 'g-rematch' : ''}">
       <td class="g-id">#${g.game_id}</td>
       <td>W${g.week}</td>
@@ -359,12 +363,14 @@ function renderGames(divGames) {
       <td class="g-away">${esc(g.away_team_name)}${g.status === 'pending' ? ' <span class="pending-badge">Pending change</span>' : ''}</td>
       <td>${esc(g.field_name)}</td>
       <td class="g-addr">${esc(g.field_address)}${fieldMapLink(g.field_id)}</td>
-      ${session ? `<td><button class="req-btn" data-gid="${g.game_id}">Request Change</button></td>` : ''}
-    </tr>
-  `).join('');
+      ${ctx ? `<td><button class="req-btn" data-gid="${g.game_id}" data-tid="${esc(ctx.team_id)}">Request Change</button></td>` : (wantsReqTh ? '<td></td>' : '')}
+    </tr>`;
+  }).join('');
 
   // Cards (mobile)
-  document.getElementById('games-cards').innerHTML = sorted.map(g => `
+  document.getElementById('games-cards').innerHTML = sorted.map(g => {
+    const ctx = myRequestChangeContext(g);
+    return `
     <div class="game-card${g.is_rematch ? ' rematch' : ''}">
       <div class="game-card-top">
         <span>W${g.week} · ${g.day.slice(0,3)} ${formatDate(g.date)} · ${formatTime12h(g.time)}</span>
@@ -377,20 +383,49 @@ function renderGames(divGames) {
         <span class="away">${esc(g.away_team_name)}</span>
       </div>
       <div class="game-card-field">📍 ${esc(g.field_name)}${g.field_address ? ' — ' + esc(g.field_address) : ''}${fieldMapLink(g.field_id)}</div>
-      ${session ? `<div class="game-card-req"><button class="req-btn" data-gid="${g.game_id}">Request Change</button></div>` : ''}
-    </div>
-  `).join('');
+      ${ctx ? `<div class="game-card-req"><button class="req-btn" data-gid="${g.game_id}" data-tid="${esc(ctx.team_id)}">Request Change</button></div>` : ''}
+    </div>`;
+  }).join('');
 
   // Attach request change button listeners
   if (session) {
     document.querySelectorAll('.req-btn[data-gid]').forEach(btn => {
       btn.addEventListener('click', () => {
         // The change flow lives on the coach/director pages, where the server
-        // computes which times actually work for both teams.
-        window.location = session?.role === 'director' ? 'director' : 'my-team';
+        // computes which times actually work for both teams. Carry the game
+        // (and, for a director managing several teams, which of their teams
+        // is involved) through so the destination page can open that specific
+        // game's form instead of landing blind at the top of the page.
+        const dest = session?.role === 'director' ? 'director' : 'my-team';
+        const params = new URLSearchParams({ game_id: btn.dataset.gid });
+        if (btn.dataset.tid) params.set('team_id', btn.dataset.tid);
+        window.location = `${dest}?${params.toString()}`;
       });
     });
   }
+}
+
+// Whether the viewer can request a change on this game, and — for a director,
+// who may manage several teams — which of their teams to act as. Returns null
+// (no button rendered) for admin and for any game that doesn't involve the
+// viewer at all, rather than showing the same button on every game in the
+// league regardless of relevance.
+function myRequestChangeContext(g) {
+  if (!session) return null;
+  if (session.role === 'coach') {
+    if (String(g.home_team_id) === String(session.team_id) || String(g.away_team_id) === String(session.team_id)) {
+      return { team_id: session.team_id };
+    }
+    return null;
+  }
+  if (session.role === 'director') {
+    const teams = seasonData?.teams || [];
+    const homeTeam = teams.find(t => String(t.id) === String(g.home_team_id));
+    const awayTeam = teams.find(t => String(t.id) === String(g.away_team_id));
+    const mine = [homeTeam, awayTeam].find(t => t && String(t.program_id) === String(session.program_id));
+    return mine ? { team_id: mine.id } : null;
+  }
+  return null; // admin — this button isn't an admin action
 }
 
 // ── TEAMS VIEW ────────────────────────────────────────────────────────────────

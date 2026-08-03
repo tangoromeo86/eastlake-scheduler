@@ -135,6 +135,94 @@ function startServer() {
     } else {
       ok('no games scheduled for this team yet to test Request Change on (not a failure)');
     }
+
+    // ── Public viewer: relevance filtering + deep-linked redirect ───────────
+    // The button used to show on every game to any session and redirect blind
+    // to the top of the page. Needs a fixture with more than 2 teams to prove
+    // the filtering actually filters (see file header).
+    const myOwnGame = res.games.find(g => g.home_team_id === someTeam.id || g.away_team_id === someTeam.id);
+    const unrelatedGame = res.games.find(g =>
+      g.home_team_id !== someTeam.id && g.away_team_id !== someTeam.id &&
+      g.division_id !== someTeam.division_id);
+
+    if (myOwnGame && unrelatedGame) {
+      await cp.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+      await cp.waitForTimeout(600); // the auto-shown first-login help modal appears 400ms after load
+      const coachHelpClose = cp.locator('#help-close');
+      if (await coachHelpClose.isVisible().catch(() => false)) await coachHelpClose.click();
+
+      // The viewer renders both a desktop table row and a mobile card for
+      // every game (CSS hides one via media query) — .first() since both
+      // legitimately match.
+      const ownBtn = cp.locator(`.req-btn[data-gid="${myOwnGame.game_id}"]`).first();
+      (await cp.locator(`.req-btn[data-gid="${myOwnGame.game_id}"]`).count()) > 0
+        ? ok('Request Change button shown for the coach\'s own game')
+        : bad('Request Change button missing for own game', `game ${myOwnGame.game_id}`);
+
+      const unrelatedBtn = cp.locator(`.req-btn[data-gid="${unrelatedGame.game_id}"]`);
+      (await unrelatedBtn.count()) === 0
+        ? ok('Request Change button hidden for an unrelated game')
+        : bad('Request Change button shown for a game that is not the coach\'s', `game ${unrelatedGame.game_id}`);
+
+      if (await ownBtn.count()) {
+        await ownBtn.click();
+        await cp.waitForTimeout(600);
+        const landedUrl = cp.url();
+        landedUrl.includes('/my-team') && landedUrl.includes(`game_id=${myOwnGame.game_id}`)
+          ? ok('redirect carries the specific game id', landedUrl)
+          : bad('redirect lost the game context', landedUrl);
+        const formOpen = await cp.locator('#cr-form:not(.hidden)').count();
+        formOpen > 0
+          ? ok('landing on my-team opens that exact game\'s change form')
+          : bad('my-team did not auto-open the change form from the deep link', '');
+      }
+    } else {
+      bad('fixture did not produce both an own-game and an unrelated-game case', '');
+    }
+
+    // ── Same deep-link path, but as a director (multi-team resolution) ──────
+    const someDirector = seasonData.directors[0];
+    const dirTeam = seasonData.teams.find(t => t.program_id === someDirector.program_id);
+    const dirOwnGame = res.games.find(g => {
+      const home = seasonData.teams.find(t => t.id === g.home_team_id);
+      const away = seasonData.teams.find(t => t.id === g.away_team_id);
+      return (home && home.program_id === someDirector.program_id) ||
+             (away && away.program_id === someDirector.program_id);
+    });
+    if (dirTeam && dirOwnGame) {
+      const dctx = await browser.newContext();
+      const dp = await dctx.newPage();
+      const dirErrs = [];
+      dp.on('pageerror', e => dirErrs.push(e.message));
+      await dp.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+      await dp.fill('#email-input', someDirector.email);
+      await dp.click('#continue-btn');
+      await dp.waitForTimeout(600);
+      await dp.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+      await dp.waitForTimeout(600); // the auto-shown first-login help modal appears 400ms after load
+      const helpClose = dp.locator('#help-close');
+      if (await helpClose.isVisible().catch(() => false)) await helpClose.click();
+      const dirBtn = dp.locator(`.req-btn[data-gid="${dirOwnGame.game_id}"]`).first();
+      if (await dp.locator(`.req-btn[data-gid="${dirOwnGame.game_id}"]`).count()) {
+        await dirBtn.click();
+        await dp.waitForTimeout(600);
+        const landedUrl = dp.url();
+        landedUrl.includes('/director') && landedUrl.includes(`game_id=${dirOwnGame.game_id}`) && landedUrl.includes('team_id=')
+          ? ok('director redirect carries game id + resolved team id', landedUrl)
+          : bad('director redirect missing context', landedUrl);
+        const formOpen = await dp.locator('#cr-form:not(.hidden)').count();
+        formOpen > 0
+          ? ok('landing on director opens that exact game\'s change form')
+          : bad('director page did not auto-open the change form from the deep link', '');
+      } else {
+        bad('director never sees the button for their own program\'s game', `game ${dirOwnGame.game_id}`);
+      }
+      dirErrs.length === 0
+        ? ok('no JS errors in the director deep-link flow')
+        : bad('JS errors in director deep-link flow', dirErrs.slice(0, 2).join(' | '));
+    } else {
+      bad('fixture did not produce a director-own-game case', '');
+    }
   } catch (e) {
     bad('browser run threw', e.message);
   } finally {
