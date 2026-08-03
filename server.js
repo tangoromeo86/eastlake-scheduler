@@ -1440,7 +1440,8 @@ async function notifyTurn(req, cr, seasonData, game) {
   const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
   const isCounter = cr.round > 1;
   const proposerName = proposingTeam?.label || proposingTeam?.name || 'The other coach';
-  const subject = `${isCounter ? 'New time proposed' : 'Change requested'} for Game #${cr.game_id} — your response needed`;
+  const matchup = game ? `${game.home_team_name} vs ${game.away_team_name}` : `${proposerName} vs ${awaitingTeam.label || awaitingTeam.name || 'your team'}`;
+  const subject = `${matchup}: ${isCounter ? 'new time proposed' : 'change requested'} — your response needed`;
   const approveUrl = `${base}/approve?token=${cr.tokens.approve}`;
   const counterUrl = `${base}/counter?token=${cr.tokens.counter}`;
 
@@ -1487,7 +1488,8 @@ async function notifyNoOptions(req, cr, seasonData, context, game) {
   const homeTeam = teams.find(t => String(t.id) === String(cr.initiating_team_id));
   const awayTeam = teams.find(t => String(t.id) === String(cr.other_team_id));
   const nameOf = id => teams.find(t => String(t.id) === String(id))?.label || id;
-  const subject = `Needs your help: no workable time for Game #${cr.game_id}`;
+  const matchup = game ? `${game.home_team_name} vs ${game.away_team_name}` : `${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}`;
+  const subject = `${matchup}: no time works — needs your help`;
 
   const html = emailShell(`
     ${emailHeading(subject)}
@@ -1600,7 +1602,7 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
   writeChangeRequests(list);
 
   const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
-  const confirmSubject = `Confirm your change request — Game #${game_id}`;
+  const confirmSubject = `${game.home_team_name} vs ${game.away_team_name}: confirm your change request`;
   const confirmUrl = `${base}/confirm?token=${cr.tokens.approve}`;
   const cancelUrl = `${base}/cancel?token=${cr.tokens.cancel}`;
   const confirmHtml = emailShell(`
@@ -1768,7 +1770,7 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   const otherOfPair = [cr.initiating_team_id, cr.other_team_id].find(id => String(id) !== String(cr.proposing_team_id));
   const otherTeamForProposer = teams.find(t => String(t.id) === String(otherOfPair));
   if (proposer?.email && updatedGame) {
-    const lockedSubject = `Agreed — Game #${cr.game_id} has moved`;
+    const lockedSubject = `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: agreed — schedule updated`;
     const lockedHtml = emailShell(`
       ${emailHeading(lockedSubject)}
       ${emailP('Your proposed time was accepted. The schedule has been updated.')}
@@ -1941,7 +1943,7 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
   const uniqueRecipients = [...new Set(recipients)];
   if (uniqueRecipients.length) {
     const requesterName = requestingTeam?.label || requestingTeam?.name || 'A coach';
-    const overrideSubject = `Game changed by manual override — Game #${gameId}`;
+    const overrideSubject = `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: changed by manual override`;
     const overrideHtml = emailShell(`
       ${emailHeading(overrideSubject)}
       ${emailP(`${emailEsc(requesterName)} changed this game directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`)}
@@ -3047,7 +3049,7 @@ async function checkEscalations() {
         .filter(d => d.active !== false && d.program_id === awaitingTeam?.program_id)
         .map(d => d.email).filter(Boolean);
       if (emails.length) {
-        const subj = `Action needed: Game #${cr.game_id} change request unanswered`;
+        const subj = `${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}: unanswered change request`;
         await sendEmail({
           to: emails,
           subject: subj,
@@ -3074,7 +3076,7 @@ async function checkEscalations() {
 
     if (daysElapsed >= deadlineDays + ADMIN_ESCALATION_GRACE_DAYS && !cr.admin_notified_at) {
       if (ADMIN_EMAIL) {
-        const subj = `Escalation: Game #${cr.game_id} change request still unanswered`;
+        const subj = `${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}: still unanswered — escalated`;
         await sendEmail({
           to: ADMIN_EMAIL,
           subject: subj,
@@ -3105,7 +3107,7 @@ async function checkEscalations() {
       const emails = directorsForTeams(seasonData, [cr.initiating_team_id, cr.other_team_id])
         .map(d => d.email).filter(Boolean);
       if (emails.length) {
-        const subj = `Stuck: Game #${cr.game_id} has been back and forth ${cr.round} times`;
+        const subj = `${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}: stuck after ${cr.round} rounds`;
         await sendEmail({
           to: [...new Set(emails)],
           subject: subj,

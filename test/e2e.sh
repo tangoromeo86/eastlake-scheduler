@@ -335,10 +335,15 @@ wait_for_log() {  # wait_for_log <grep-pattern> -> prints last matching line
   done
   echo "$line"
 }
-CONFIRM_HTML=$(wait_for_log "DEBUG_EMAIL_HTML:Confirm your change request")
+CONFIRM_HTML=$(wait_for_log "DEBUG_EMAIL_HTML:.*confirm your change request")
+CONFIRM_SUBJECT=$(echo "$CONFIRM_HTML" | sed 's/DEBUG_EMAIL_HTML:\(.*\)||.*/\1/')
+[[ "$CONFIRM_SUBJECT" == *" vs "* ]] && pass "confirm email subject leads with the matchup ($CONFIRM_SUBJECT)" || fail "subject doesn't name the two teams: $CONFIRM_SUBJECT"
+[[ "$CONFIRM_SUBJECT" == "Game #"* ]] && fail "subject still leads with a bare internal game ID: $CONFIRM_SUBJECT" || pass "subject leads with something a coach recognizes, not an internal ID"
 [[ "$CONFIRM_HTML" == *"Main St"* || "$CONFIRM_HTML" == *"Oak Ave"* ]] && pass "requester's confirm email includes the field address" || fail "no field address in confirm email"
 [[ "$CONFIRM_HTML" == *"Yes, send it to the other coach"* ]] && pass "confirm email has a real button, not a bare link" || fail "no styled action button in confirm email"
-TURN_HTML=$(wait_for_log "DEBUG_EMAIL_HTML:Change requested for Game")
+TURN_HTML=$(wait_for_log "DEBUG_EMAIL_HTML:.*your response needed")
+TURN_SUBJECT=$(echo "$TURN_HTML" | sed 's/DEBUG_EMAIL_HTML:\(.*\)||.*/\1/')
+[[ "$TURN_SUBJECT" == *" vs "* && "$TURN_SUBJECT" == *"your response needed"* ]] && pass "response-needed subject names the matchup and says what's needed ($TURN_SUBJECT)" || fail "response-needed subject isn't right: $TURN_SUBJECT"
 # Phone isn't asserted here — this fixture's own PUT /api/teams call above
 # happens to omit it (unlike the real UI, which always sends it), so it's
 # genuinely absent on this team at this point in the run; email is what's
