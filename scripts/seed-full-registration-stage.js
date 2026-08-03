@@ -48,12 +48,52 @@ const FIELDS = [
   { program: 'Painesville', name: 'Painesville Recreation Park',
     address: '1025 Hardy Rd, Painesville OH 44077', coordinates: '41.7667003,-81.2310896' },
 ];
-// A couple of fields run restricted windows, same as the full-scale scheduler
-// test fixture — realism, and something worth exercising when Ted generates.
-const FIELD_RESTRICTIONS = {
-  'Parkview': { weekday: { Monday: false, Wednesday: false }, saturday: {}, dates: {} }, // shared with the school
-  'Perry High School': { weekday: {}, saturday: { late: false }, dates: {} },
-};
+// Weighted-random availability — teams and fields are genuinely restricted,
+// not just decorated with a couple of modulo-based exceptions. Weeknights are
+// the exception rather than the rule (most rec coaches can't reliably get a
+// team to a weeknight game), and even Saturdays — the default day — aren't
+// wide open, so the scheduler has to actually work to fit everyone in rather
+// than having every slot trivially available.
+function weightedPick(weights) {
+  const total = weights.reduce((s, [, w]) => s + w, 0);
+  let r = Math.random() * total;
+  for (const [v, w] of weights) { if (r < w) return v; r -= w; }
+  return weights[weights.length - 1][0];
+}
+const WEEKDAY_STATUS_WEIGHTS = [['none', 50], ['both', 25], ['host', 15], ['travel', 10]];
+const SATURDAY_STATUS_WEIGHTS = [['both', 55], ['host', 18], ['travel', 15], ['none', 12]];
+const FIELD_WEEKDAY_OPEN_WEIGHTS = [[true, 55], [false, 45]];
+const FIELD_SATURDAY_OPEN_WEIGHTS = [[true, 70], [false, 30]];
+const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday'];
+const SAT_SLOTS = ['early', 'midday', 'late'];
+
+function randomTeamAvailability() {
+  const weekday = {};
+  for (const day of WEEKDAY_NAMES) weekday[day] = { status: weightedPick(WEEKDAY_STATUS_WEIGHTS) };
+  const saturday = {};
+  for (const slot of SAT_SLOTS) saturday[slot] = weightedPick(SATURDAY_STATUS_WEIGHTS);
+  return { weekday, saturday, dates: {} };
+}
+
+function randomFieldAvailability() {
+  const weekday = {};
+  for (const day of WEEKDAY_NAMES) weekday[day] = weightedPick(FIELD_WEEKDAY_OPEN_WEIGHTS);
+  const saturday = {};
+  for (const slot of SAT_SLOTS) saturday[slot] = weightedPick(FIELD_SATURDAY_OPEN_WEIGHTS);
+  return { weekday, saturday, dates: {} };
+}
+
+// Every Saturday in the season, for picking one-off date exceptions below.
+function seasonSaturdays(startStr, weeks) {
+  const start = new Date(startStr + 'T00:00:00Z');
+  const out = [];
+  for (let w = 0; w < weeks; w++) {
+    const d = new Date(start);
+    d.setUTCDate(d.getUTCDate() + w * 7 + 5); // Monday + 5 = Saturday
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
 
 const DIVISIONS = ['U8 Coed', 'U10 Boys', 'U10 Girls', 'U12 Boys', 'U12 Girls'];
 
@@ -88,13 +128,21 @@ const directors = PROGRAMS.map((name, i) => ({
 }));
 const divisions = DIVISIONS.map(name => ({ id: `div-${slug(name)}`, name, target_games: 8 }));
 
+const seasonStartStr = start.toISOString().slice(0, 10);
+const saturdays = seasonSaturdays(seasonStartStr, 10);
+
 const fields = FIELDS.map((f, i) => {
   const rec = {
     id: `field-${i + 1}`, name: f.name, program_id: `prog-${slug(f.program)}`,
     address: f.address, coordinates: f.coordinates,
   };
   if (f.sub_field) rec.sub_field = f.sub_field;
-  if (FIELD_RESTRICTIONS[f.name]) rec.availability = FIELD_RESTRICTIONS[f.name];
+  rec.availability = randomFieldAvailability();
+  // ~1 in 4 fields also has a one-off closure — a tournament or maintenance day.
+  if (Math.random() < 0.25) {
+    const d = saturdays[Math.floor(Math.random() * saturdays.length)];
+    rec.availability.dates[d] = { early: false, midday: false, late: false };
+  }
   return rec;
 });
 const fieldsByProgram = {};
@@ -112,12 +160,13 @@ for (const divName of DIVISIONS) {
     const home = progFields[n % progFields.length];
     const coach = `${COACH_FIRST[n % COACH_FIRST.length]} ${COACH_LAST[(n * 3) % COACH_LAST.length]}`;
 
-    const availability = { weekday: {}, saturday: {}, dates: {} };
-    if (n % 3 === 0)  availability.weekday.Tuesday = { status: 'none' };
-    if (n % 5 === 0)  availability.weekday.Monday  = { status: 'none' };
-    if (n % 7 === 0)  availability.saturday.early  = 'none';
-    if (n % 4 === 0)  availability.weekday.Thursday = { status: 'host' };  // home only Thursdays
-    if (n % 6 === 0)  availability.saturday.late    = 'travel';           // away only late Saturday
+    const availability = randomTeamAvailability();
+    // ~2 in 5 teams also have a one-off Saturday blackout — a tournament, a
+    // family thing, whatever keeps a real roster off the field one week.
+    if (Math.random() < 0.4) {
+      const d = saturdays[Math.floor(Math.random() * saturdays.length)];
+      availability.dates[d] = { early: 'none', midday: 'none', late: 'none' };
+    }
 
     const team = {
       id: `team-${n}`,
