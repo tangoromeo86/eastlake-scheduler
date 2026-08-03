@@ -43,7 +43,7 @@
         <li><a href="#a3">3. Let registration happen</a></li>
         <li><a href="#a4">4. Generate the schedule</a></li>
         <li><a href="#a5">5. During the season</a></li>
-        <li><a href="#a6">6. Finalise</a></li>
+        <li><a href="#a6">6. Settle pending confirmations</a></li>
         <li><a href="#a7">Backups and restore</a></li>
         <li><a href="#a8">Starting next season</a></li>
       </ul>
@@ -79,6 +79,10 @@
       chase this in the tool; check the <strong>Teams</strong> tab to see how it's filling in. The
       <strong>Coaches</strong> section (under Programs) lets you fix a coach's contact details directly if
       something's wrong, without opening the full team editor.</p>
+    <p>The <strong>Fields</strong> tab shows each field's availability at a glance ("Fully open" or a summary of
+      what's restricted) and lets you view and edit it directly — you don't have to go through a director to fix
+      a field's hours. A team's <strong>first available day</strong>, if it has one, is set on the team itself by
+      its director or coach; the scheduler respects it automatically wherever it's set.</p>
 
     <h3 id="a4">4. Generate the schedule</h3>
     <p>Click <strong>Run Scheduler</strong> in the header and type <code>run</code> to confirm. A backup is taken
@@ -106,10 +110,20 @@
     <p><strong>Change Requests</strong> shows every live negotiation: which round it's on, whose turn it is, the
       deadline (overdue ones in red) and what's on the table. Click <strong>History</strong> on any game for the
       full story — who asked for what, when, and every escalation that fired.</p>
+    <p>Every game also carries a lightweight status — <strong>Scheduled</strong>, <strong>Pending</strong> (one
+      coach has confirmed), <strong>Confirmed</strong> (both have), or <strong>Negotiating</strong> (an active
+      change request). This is a signal, not a lock — a Confirmed game can still have a change requested against
+      it later, same as any other. The <strong>Availability</strong> tab gives you the league-wide picture on a
+      calendar, filterable by division, and switchable between team and field availability — useful when a
+      division looks stuck and you want to see whose availability is actually the bottleneck.</p>
 
-    <h3 id="a6">6. Finalise</h3>
-    <p><strong>Finalize Games</strong> locks the schedule. Finalised games can't receive change requests at all.
-      Games still mid-negotiation are deliberately left alone and reported back, so resolve those first.</p>
+    <h3 id="a6">6. Settle pending confirmations</h3>
+    <p>Games are never hard-locked — a change can be requested on any game at any point in the season, right up
+      until it's played. What used to be <strong>Finalize Games</strong> is now <strong>Settle Pending
+      Confirmations</strong>: a one-time sweep that force-confirms anything still sitting at Scheduled or Pending
+      (treating a non-responding coach's silence as acceptance), while leaving anything actively
+      <strong>Negotiating</strong> alone so you don't step on a live conversation. Run it whenever you want a clean
+      read on what's actually settled — there's no wrong time, and nothing it does is irreversible.</p>
 
     <h3 id="a7">Backups and restore</h3>
     <p><strong>Backups</strong> lists your restore points. One is taken automatically before anything destructive

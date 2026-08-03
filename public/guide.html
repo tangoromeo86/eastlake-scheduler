@@ -67,7 +67,9 @@
         is really yours.</li>
     </ul>
     <p>You'll see a yellow banner offering to send that link whenever you need it. It expires after 15 minutes;
-      just request another if it lapses.</p>
+      just request another if it lapses. Can't easily get to the link — reading email on your phone in a different
+      app, say — a <strong>6-digit code</strong> shows up in the same email; type that into the banner instead and
+      you're verified without leaving the page.</p>
 
     <div class="callout warn">
       <p><strong>Changing your email address is special.</strong> Because email <em>is</em> your login, a new
@@ -91,15 +93,25 @@
         field is open to host. Then, if you need to, open a day and close individual dates — a one-off tournament
         or maintenance closure.</li>
       <li><strong>Add your teams.</strong> Name, division, home field, and the coach's name, email and phone. The
-        coach's account is created automatically from that email — they never sign up separately.</li>
+        coach's account is created automatically from that email — they never sign up separately. If a team
+        can't start until partway into the season (a late-forming roster, a facility that isn't ready yet), set
+        their <strong>first available day</strong> right there on the form — the scheduler won't place a game for
+        that team before it, full stop. A coach can also set or move this later from their own page.</li>
       <li><strong>Check availability is in.</strong> Coaches fill in their own, but you can set or correct it for
-        any team in your program.</li>
+        any team in your program. The <strong>Availability</strong> tab shows it laid out on a real calendar —
+        toggle between team and field view, filtered to your own program — so you can spot a gap without opening
+        every team's editor one at a time.</li>
     </ol>
 
     <h3>Keeping an eye on things</h3>
-    <p>The <strong>Games</strong> section lists every game involving your teams. Any game mid-negotiation shows
-      the live state inline — the round, what's been proposed, whose turn it is and when their response is due
-      (red if overdue). Click <strong>History</strong> for the full timeline.</p>
+    <p>The <strong>Games</strong> section lists every game involving your teams. Each one carries a status:
+      <strong>Scheduled</strong> until either coach confirms it as-is, <strong>Pending</strong> once one side has,
+      <strong>Confirmed</strong> once both have, or <strong>Negotiating</strong> while a change request is actively
+      in progress. None of these lock anything — a Confirmed game can still have a change requested against it
+      later if something comes up. You can confirm on a coach's behalf the same way you can request a change for
+      them.</p>
+    <p>Any game mid-negotiation shows the live state inline — the round, what's been proposed, whose turn it is
+      and when their response is due (red if overdue). Click <strong>History</strong> for the full timeline.</p>
     <div class="callout">
       <p>You don't have to wait for an escalation email to find out what's going on. If a coach mentions a game
         is being moved, you can look it up straight away.</p>
@@ -122,8 +134,12 @@
       <li><strong>Sign in</strong> with the email your director registered for you — no password, no sign-up.
         You'll land on your team page.</li>
       <li><strong>Check your details</strong> — team name, your name, phone. The other coach needs your phone
-        number if a game has to change at short notice.</li>
-      <li><strong>Set your availability.</strong> This is the important bit — see below.</li>
+        number if a game has to change at short notice. If your team can't start playing until partway into the
+        season, set your <strong>first available day</strong> here too — the scheduler won't place anything before
+        it.</li>
+      <li><strong>Set your availability.</strong> This is the important bit — see below. Once it's saved, a
+        calendar underneath shows exactly how it plays out across the season, so you can sanity-check it before
+        relying on it.</li>
       <li><strong>Choose how many games</strong> you want, or leave it blank for the league default.</li>
       <li><strong>Save.</strong> If you're not verified yet, click the banner and click the emailed link first.</li>
     </ol>
@@ -153,22 +169,34 @@
         the tool offers you will keep looking wrong.</p>
     </div>
 
+    <h3>Confirming a game</h3>
+    <p>Every game starts <strong>Scheduled</strong>. If it works for you as-is, click <strong>Confirm</strong> —
+      that moves it to <strong>Pending</strong> until the other coach does the same, then <strong>Confirmed</strong>
+      once you both have. This is just a heads-up signal, not a lock: you can still request a change on a game at
+      any point, confirmed or not.</p>
+
     <h3>Requesting a change</h3>
-    <p>Find the game under <strong>Upcoming Games</strong> and click <strong>Request Change</strong>. You'll be
-      shown <em>only times that genuinely work for both teams</em> — already checked against both sets of
-      availability and the field's opening hours. Pick one, adjust the kickoff time if you want, add a short
-      reason, and send.</p>
+    <p>Find the game under <strong>Upcoming Games</strong> and click <strong>Request Change</strong>. A window
+      opens for that specific game, showing what's currently scheduled, and asks one question first:</p>
+    <ul>
+      <li><strong>Just the time</strong> — the day works fine, you just need a different kickoff. You'll see every
+        legal time that day that doesn't clash with anything else on the field.</li>
+      <li><strong>The day</strong> — the day itself doesn't work. Pick from every day that genuinely fits <em>both</em>
+        teams' availability, then do the same time step for whichever day you land on.</li>
+    </ul>
+    <p>Pick a time, add a short note if you want (optional — not required), and send.</p>
     <ol class="steps">
       <li>We email <strong>you</strong> first to check you meant it. Nothing reaches the other coach until you
         confirm — so a mis-click costs nobody anything.</li>
-      <li>The other coach gets your proposal with <strong>Approve</strong> and <strong>Suggest another time</strong>.</li>
+      <li>The other coach gets your proposal with <strong>Approve</strong> and <strong>Suggest another time</strong>,
+        plus your contact info in case it's easier to just talk it through.</li>
       <li>If they approve, the game moves and you're both told. Done.</li>
-      <li>If it doesn't work for them, they pick a different time from the same list and it comes back to you.
+      <li>If it doesn't work for them, they pick a different time the same way and it comes back to you.
         That continues until one of you accepts.</li>
     </ol>
     <div class="callout key">
       <p><strong>The game does not move until you both agree.</strong> It stays exactly where it is, flagged
-        "change in progress", so nobody turns up at the wrong field mid-discussion.</p>
+        <strong>Negotiating</strong>, so nobody turns up at the wrong field mid-discussion.</p>
     </div>
 
     <h3>How long you have to reply</h3>
