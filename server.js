@@ -1813,7 +1813,61 @@ function canEditTeam(session, team) {
   return canManageProgram(session, team.program_id);
 }
 
-app.post('/api/season/fields', requireDirector, requireVerified, (req, res) => {
+// ── Geocoding ────────────────────────────────────────────────────────────────
+// Nobody registering a field can be expected to know how to find latitude and
+// longitude — that was the actual problem, not a wording issue on the label.
+// Directors already have to enter a street address, so turning that into
+// coordinates automatically removes the step entirely rather than explaining
+// it better. Nominatim (OpenStreetMap) is free and needs no API key; its usage
+// policy just asks for one request at a time and a descriptive User-Agent,
+// both fine at this league's volume.
+const GEOCODE_TIMEOUT_MS = 6000;
+
+async function geocodeAddress(address) {
+  const q = String(address || '').trim();
+  if (!q) return null;
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), GEOCODE_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'EastlakeLeagueScheduler/1.0 (contact: tedriolo@gmail.com)' },
+    });
+    if (!res.ok) return null;
+    const rows = await res.json();
+    const hit = rows && rows[0];
+    if (!hit) return null;
+    const lat = parseFloat(hit.lat), lng = parseFloat(hit.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng, display_name: hit.display_name || q };
+  } catch {
+    return null; // timeout, network error, or no match — caller treats as "not found"
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Used by the "Find from address" button so a director can see and confirm the
+// result before saving, rather than have it silently applied.
+app.get('/api/geocode', requireAuth, async (req, res) => {
+  const address = req.query.address || '';
+  if (!address.trim()) return res.status(400).json({ error: 'Enter an address first' });
+  const hit = await geocodeAddress(address);
+  if (!hit) {
+    return res.status(404).json({
+      error: `Couldn't find that address. Double-check the spelling, or add the city and state — for example "12519 Chardon Windsor Rd, Chardon OH" works better than just the road name.`,
+    });
+  }
+  res.json({
+    ok: true,
+    coordinates: `${hit.lat},${hit.lng}`,
+    display_name: hit.display_name,
+    map_url: `https://www.google.com/maps/search/?api=1&query=${hit.lat},${hit.lng}`,
+  });
+});
+
+app.post('/api/season/fields', requireDirector, requireVerified, async (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
@@ -1829,7 +1883,15 @@ app.post('/api/season/fields', requireDirector, requireVerified, (req, res) => {
   if (fieldProgramId) f.program_id = fieldProgramId;
   if (sub_field?.trim()) f.sub_field = sub_field.trim();
   if (notes?.trim()) f.notes = notes.trim();
-  if (vCoords.value) f.coordinates = vCoords.value;
+  // If nobody entered or looked up coordinates, try the address they already
+  // typed rather than leave travel balancing silently switched off for this
+  // field. Best-effort: a failed or slow lookup never blocks the save.
+  let coordsValue = vCoords.value;
+  if (!coordsValue && f.address) {
+    const hit = await geocodeAddress(f.address);
+    if (hit) coordsValue = `${hit.lat},${hit.lng}`;
+  }
+  if (coordsValue) f.coordinates = coordsValue;
   if (availability && typeof availability === 'object') f.availability = availability;
   data.fields = [...(data.fields || []), f];
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
@@ -1837,7 +1899,7 @@ app.post('/api/season/fields', requireDirector, requireVerified, (req, res) => {
   res.json({ ok: true, field: f });
 });
 
-app.put('/api/season/fields/:id', requireDirector, requireVerified, (req, res) => {
+app.put('/api/season/fields/:id', requireDirector, requireVerified, async (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
@@ -1850,10 +1912,19 @@ app.put('/api/season/fields/:id', requireDirector, requireVerified, (req, res) =
   if (!vName.ok) return res.status(400).json({ error: vName.error, field: 'name' });
   const vCoords = V.validateCoordinates(coordinates);
   if (!vCoords.ok) return res.status(400).json({ error: vCoords.error, field: 'coordinates' });
-  const updated = { ...data.fields[idx], name: vName.value, address: (address || '').trim() };
+  const trimmedAddress = (address || '').trim();
+  const updated = { ...data.fields[idx], name: vName.value, address: trimmedAddress };
   if (sub_field?.trim()) updated.sub_field = sub_field.trim(); else delete updated.sub_field;
   if (notes?.trim()) updated.notes = notes.trim(); else delete updated.notes;
-  if (vCoords.value) updated.coordinates = vCoords.value; else delete updated.coordinates;
+  // Only auto-fill on a genuine gap (never had coordinates, still don't). If a
+  // director clears a coordinate that was there before, that's a deliberate
+  // edit and geocoding must not silently put it back.
+  let coordsValue = vCoords.value;
+  if (!coordsValue && !data.fields[idx].coordinates && trimmedAddress) {
+    const hit = await geocodeAddress(trimmedAddress);
+    if (hit) coordsValue = `${hit.lat},${hit.lng}`;
+  }
+  if (coordsValue) updated.coordinates = coordsValue; else delete updated.coordinates;
   if (availability && typeof availability === 'object') updated.availability = availability;
   delete updated.weekend_venue; delete updated.weekend_address;
   data.fields[idx] = updated;

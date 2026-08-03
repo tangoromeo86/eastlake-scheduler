@@ -275,3 +275,80 @@ async function deleteWithBlockers(url, name, word) {
   toast(`${name} deleted.`);
   return true;
 }
+
+// ── Field geocoding ──────────────────────────────────────────────────────────
+// Nobody registering a field should need to know what a coordinate is. The
+// address is something every director already has, so this turns that into
+// coordinates for them, with a manual fallback for the times it doesn't match.
+
+function wireFieldGeocode() {
+  const addressEl = document.getElementById('ffe-address');
+  const coordsEl  = document.getElementById('ffe-coords');
+  const btn       = document.getElementById('ffe-geocode-btn');
+  const resultEl  = document.getElementById('ffe-geocode-result');
+  const mapsLink  = document.getElementById('ffe-maps-link');
+  if (!addressEl || !coordsEl || !btn) return; // page has no field form (e.g. my-team)
+
+  function updateMapsLink() {
+    const q = (addressEl.value || '').trim();
+    mapsLink.href = q
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`
+      : 'https://www.google.com/maps';
+  }
+  addressEl.addEventListener('input', updateMapsLink);
+  updateMapsLink();
+
+  function showResult(kind, html) {
+    resultEl.className = 'geocode-result ' + kind;
+    resultEl.innerHTML = html;
+  }
+
+  btn.addEventListener('click', async () => {
+    const address = (addressEl.value || '').trim();
+    if (!address) {
+      showResult('bad', 'Enter the venue’s address above first, then click Find.');
+      addressEl.focus();
+      return;
+    }
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = 'Finding…';
+    showResult('pending', 'Looking that address up…');
+    try {
+      const res = await fetch(`api/geocode?address=${encodeURIComponent(address)}`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        showResult('bad', uiEsc(data.error || "Couldn't find that address."));
+        return;
+      }
+      coordsEl.value = data.coordinates;
+      fieldError('ffe-coords', null);
+      const mapUrl = data.map_url || `https://www.google.com/maps/search/?api=1&query=${data.coordinates}`;
+      showResult('good',
+        `Found it: ${uiEsc(data.display_name)}. ` +
+        `<a href="${mapUrl}" target="_blank" rel="noopener">Check it on the map</a> ` +
+        `— if that's the wrong spot, use the manual steps below instead.`);
+    } catch {
+      showResult('bad', 'Network error — try again, or use the manual steps below.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  });
+}
+
+// Called by openFieldAdd/openFieldEdit so a stale "Found it" message from a
+// previously edited field doesn't linger under the next one.
+function resetFieldGeocodeUI() {
+  const resultEl = document.getElementById('ffe-geocode-result');
+  if (resultEl) { resultEl.className = 'geocode-result hidden'; resultEl.innerHTML = ''; }
+  const mapsLink = document.getElementById('ffe-maps-link');
+  const addressEl = document.getElementById('ffe-address');
+  if (mapsLink) {
+    const q = (addressEl?.value || '').trim();
+    mapsLink.href = q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : 'https://www.google.com/maps';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', wireFieldGeocode);
+if (document.readyState !== 'loading') wireFieldGeocode();

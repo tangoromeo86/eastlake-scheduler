@@ -209,8 +209,23 @@
           <label style="flex:1">Notes <span class="field-form-hint">(parking, entrance, directions)</span><input id="ffe-notes" type="text" placeholder="e.g. Field is behind the school, park in rear lot"></label>
         </div>
         <div class="field-form-row">
-          <label>Coordinates <span class="field-form-hint">(paste from Google Maps, e.g. 41.535017, -81.461610)</span><input id="ffe-coords" inputmode="decimal" autocomplete="off" spellcheck="false" type="text" placeholder="41.535017, -81.461610"></label>
+          <label style="flex:1">Coordinates <span class="field-form-hint">(used to balance how much teams travel — filled in automatically from the address above)</span>
+            <div class="coords-row">
+              <input id="ffe-coords" inputmode="decimal" autocomplete="off" spellcheck="false" type="text" placeholder="Click “Find”, or enter the address above and Save">
+              <button type="button" id="ffe-geocode-btn" class="btn btn-secondary btn-sm">Find</button>
+            </div>
+          </label>
         </div>
+        <div id="ffe-geocode-result" class="geocode-result hidden"></div>
+        <details class="av-group">
+          <summary>Address didn't work, or need to place it exactly?</summary>
+          <ol class="coords-manual">
+            <li>Open <a id="ffe-maps-link" href="https://www.google.com/maps" target="_blank" rel="noopener">Google Maps</a> and find the field.</li>
+            <li>Right-click the exact spot (press and hold on a phone).</li>
+            <li>Click the numbers at the top of the menu that pops up — something like <code>41.535017, -81.461610</code>. That copies them.</li>
+            <li>Paste them into the Coordinates box above.</li>
+          </ol>
+        </details>
         <div class="field-form-actions">
           <button id="ffe-cancel" class="btn btn-secondary">Cancel</button>
           <button id="ffe-save" class="btn btn-primary">Save Field</button>

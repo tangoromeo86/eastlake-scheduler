@@ -1443,3 +1443,38 @@ input.has-error:focus, select.has-error:focus {
   .confirm-actions { justify-content: flex-end; }
   .confirm-actions .btn { flex: 0 0 auto; }
 }
+
+/* ── Field coordinate lookup ──────────────────────────────────────────────────
+   Coordinates were a raw paste-this-format field with an example in tiny grey
+   text — no realistic path for someone who doesn't already know what a
+   coordinate is. Geocoding the address they already typed removes the step;
+   this styles what's left: the button, the result, and the manual fallback. */
+.coords-row { display: flex; gap: 8px; }
+.coords-row input { flex: 1; }
+.coords-row .btn { flex: 0 0 auto; white-space: nowrap; }
+
+.geocode-result {
+  margin-top: 8px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.geocode-result.hidden { display: none; }
+.geocode-result.good    { background: var(--good-bg); color: #166534; border: 1px solid #86efac; }
+.geocode-result.bad     { background: var(--bad-bg);  color: #991b1b; border: 1px solid #fca5a5; }
+.geocode-result.pending { background: var(--surface-2); color: var(--ink-3); border: 1px solid var(--line); }
+.geocode-result a { color: inherit; font-weight: 600; text-decoration: underline; }
+
+.coords-manual {
+  margin: 10px 0 0 20px;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.7;
+}
+.coords-manual code {
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12.5px;
+}

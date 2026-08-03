@@ -225,6 +225,38 @@ async function loginAs(page, email, password) {
       bad('no delete button found to test confirmation', 'director page had none');
     }
 
+    // ── Coordinate lookup ────────────────────────────────────────────────────
+    // The thing this whole feature replaced: a raw lat/lng paste field nobody
+    // could reasonably fill in. Confirms the "Find" button actually geocodes a
+    // real address and fills the coordinates box, live against Nominatim.
+    await dpage.goto(`${BASE}/director`, { waitUntil: 'networkidle' });
+    await dpage.click('#btn-add-field').catch(() => {});
+    await dpage.waitForTimeout(250);
+    if (await dpage.locator('#ffe-geocode-btn').count()) {
+      await dpage.fill('#ffe-name', 'Chardon Community Park');
+      await dpage.fill('#ffe-address', '12519 Chardon Windsor Rd, Chardon OH');
+      await dpage.click('#ffe-geocode-btn');
+      await dpage.waitForResponse(r => r.url().includes('/api/geocode'), { timeout: 8000 }).catch(() => {});
+      await dpage.waitForTimeout(300);
+      const coordsValue = await dpage.locator('#ffe-coords').inputValue();
+      /^-?\d+\.\d+,-?\d+\.\d+$/.test(coordsValue)
+        ? ok('Find button geocodes a real address into coordinates', coordsValue)
+        : bad('geocoding did not fill coordinates', `got "${coordsValue}"`);
+
+      const resultVisible = await dpage.locator('#ffe-geocode-result.good').count();
+      resultVisible
+        ? ok('geocode result shows a map link to confirm the pin')
+        : bad('no confirmation shown after a successful lookup', '');
+
+      // Manual fallback must still be reachable for addresses that don't match.
+      const manualSteps = await dpage.locator('.coords-manual li').count();
+      manualSteps >= 4
+        ? ok('manual coordinate instructions are present as a fallback', `${manualSteps} steps`)
+        : bad('manual fallback instructions missing or incomplete', `${manualSteps} steps found`);
+    } else {
+      bad('geocode button not found on the field form', 'expected #ffe-geocode-btn');
+    }
+
     derr.length === 0
       ? ok('no JS errors during the director flow')
       : bad('JS errors in director flow', derr.slice(0, 2).join(' | '));

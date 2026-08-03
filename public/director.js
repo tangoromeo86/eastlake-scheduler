@@ -466,6 +466,7 @@ function openFieldAdd() {
   document.getElementById('ffe-address').value = '';
   document.getElementById('ffe-notes').value = '';
   document.getElementById('ffe-coords').value = '';
+  resetFieldGeocodeUI();
   renderFieldAvailabilityGrid('ffe-availability', null, seasonSlots);
   document.getElementById('ffe-error').classList.add('hidden');
   document.getElementById('field-editor-form').classList.remove('hidden');
@@ -482,6 +483,7 @@ function openFieldEdit(fieldId) {
   document.getElementById('ffe-address').value = field.address || '';
   document.getElementById('ffe-notes').value = field.notes || '';
   document.getElementById('ffe-coords').value = field.coordinates ? field.coordinates.replace(',', ', ') : '';
+  resetFieldGeocodeUI();
   renderFieldAvailabilityGrid('ffe-availability', field.availability, seasonSlots);
   document.getElementById('ffe-error').classList.add('hidden');
   document.getElementById('field-editor-form').classList.remove('hidden');

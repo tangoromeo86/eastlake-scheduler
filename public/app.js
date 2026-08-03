@@ -2066,6 +2066,7 @@ function openFieldAdd() {
   document.getElementById('ffe-address').value = '';
   document.getElementById('ffe-notes').value = '';
   document.getElementById('ffe-coords').value = '';
+  resetFieldGeocodeUI();
   document.getElementById('ffe-error').classList.add('hidden');
   document.getElementById('field-editor-form').classList.remove('hidden');
   document.getElementById('ffe-name').focus();
@@ -2081,6 +2082,7 @@ function openFieldEdit(fieldId) {
   document.getElementById('ffe-address').value = field.address || '';
   document.getElementById('ffe-notes').value = field.notes || '';
   document.getElementById('ffe-coords').value = field.coordinates ? field.coordinates.replace(',', ', ') : '';
+  resetFieldGeocodeUI();
   document.getElementById('ffe-error').classList.add('hidden');
   document.getElementById('field-editor-form').classList.remove('hidden');
   document.getElementById('ffe-name').focus();
