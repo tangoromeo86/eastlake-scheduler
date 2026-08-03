@@ -8,8 +8,9 @@
     "dev": "node server.js",
     "test": "node test/validate.test.js && node test/scheduler.test.js",
     "test:ui": "node test/browser.test.js",
+    "test:ui:admin": "node test/browser-admin.test.js",
     "test:e2e": "bash test/e2e.sh",
-    "test:all": "npm test && npm run test:e2e && npm run test:ui"
+    "test:all": "npm test && npm run test:e2e && npm run test:ui && npm run test:ui:admin"
   },
   "dependencies": {
     "express": "^4.18.2",

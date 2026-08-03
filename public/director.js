@@ -188,7 +188,8 @@ function renderGamesList() {
 function populateCrFieldSelects() {
   const fields = [...(seasonData?.fields || [])].sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
   const opts = '<option value="">— No preference —</option>' + fields.map(f => `<option value="${String(f.id)}">${esc(fieldDisplayName(f))}</option>`).join('');
-  document.getElementById('cr-field').innerHTML = opts;
+  // There is no #cr-field element — same leftover reference as my-team.js;
+  // only #cr-mo-field (the manual-override path) actually exists.
   document.getElementById('cr-mo-field').innerHTML = opts.replace('No preference', 'Keep current');
 }
 

@@ -859,8 +859,6 @@ app.post('/api/upload-season', requireAdmin, (req, res) => {
     error: `${badTeams.length} team(s) reference unknown division IDs: ` + [...new Set(badTeams.map(t => t.division_id))].join(', '),
   });
 
-  if (fs.existsSync(SEASON_FILE)) {
-  }
   if (fs.existsSync(SCHEDULE_FILE)) fs.unlinkSync(SCHEDULE_FILE);
 
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }

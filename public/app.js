@@ -705,7 +705,12 @@ function renderMatrixView(divGames, divTeams) {
     return;
   }
 
-  const pairKey = (a, b) => `${Math.min(a,b)}_${Math.max(a,b)}`;
+  // Team ids are strings ("team-1", "team-23", ...) — Math.min/Math.max both
+  // return NaN on non-numeric strings, which collapsed every matchup into one
+  // "NaN_NaN" bucket (every cell showed the division's total game count).
+  // Same fix already proven correct in lib/scheduler.js's teamPairKey; can't
+  // require() that file from a browser script, so replicated inline.
+  const pairKey = (a, b) => [String(a), String(b)].sort().join('-');
   const counts = {};
   const homeAway = {};
   divGames.forEach(g => {
@@ -1394,6 +1399,40 @@ document.getElementById('cal-team-select').addEventListener('change', () => {
   }
 });
 
+// Derives the calendar's month tiles from the actual season (start + weeks),
+// extended to cover any game date outside that nominal window. Ported from
+// public/viewer.js's fix — app.js is a separate browser script with its own
+// independent copy of renderCalendarView, which still had the pre-fix
+// hardcoded spring-2026 months array until now.
+function calendarMonthsFor(season, games) {
+  const MONTH_NAMES = ['January','February','March','April','May','June',
+                       'July','August','September','October','November','December'];
+  const dates = [];
+  if (season?.start) {
+    const start = new Date(season.start + 'T00:00:00Z');
+    dates.push(start);
+    const weeks = Number(season.weeks) || 1;
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + weeks * 7);
+    dates.push(end);
+  }
+  for (const g of (games || [])) {
+    if (g?.date) dates.push(new Date(g.date + 'T00:00:00Z'));
+  }
+  if (!dates.length) dates.push(new Date());
+
+  const minD = new Date(Math.min(...dates.map(d => d.getTime())));
+  const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
+  const months = [];
+  let y = minD.getUTCFullYear(), m = minD.getUTCMonth();
+  const endY = maxD.getUTCFullYear(), endM = maxD.getUTCMonth();
+  while (y < endY || (y === endY && m <= endM)) {
+    months.push({ year: y, month: m + 1, label: `${MONTH_NAMES[m]} ${y}` });
+    m++; if (m > 11) { m = 0; y++; }
+  }
+  return months;
+}
+
 function renderCalendarView(divGames, divTeams) {
   const wrapper = document.getElementById('calendar-wrapper');
   if (!divTeams.length) { wrapper.innerHTML = '<p class="no-games">No teams found.</p>'; return; }
@@ -1417,11 +1456,7 @@ function renderCalendarView(divGames, divTeams) {
   }
   globalBo.forEach(d => blackouts.add(d));
 
-  const months = [
-    { year: 2026, month: 4, label: 'April 2026' },
-    { year: 2026, month: 5, label: 'May 2026' },
-    { year: 2026, month: 6, label: 'June 2026' },
-  ];
+  const months = calendarMonthsFor(seasonData?.season, divGames);
 
   const legend = `<div class="cal-legend">
     <span class="cal-legend-item"><span class="cal-legend-swatch cal-swatch-game"></span> Game scheduled</span>
@@ -1592,6 +1627,7 @@ function buildTeamEditorRow(team, fieldOptions) {
             <input type="checkbox" id="ef-confirmed-${id}" ${team.confirmed !== false ? 'checked' : ''}>
             Confirmed
           </label>
+          <span class="editor-hint" style="text-align:right;max-width:160px">Unchecked teams are excluded from scheduling (still counts as registered)</span>
           <div class="editor-form-actions">
             <button class="btn btn-secondary" onclick="toggleTeamForm(${JSON.stringify(id)})">Cancel</button>
             <button class="btn btn-primary" onclick="saveTeamForm(${JSON.stringify(id)})">Save</button>
