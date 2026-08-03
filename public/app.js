@@ -10,6 +10,7 @@ let currentPage = 'schedule';
 let seasonSlots = null;
 let editingGameId = null;
 let isAddingGame = false;
+let session = null;
 
 // ── Top-level page switching ──────────────────────────────────────────────────
 document.querySelectorAll('.top-nav-btn').forEach(btn => {
@@ -2521,30 +2522,9 @@ document.getElementById('cfe-save').addEventListener('click', async () => {
 
 // ── Verify-email banner (view vs. act) ───────────────────────────────────────────
 
-async function initVerifyBanner() {
-  let session;
+async function initVerifyBannerFromSession() {
   try { session = await fetchJSON('api/auth/me'); } catch { return; }
-  if (!session || session.verified) return;
-
-  const banner = document.createElement('div');
-  banner.id = 'verify-banner';
-  banner.style.cssText = 'background:#fef3c7;border-bottom:1px solid #f59e0b;color:#92400e;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px;justify-content:center';
-  banner.innerHTML = `<span>Verify your email to make schedule changes.</span>
-    <button id="verify-banner-btn" class="btn btn-secondary btn-sm">Send verification link</button>`;
-  document.body.prepend(banner);
-
-  document.getElementById('verify-banner-btn').addEventListener('click', async (e) => {
-    e.target.disabled = true;
-    e.target.textContent = 'Sending…';
-    try {
-      const res = await fetch('api/auth/request-verify', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ next: location.pathname }),
-      });
-      const data = await res.json();
-      e.target.textContent = data.ok ? 'Check your email!' : (data.error || 'Failed — try again');
-    } catch { e.target.textContent = 'Network error — try again'; e.target.disabled = false; }
-  });
+  initVerifyBanner(session, 'Verify your email to make schedule changes.', location.pathname);
 }
 
 // ── Change Requests (admin visibility) ────────────────────────────────────────
@@ -2828,6 +2808,6 @@ async function deleteSnapshot(id) {
 }
 
 
-initVerifyBanner();
+initVerifyBannerFromSession();
 
 init();

@@ -65,6 +65,15 @@ function startServer() {
   const instrumented = src.replace(
     'const { token, code } = createVerifyToken(s.email);',
     'const { token, code } = createVerifyToken(s.email);\n  console.log("DEBUG_LOGIN_CODE:" + s.email + ":" + code);'
+  ).replace(
+    // No real RESEND_API_KEY here, so a genuine send always fails — fine for
+    // tests that grab the code from this log and call verify-code directly,
+    // but it means the real "click Send, see the code field appear" UI path
+    // can never be exercised without this. Forces the send to report success
+    // in this throwaway copy only; the code itself is still a real one from
+    // createVerifyToken above, so the UI's happy path is exercised for real.
+    "if (!resend) return { ok: false, reason: 'No RESEND_API_KEY configured' };",
+    "if (!resend) return { ok: true };"
   );
   fs.writeFileSync(INSTRUMENTED_COPY, instrumented);
 
@@ -247,6 +256,40 @@ async function loginAs(page, email, password) {
       ? ok('code-based verification succeeds against a real code')
       : bad('code verification failed', JSON.stringify(verifyResult));
     await dpage.reload({ waitUntil: 'networkidle' });
+
+    // ── Verify-code UI actually exists on the public viewer ──────────────────
+    // Ted: non-admins had no place to enter the verification code. Root cause
+    // was viewer.js (and app.js) each defining their own local
+    // initVerifyBanner() that shadowed public/ui.js's shared version — the one
+    // director.js/my-team.js already called, which has the code input. The
+    // check above only proved the server route works; it deliberately didn't
+    // drive the actual banner, which is exactly how this got missed before.
+    const vcCtx = await browser.newContext();
+    const vcpage = await vcCtx.newPage();
+    await loginAs(vcpage, 'casey@example.com');
+    await vcpage.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+    await vcpage.waitForTimeout(300);
+    (await vcpage.locator('#verify-banner-btn').count())
+      ? ok('unverified coach sees the verify banner on the public viewer')
+      : bad('no verify banner shown for an unverified coach', '');
+    await vcpage.click('#verify-banner-btn');
+    await vcpage.waitForTimeout(400);
+    (await vcpage.locator('#verify-code-input:visible').count())
+      ? ok('a code-entry field appears after requesting verification')
+      : bad('no code-entry field appeared — banner is link-only', '');
+    const vclog = srv.__log || '';
+    const vcCodeLine = vclog.split('\n').reverse().find(l => l.includes('DEBUG_LOGIN_CODE:casey@example.com:'));
+    const vcCode = vcCodeLine ? vcCodeLine.split(':').pop().trim() : null;
+    if (vcCode) {
+      await vcpage.fill('#verify-code-input', vcCode);
+      await vcpage.click('#verify-code-btn');
+      await vcpage.waitForTimeout(400);
+      (await vcpage.locator('#verify-banner').count()) === 0
+        ? ok('typing the code in the UI verifies and dismisses the banner')
+        : bad('banner still present after entering a valid code', '');
+    } else {
+      bad('could not find the coach verification code in server log', '');
+    }
 
     // Readiness banner — added so a director can see what blocks the scheduler.
     const banner = await dpage.locator('.notice').first().textContent().catch(() => '');
