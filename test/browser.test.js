@@ -105,13 +105,32 @@ async function loginAs(page, email, password) {
       ? ok('no JS errors on public pages')
       : bad('JS errors on load', errors.slice(0, 2).join(' | '));
 
-    // ── Guide renders for all three roles ────────────────────────────────────
+    // ── Public guide renders director + coach only ───────────────────────────
+    // Admin instructions moved to /admin-guide (requireAdmin, served from
+    // views/ rather than public/) — Ted was explicit that only he needs them,
+    // so the public guide must NOT mention them, and the admin page must be
+    // unreachable without the admin session.
     await page.goto(`${BASE}/guide`, { waitUntil: 'networkidle' });
     const sections = await page.locator('h2').allTextContents();
-    const wanted = ['League Admin', 'Program Director', 'Coach'];
+    const wanted = ['Program Director', 'Coach'];
     wanted.every(w => sections.some(s => s.includes(w)))
-      ? ok('guide renders all three role sections')
+      ? ok('public guide renders director + coach sections')
       : bad('guide sections missing', sections.join(', '));
+    sections.some(s => s.includes('League Admin'))
+      ? bad('admin section leaked into the public guide', sections.join(', '))
+      : ok('admin section is not present in the public guide');
+
+    // page.goto follows redirects, so response.status() reflects the final hop
+    // (the login page, 200) rather than requireAdmin's actual 302 — checking
+    // where navigation ends up is what proves the gate, not the last status
+    // code in the chain.
+    await page.goto(`${BASE}/admin-guide`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    const landedUrl = page.url();
+    const bodyHasAdminContent = await page.locator('body').textContent().then(t => t.includes('League Admin'));
+    landedUrl.includes('/login') && !bodyHasAdminContent
+      ? ok('/admin-guide redirects to login without an admin session')
+      : bad('/admin-guide reachable without admin auth', `landed on ${landedUrl}`);
+    await page.goto(`${BASE}/guide`, { waitUntil: 'networkidle' }); // back to a known page for the anchor check below
 
     // Anchor links must actually resolve to real targets.
     const anchors = await page.$$eval('a[href^="#"]', as => as.map(a => a.getAttribute('href').slice(1)));

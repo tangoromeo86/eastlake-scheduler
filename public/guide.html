@@ -54,7 +54,6 @@
       changes get sorted between coaches without every message routing through the league admin.</p>
 
     <div class="role-nav">
-      <a href="#admin"><div class="who">League Admin</div><div class="what">Set up the season, generate and finalise the schedule</div></a>
       <a href="#director"><div class="who">Program Director</div><div class="what">Manage your fields, teams and coaches</div></a>
       <a href="#coach"><div class="who">Coach</div><div class="what">Set availability and sort out game changes</div></a>
     </div>
@@ -75,99 +74,6 @@
         address only takes effect once you click a confirmation link sent <em>to the new address</em>. Until
         then your old email keeps working. This stops a typo locking you out.</p>
     </div>
-
-    <!-- ══════════════════════════════════════════════════════════════════ -->
-    <h2 id="admin">League Admin</h2>
-    <p class="lede">Your job is the start and end of the season. The middle mostly runs itself.</p>
-
-    <div class="toc"><strong>In order:</strong>
-      <ul>
-        <li><a href="#a1">1. Set up the season</a></li>
-        <li><a href="#a2">2. Add programs and directors</a></li>
-        <li><a href="#a3">3. Let registration happen</a></li>
-        <li><a href="#a4">4. Generate the schedule</a></li>
-        <li><a href="#a5">5. During the season</a></li>
-        <li><a href="#a6">6. Finalise</a></li>
-        <li><a href="#a7">Backups and restore</a></li>
-        <li><a href="#a8">Starting next season</a></li>
-      </ul>
-    </div>
-
-    <h3 id="a1">1. Set up the season</h3>
-    <p>Go to <strong>Season</strong>. Set:</p>
-    <ul>
-      <li><strong>Season start</strong> — any date in your first week; it snaps back to that week's Monday.</li>
-      <li><strong>Number of weeks</strong> — typically 10–12.</li>
-      <li><strong>Games per team</strong> — the league default. Individual teams can ask for a different number.</li>
-      <li><strong>Blackout dates</strong> — holidays and anything league-wide, one date per line as <code>YYYY-MM-DD</code>.</li>
-    </ul>
-    <p>The <strong>Resulting Calendar</strong> below updates as you save, so you can see exactly which weeks
-      and Saturdays you've created before anyone relies on them.</p>
-    <p>Then add your <strong>divisions</strong> (e.g. U10 Boys, U12 Girls). A division can't be deleted while
-      teams are still in it.</p>
-
-    <div class="callout">
-      <p><strong>Kickoff times are fixed, not per-team.</strong> Weekday games start at <strong>6:30pm</strong>;
-        Saturday slots are <strong>10:00, 12:00 and 2:00</strong>. Coaches don't pick times when setting
-        availability — they only say whether they can play. The exact time gets nudged later, by the two coaches,
-        when a game actually needs to move.</p>
-    </div>
-
-    <h3 id="a2">2. Add programs and directors</h3>
-    <p>Go to <strong>Programs</strong>. Add a program per city or club, then add one director per program with
-      their name, email and phone.</p>
-    <p>That's the last thing you have to do for that program's setup — the director takes it from here.</p>
-
-    <h3 id="a3">3. Let registration happen</h3>
-    <p>Directors add their own fields and teams, and coaches fill in their own availability. You don't need to
-      chase this in the tool; check the <strong>Teams</strong> tab to see how it's filling in.</p>
-
-    <h3 id="a4">4. Generate the schedule</h3>
-    <p>Click <strong>Run Scheduler</strong> in the header and type <code>run</code> to confirm. A backup is taken
-      automatically first, so this is always reversible.</p>
-    <p>The scheduler will:</p>
-    <ul>
-      <li>Put games on <strong>Saturdays wherever possible</strong> — a weekday is only ever used when no Saturday
-        slot could take that matchup</li>
-      <li>Give every team its requested number of games</li>
-      <li>Keep home and away <strong>within one of each other</strong> for every team</li>
-      <li>Respect every team's and field's availability, including single-date exceptions</li>
-      <li>Balance <strong>travel miles</strong> as far as geography allows</li>
-    </ul>
-    <p>Any matchup it couldn't place is reported at the top of the page. It will still schedule everything else —
-      one awkward pairing never costs you the rest of the division.</p>
-    <p>Check the <strong>Stats</strong> view for games, home/away split and travel miles per team.</p>
-
-    <h3 id="a5">5. During the season</h3>
-    <p>Coaches sort changes out between themselves. You only get pulled in when something stalls:</p>
-    <ul>
-      <li>A coach doesn't respond by their deadline → <strong>their director</strong> is emailed</li>
-      <li>Still nothing two days later → <strong>you</strong> are emailed</li>
-      <li>The two coaches keep swapping proposals without agreeing → <strong>both directors</strong> are looped in</li>
-    </ul>
-    <p><strong>Change Requests</strong> shows every live negotiation: which round it's on, whose turn it is, the
-      deadline (overdue ones in red) and what's on the table. Click <strong>History</strong> on any game for the
-      full story — who asked for what, when, and every escalation that fired.</p>
-
-    <h3 id="a6">6. Finalise</h3>
-    <p><strong>Finalize Games</strong> locks the schedule. Finalised games can't receive change requests at all.
-      Games still mid-negotiation are deliberately left alone and reported back, so resolve those first.</p>
-
-    <h3 id="a7">Backups and restore</h3>
-    <p><strong>Backups</strong> lists your restore points. One is taken automatically before anything destructive
-      (running the scheduler, uploading a season, importing a CSV, finalising, starting a new season), and you
-      can take your own labelled one at any time.</p>
-    <p>Each restore point contains the season, roster, schedule <em>and</em> change requests together, so
-      restoring always gives you a consistent league — never a schedule referring to teams that no longer exist.</p>
-    <div class="callout key">
-      <p><strong>Restoring is itself undoable.</strong> The current state is snapshotted before any restore, so
-        if you roll back to the wrong point you can roll straight forward again.</p>
-    </div>
-
-    <h3 id="a8">Starting next season</h3>
-    <p><strong>Season → Start a New Season</strong>. It archives everything as a labelled restore point, keeps
-      your programs, directors, fields and divisions (they carry over year to year), and clears teams, the
-      schedule and any open change requests ready for fresh registration.</p>
 
     <!-- ══════════════════════════════════════════════════════════════════ -->
     <h2 id="director">Program Director</h2>

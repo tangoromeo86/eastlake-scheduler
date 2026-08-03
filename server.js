@@ -453,6 +453,12 @@ app.get('/director/', (req, res) => res.redirect((BASE_PATH || '') + '/director'
 
 app.get('/guide', (req, res) => res.sendFile(path.join(__dirname, 'public', 'guide.html')));
 
+// Served from views/, not public/ — express.static below only serves the
+// public/ directory, so this file has no path a director or coach could guess
+// their way into. requireAdmin is the real gate; the separate directory means
+// there's no static fallback that could ever bypass it.
+app.get('/admin-guide', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'views', 'admin-guide.html')));
+
 app.get('/my-team', requireAuth, (req, res) => {
   const s = getSession(req);
   if (s.role !== 'coach') return res.redirect(BASE_PATH + '/');
