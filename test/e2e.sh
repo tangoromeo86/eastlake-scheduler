@@ -537,6 +537,13 @@ ORPHAN=$(curl -s -b admin.txt -X DELETE "$BASE/api/season/programs/$P1" | python
 PUB=$(curl -s "$BASE/api/public/season" | python3 -c "import sys,json;d=json.load(sys.stdin);print('email' in json.dumps(d.get('teams',[])))")
 [ "$PUB" = "False" ] && pass "public season endpoint exposes no contact emails" || fail "public endpoint leaks emails"
 
+# The public viewer's date-range header reads season.end directly
+# (public/viewer.js:135, `s.end || s.start`) — missed the first time the NaN
+# fix went in because /api/season got it but /api/public/season didn't, and
+# nothing grepped for this call site. Only caught by looking at the live page.
+PUBEND=$(curl -s "$BASE/api/public/season" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['season'].get('end'))")
+[ -n "$PUBEND" ] && [ "$PUBEND" != "None" ] && pass "public season endpoint includes a computed end date ($PUBEND)" || fail "public season.end missing: $PUBEND"
+
 SUGG=$(curl -s -b admin.txt "$BASE/api/game/$GID/suggest-dates" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)

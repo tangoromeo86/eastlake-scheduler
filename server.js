@@ -612,6 +612,11 @@ app.get('/api/public/season', (req, res) => {
     const data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
     res.json({
       ...data,
+      // Same gap as /api/season had (public/viewer.js:135 reads season.end for
+      // its date-range header) — missed the first time because it wasn't
+      // caught by grepping for the literal pattern, only found once actually
+      // looking at the live page.
+      season: data.season ? { ...data.season, end: seasonEndDate(data.season) } : data.season,
       directors: undefined,
       teams: (data.teams || []).map(({ coach, phone, email, ...rest }) => rest),
     });

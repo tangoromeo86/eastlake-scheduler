@@ -121,6 +121,22 @@ async function loginAs(page, email, password) {
       ? ok('no JS errors on public pages')
       : bad('JS errors on load', errors.slice(0, 2).join(' | '));
 
+    // The viewer's date-range header (public/viewer.js:135, `s.end || s.start`)
+    // showed the same date twice ("8/31/2026 – 8/31/2026") because
+    // /api/public/season didn't get the same computed `end` fix /api/season
+    // did — only caught by looking at the live seeded dev site, not by
+    // grepping for the pattern. This is the regression guard for that.
+    await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+    const barText = await page.locator('#season-bar').textContent().catch(() => '');
+    const dateMatch = barText.match(/(\d{1,2}\/\d{1,2}\/\d{4})\s*–\s*(\d{1,2}\/\d{1,2}\/\d{4})/);
+    if (dateMatch) {
+      dateMatch[1] !== dateMatch[2]
+        ? ok('viewer shows a real season date range', `${dateMatch[1]} – ${dateMatch[2]}`)
+        : bad('viewer date range repeats the same day', dateMatch[0]);
+    } else {
+      ok('no season configured yet, so no date range to check');
+    }
+
     // ── Public guide renders director + coach only ───────────────────────────
     // Admin instructions moved to /admin-guide (requireAdmin, served from
     // views/ rather than public/) — Ted was explicit that only he needs them,
