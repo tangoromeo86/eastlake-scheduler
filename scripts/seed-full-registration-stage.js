@@ -48,38 +48,60 @@ const FIELDS = [
   { program: 'Painesville', name: 'Painesville Recreation Park',
     address: '1025 Hardy Rd, Painesville OH 44077', coordinates: '41.7667003,-81.2310896' },
 ];
-// Weighted-random availability — teams and fields are genuinely restricted,
-// not just decorated with a couple of modulo-based exceptions. Weeknights are
-// the exception rather than the rule (most rec coaches can't reliably get a
-// team to a weeknight game), and even Saturdays — the default day — aren't
-// wide open, so the scheduler has to actually work to fit everyone in rather
-// than having every slot trivially available.
+// Weighted-random availability. Two things Ted was explicit about after
+// seeing the first pass:
+//   1. Weekdays should be genuinely locked down; Saturdays should stay
+//      generally available, with only a few random segments restricted —
+//      not comparably restricted to weekdays.
+//   2. A team's own availability and its home field's availability are
+//      correlated in real life, not independent dice rolls — a director
+//      wouldn't have set that field as home if the two rarely lined up.
+//      "If the field is available, the team likely will be as well" (not
+//      100%, but close).
+// So availability is generated field-first, then team status is picked from
+// a distribution conditioned on whether the team's own field is open that
+// same slot, rather than two independent rolls that occasionally produce a
+// team that wants to host on a day its own field is closed.
 function weightedPick(weights) {
   const total = weights.reduce((s, [, w]) => s + w, 0);
   let r = Math.random() * total;
   for (const [v, w] of weights) { if (r < w) return v; r -= w; }
   return weights[weights.length - 1][0];
 }
-const WEEKDAY_STATUS_WEIGHTS = [['none', 50], ['both', 25], ['host', 15], ['travel', 10]];
-const SATURDAY_STATUS_WEIGHTS = [['both', 55], ['host', 18], ['travel', 15], ['none', 12]];
-const FIELD_WEEKDAY_OPEN_WEIGHTS = [[true, 55], [false, 45]];
-const FIELD_SATURDAY_OPEN_WEIGHTS = [[true, 70], [false, 30]];
-const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday'];
+const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 const SAT_SLOTS = ['early', 'midday', 'late'];
 
-function randomTeamAvailability() {
-  const weekday = {};
-  for (const day of WEEKDAY_NAMES) weekday[day] = { status: weightedPick(WEEKDAY_STATUS_WEIGHTS) };
-  const saturday = {};
-  for (const slot of SAT_SLOTS) saturday[slot] = weightedPick(SATURDAY_STATUS_WEIGHTS);
-  return { weekday, saturday, dates: {} };
-}
+const FIELD_WEEKDAY_OPEN_WEIGHTS = [[true, 45], [false, 55]];
+const FIELD_SATURDAY_OPEN_WEIGHTS = [[true, 85], [false, 15]];
+
+// Weekday: locked down regardless of field, but a team is even less likely
+// to want to host specifically when its own field is closed that day.
+const WEEKDAY_TEAM_FIELD_OPEN   = [['none', 35], ['both', 30], ['host', 20], ['travel', 15]];
+const WEEKDAY_TEAM_FIELD_CLOSED = [['none', 45], ['travel', 35], ['both', 12], ['host', 8]];
+// Saturday: generally available (mostly 'both') when the field cooperates;
+// still not wide open, just clearly the default day rather than a coin flip.
+const SATURDAY_TEAM_FIELD_OPEN   = [['both', 75], ['host', 10], ['travel', 10], ['none', 5]];
+const SATURDAY_TEAM_FIELD_CLOSED = [['travel', 45], ['none', 35], ['both', 12], ['host', 8]];
 
 function randomFieldAvailability() {
   const weekday = {};
   for (const day of WEEKDAY_NAMES) weekday[day] = weightedPick(FIELD_WEEKDAY_OPEN_WEIGHTS);
   const saturday = {};
   for (const slot of SAT_SLOTS) saturday[slot] = weightedPick(FIELD_SATURDAY_OPEN_WEIGHTS);
+  return { weekday, saturday, dates: {} };
+}
+
+function randomTeamAvailabilityFor(fieldAvailability) {
+  const weekday = {};
+  for (const day of WEEKDAY_NAMES) {
+    const weights = fieldAvailability.weekday[day] ? WEEKDAY_TEAM_FIELD_OPEN : WEEKDAY_TEAM_FIELD_CLOSED;
+    weekday[day] = { status: weightedPick(weights) };
+  }
+  const saturday = {};
+  for (const slot of SAT_SLOTS) {
+    const weights = fieldAvailability.saturday[slot] ? SATURDAY_TEAM_FIELD_OPEN : SATURDAY_TEAM_FIELD_CLOSED;
+    saturday[slot] = weightedPick(weights);
+  }
   return { weekday, saturday, dates: {} };
 }
 
@@ -160,7 +182,7 @@ for (const divName of DIVISIONS) {
     const home = progFields[n % progFields.length];
     const coach = `${COACH_FIRST[n % COACH_FIRST.length]} ${COACH_LAST[(n * 3) % COACH_LAST.length]}`;
 
-    const availability = randomTeamAvailability();
+    const availability = randomTeamAvailabilityFor(home.availability);
     // ~2 in 5 teams also have a one-off Saturday blackout — a tournament, a
     // family thing, whatever keeps a real roster off the field one week.
     if (Math.random() < 0.4) {
