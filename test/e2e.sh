@@ -31,6 +31,11 @@ setup_server() {
   cp "$repo/server.js" "$repo/.server.e2e.js"
   perl -0pi -e 's/(const \{ token, code \} = createVerifyToken\(s\.email\);)/$1\n  console.log("DEBUG_LOGIN_TOKEN:" + s.email + ":" + token);\n  console.log("DEBUG_LOGIN_CODE:" + s.email + ":" + code);/' "$repo/.server.e2e.js"
   perl -0pi -e 's/(const confirmUrl = `\$\{req\.protocol\})/console.log("DEBUG_EMAILCHANGE_TOKEN:" + token);\n  $1/' "$repo/.server.e2e.js"
+  # The change-request emails now carry a rich HTML body (game context, field
+  # address, opposite coach's contact info) instead of a bare text link — this
+  # logs a one-line fingerprint of each one sent so the suite can assert the
+  # content actually made it into the email, not just that sendEmail was called.
+  perl -0pi -e 's/(async function sendEmail\(\{ to, subject, text, html \}\) \{)/$1\n  if (html) console.log("DEBUG_EMAIL_HTML:" + subject + "||" + html.replace(\/\\n\/g, " "));/' "$repo/.server.e2e.js"
   perl -0pi -e 's/(^setInterval\(\(\) => \{ checkEscalations.*$)/$1\napp.post("\/api\/_test\/check-escalations", requireAdmin, async (req, res) => { await checkEscalations(); res.json({ ok: true }); });/m' "$repo/.server.e2e.js"
   ( cd "$repo" && ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=testpass \
       SESSION_SECRET=e2e PORT="${E2E_PORT:-3099}" RESEND_API_KEY= \
@@ -316,6 +321,30 @@ curl -s -b coacha.txt -X POST "$BASE/api/change-requests" -H "$J" \
 CRID=$(python3 -c "import json;print(json.load(open('$CRJ'))[-1]['id'])")
 TOK=$(python3 -c "import json;print(json.load(open('$CRJ'))[-1]['tokens']['approve'])")
 curl -s "$BASE/api/change-requests/$CRID/confirm?token=$TOK" > /dev/null
+
+# --- The emails carry real context now, not a bare link (Ted's ask) ---
+# Node buffers stdout when it's redirected to a file, so the DEBUG_EMAIL_HTML
+# line can lag a beat behind the curl call that triggered it — poll briefly
+# rather than reading the log exactly once.
+wait_for_log() {  # wait_for_log <grep-pattern> -> prints last matching line
+  local pattern=$1 line=''
+  for _ in $(seq 1 20); do
+    line=$(grep "$pattern" "$LOG" | tail -1)
+    [ -n "$line" ] && { echo "$line"; return; }
+    sleep 0.1
+  done
+  echo "$line"
+}
+CONFIRM_HTML=$(wait_for_log "DEBUG_EMAIL_HTML:Confirm your change request")
+[[ "$CONFIRM_HTML" == *"Main St"* || "$CONFIRM_HTML" == *"Oak Ave"* ]] && pass "requester's confirm email includes the field address" || fail "no field address in confirm email"
+[[ "$CONFIRM_HTML" == *"Yes, send it to the other coach"* ]] && pass "confirm email has a real button, not a bare link" || fail "no styled action button in confirm email"
+TURN_HTML=$(wait_for_log "DEBUG_EMAIL_HTML:Change requested for Game")
+# Phone isn't asserted here — this fixture's own PUT /api/teams call above
+# happens to omit it (unlike the real UI, which always sends it), so it's
+# genuinely absent on this team at this point in the run; email is what's
+# guaranteed present regardless of fixture shape.
+[[ "$TURN_HTML" == *"coacha@example.com"* ]] && pass "the other coach's contact info is in the response-needed email" || fail "opposite coach's contact info missing from response-needed email"
+[[ "$TURN_HTML" == *"Oak Ave"* || "$TURN_HTML" == *"Main St"* ]] && pass "response-needed email shows the current game's location" || fail "no location in response-needed email"
 
 R1=$(python3 -c "
 import json, os; c=json.load(open('$CRJ'))[-1]

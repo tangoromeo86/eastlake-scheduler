@@ -33,12 +33,13 @@ const EMAIL_FROM      = process.env.EMAIL_FROM      || 'schedule@tedriolo.com';
 const EMAIL_REPLY_TO  = process.env.EMAIL_REPLY_TO  || '';
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 
-async function sendEmail({ to, subject, text }) {
+async function sendEmail({ to, subject, text, html }) {
   if (!resend) return { ok: false, reason: 'No RESEND_API_KEY configured' };
   const toArr = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean);
   if (!toArr.length) return { ok: false, reason: 'No recipients' };
   try {
     const payload = { from: EMAIL_FROM, to: toArr, subject, text };
+    if (html) payload.html = html;
     if (EMAIL_REPLY_TO) payload.reply_to = EMAIL_REPLY_TO;
     await resend.emails.send(payload);
     return { ok: true };
@@ -1307,6 +1308,90 @@ function describeSlot(slot, fields) {
   return `${nice} at ${slot.time}${fname ? ` — ${fname}` : ''}`;
 }
 
+// ── Change-request email formatting ─────────────────────────────────────────
+// Ted: these emails were "super basic" — a naked link with no surrounding
+// context, no field address, no team names beyond what fit on one line, and
+// no way to reach the other coach without going back into the app. A coach
+// reading this on their phone should be able to act on it without opening
+// anything else. Kept alongside the plain-text body Resend also gets (some
+// clients still render text-only, and it's a reasonable fallback).
+function emailEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function fieldLabel(fieldId, fields) {
+  const f = (fields || []).find(x => String(x.id) === String(fieldId));
+  return f ? (f.sub_field ? `${f.name} – ${f.sub_field}` : f.name) : '';
+}
+
+function fieldAddressOf(fieldId, fields) {
+  return (fields || []).find(x => String(x.id) === String(fieldId))?.address || '';
+}
+
+function niceDate(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+// Wraps a body in the shared shell — logo line, card, footer. Inline styles
+// throughout since email clients don't reliably load a <style> block.
+function emailShell(bodyHtml) {
+  return `<!DOCTYPE html><html><body style="margin:0;padding:24px 16px;background:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+    <div style="max-width:520px;margin:0 auto">
+      <div style="font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#94a3b8;margin-bottom:14px">Eastlake League Scheduler</div>
+      <div style="background:#fff;border-radius:12px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.06)">
+        ${bodyHtml}
+      </div>
+      <div style="font-size:12px;color:#94a3b8;margin-top:16px;text-align:center">This is an automated message from the Eastlake League Scheduler.</div>
+    </div>
+  </body></html>`;
+}
+
+function emailHeading(text) {
+  return `<h1 style="font-size:17px;font-weight:700;color:#1a1a2e;margin:0 0 12px">${emailEsc(text)}</h1>`;
+}
+
+function emailP(text) {
+  return `<p style="font-size:14px;line-height:1.55;color:#334155;margin:0 0 14px">${text}</p>`;
+}
+
+// A proper button instead of a raw URL sitting in the middle of the text.
+function emailButton(url, label, kind) {
+  const bg = kind === 'secondary' ? '#fff' : '#2d6cf0';
+  const fg = kind === 'secondary' ? '#334155' : '#fff';
+  const border = kind === 'secondary' ? 'border:1.5px solid #cbd5e1;' : '';
+  return `<a href="${url}" style="display:inline-block;padding:11px 20px;margin:4px 8px 4px 0;background:${bg};color:${fg};${border}border-radius:8px;font-size:14px;font-weight:600;text-decoration:none">${emailEsc(label)}</a>`;
+}
+
+// The recurring "here's the game" block — division/teams/current time & place.
+// gameOrSlot accepts either a full game record or a {date,time,field_id} slot
+// (the two shapes that show up at different points in the negotiation).
+function emailGameCard({ homeLabel, awayLabel, date, time, fieldName, fieldAddress, caption }) {
+  return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:0 0 14px">
+    ${caption ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#94a3b8;margin-bottom:6px">${emailEsc(caption)}</div>` : ''}
+    <div style="font-size:14px;font-weight:600;color:#1a1a2e;margin-bottom:4px">${emailEsc(homeLabel)} vs ${emailEsc(awayLabel)}</div>
+    <div style="font-size:13px;color:#475569;line-height:1.6">
+      ${emailEsc(niceDate(date))} at ${emailEsc(time)}<br>
+      ${emailEsc(fieldName || '')}${fieldAddress ? ` — ${emailEsc(fieldAddress)}` : ''}
+    </div>
+  </div>`;
+}
+
+// "Opposite coach" contact block — the whole point of a change-request email
+// is often just to work something out directly, and the old version made you
+// go back into the app to find a phone number for that.
+function emailContactCard(team, label) {
+  if (!team) return '';
+  const bits = [];
+  if (team.coach) bits.push(emailEsc(team.coach));
+  if (team.phone) bits.push(`<a href="tel:${emailEsc(team.phone)}" style="color:#2d6cf0;text-decoration:none">${emailEsc(team.phone)}</a>`);
+  if (team.email) bits.push(`<a href="mailto:${emailEsc(team.email)}" style="color:#2d6cf0;text-decoration:none">${emailEsc(team.email)}</a>`);
+  if (!bits.length) return '';
+  return `<div style="font-size:13px;color:#475569;margin:0 0 14px">
+    <span style="font-weight:600;color:#1a1a2e">${emailEsc(label || (team.label || team.name))}</span><br>${bits.join(' · ')}
+  </div>`;
+}
+
 // Every round gets fresh links, so a link from an earlier round can't be replayed.
 function newRoundTokens() {
   return { approve: newActionToken(), counter: newActionToken(), cancel: newActionToken() };
@@ -1343,51 +1428,93 @@ function directorsForTeams(seasonData, teamIds) {
 }
 
 // Emails the coach whose turn it is with Approve / Suggest-another-time links.
-async function notifyTurn(req, cr, seasonData) {
+// `game` is the game as it stands right now (still at its original date/time
+// until someone actually agrees) — shown alongside the proposal so the coach
+// sees both "what's currently on the books" and "what's being asked for"
+// without having to go find the game in the app first.
+async function notifyTurn(req, cr, seasonData, game) {
   const teams = seasonData.teams || [];
   const awaitingTeam = teams.find(t => String(t.id) === String(cr.awaiting_team_id));
   const proposingTeam = teams.find(t => String(t.id) === String(cr.proposing_team_id));
   if (!awaitingTeam?.email) return { ok: false, reason: 'no email for awaiting team' };
   const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
   const isCounter = cr.round > 1;
+  const proposerName = proposingTeam?.label || proposingTeam?.name || 'The other coach';
+  const subject = `${isCounter ? 'New time proposed' : 'Change requested'} for Game #${cr.game_id} — your response needed`;
+  const approveUrl = `${base}/approve?token=${cr.tokens.approve}`;
+  const counterUrl = `${base}/counter?token=${cr.tokens.counter}`;
+
+  const html = emailShell(`
+    ${emailHeading(subject)}
+    ${emailP(`${emailEsc(proposerName)} ${isCounter ? 'has proposed a different time' : 'has requested a change'} for this game.`)}
+    ${game ? emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: 'Currently scheduled' }) : ''}
+    ${emailGameCard({ homeLabel: game?.home_team_name || 'Home', awayLabel: game?.away_team_name || 'Away', date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: 'Proposed instead' })}
+    ${cr.reason ? emailP(`<strong>Note from ${emailEsc(proposerName)}:</strong> ${emailEsc(cr.reason)}`) : ''}
+    ${emailContactCard(proposingTeam, `${proposerName} (proposing)`)}
+    <div style="margin:18px 0 4px">${emailButton(approveUrl, 'Works for us — approve it')}${emailButton(counterUrl, 'Suggest another time', 'secondary')}</div>
+    ${emailP(`Please respond by ${emailEsc(formatDeadline(cr.response_due_at))}. If we don't hear from you by then, your director will be looped in to help move things along.`)}
+  `);
+
   return sendEmail({
     to: awaitingTeam.email,
-    subject: `${isCounter ? 'New time proposed' : 'Change requested'} for Game #${cr.game_id} — your response needed`,
+    subject,
     text: [
-      `${proposingTeam?.label || proposingTeam?.name || 'The other coach'} ${isCounter ? 'has proposed a different time' : 'has requested a change'} for Game #${cr.game_id}.`,
+      `${proposerName} ${isCounter ? 'has proposed a different time' : 'has requested a change'} for Game #${cr.game_id}.`,
       '',
+      game ? `Currently: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}` : null,
       `Proposed: ${describeSlot(cr.proposal, seasonData.fields)}`,
       cr.reason ? `Reason: ${cr.reason}` : null,
       '',
-      `Works for us — approve it: ${base}/approve?token=${cr.tokens.approve}`,
-      `Doesn't work — suggest another time: ${base}/counter?token=${cr.tokens.counter}`,
+      proposingTeam ? `${proposerName} — ${[proposingTeam.phone, proposingTeam.email].filter(Boolean).join(' · ')}` : null,
+      '',
+      `Works for us — approve it: ${approveUrl}`,
+      `Doesn't work — suggest another time: ${counterUrl}`,
       '',
       `Please respond by ${formatDeadline(cr.response_due_at)}. If we don't hear from you by then, your director will be looped in to help move things along.`,
       '', '— Eastlake Scheduler',
     ].filter(l => l !== null).join('\n'),
+    html,
   });
 }
 
 // When no slot works for both teams, the coaches can't resolve it themselves —
 // hand it to the directors rather than dead-ending.
-async function notifyNoOptions(req, cr, seasonData, context) {
+async function notifyNoOptions(req, cr, seasonData, context, game) {
   const dirs = directorsForTeams(seasonData, [cr.requesting_team_id || cr.initiating_team_id, cr.other_team_id]);
   const emails = dirs.map(d => d.email).filter(Boolean);
   if (!emails.length) return;
   const teams = seasonData.teams || [];
+  const homeTeam = teams.find(t => String(t.id) === String(cr.initiating_team_id));
+  const awayTeam = teams.find(t => String(t.id) === String(cr.other_team_id));
   const nameOf = id => teams.find(t => String(t.id) === String(id))?.label || id;
+  const subject = `Needs your help: no workable time for Game #${cr.game_id}`;
+
+  const html = emailShell(`
+    ${emailHeading(subject)}
+    ${emailP(emailEsc(context))}
+    ${game ? emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: 'Currently scheduled' }) : emailP(`Game #${cr.game_id}: ${emailEsc(nameOf(cr.initiating_team_id))} vs ${emailEsc(nameOf(cr.other_team_id))}`)}
+    ${emailContactCard(homeTeam)}
+    ${emailContactCard(awayTeam)}
+    ${emailP(`There is no date that satisfies both teams' stated availability, their fields' open hours, and the rest of the schedule. Usually this means one team's availability needs updating, or a field needs to open up.`)}
+  `);
+
   await sendEmail({
     to: [...new Set(emails)],
-    subject: `Needs your help: no workable time for Game #${cr.game_id}`,
+    subject,
     text: [
       `${context}`,
       '',
       `Game #${cr.game_id}: ${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}`,
+      game ? `Currently: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}` : null,
+      '',
+      homeTeam ? `${nameOf(cr.initiating_team_id)} — ${[homeTeam.phone, homeTeam.email].filter(Boolean).join(' · ')}` : null,
+      awayTeam ? `${nameOf(cr.other_team_id)} — ${[awayTeam.phone, awayTeam.email].filter(Boolean).join(' · ')}` : null,
       '',
       `There is no date that satisfies both teams' stated availability, their fields' open hours, and the rest of the schedule.`,
       `Usually this means one team's availability needs updating, or a field needs to open up.`,
       '', '— Eastlake Scheduler',
-    ].join('\n'),
+    ].filter(l => l !== null).join('\n'),
+    html,
   });
 }
 
@@ -1428,6 +1555,7 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
   if (!requestingTeamId) return res.status(403).json({ error: 'You can only request a change on your own game' });
   const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
   const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
+  const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));
 
   if (daysBetween(new Date().toISOString(), game.date) < CHANGE_REQUEST_MIN_DAYS) {
     return res.status(400).json({ error: `This game is within ${CHANGE_REQUEST_MIN_DAYS} days — use Manual Override instead`, lockout: true });
@@ -1441,7 +1569,8 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
     await notifyNoOptions(req,
       { game_id, initiating_team_id: requestingTeamId, other_team_id: otherTeamId },
       seasonData,
-      `${requestingTeam.label || 'A coach'} tried to reschedule Game #${game_id}, but no workable slot exists.`);
+      `${requestingTeam.label || 'A coach'} tried to reschedule Game #${game_id}, but no workable slot exists.`,
+      game);
     return res.status(400).json({ error: 'No date works for both teams right now. Your directors have been notified to help.', no_options: true });
   }
   const picked = resolveProposedSlot(slots, slot, schedData, game_id);
@@ -1471,21 +1600,35 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
   writeChangeRequests(list);
 
   const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
+  const confirmSubject = `Confirm your change request — Game #${game_id}`;
+  const confirmUrl = `${base}/confirm?token=${cr.tokens.approve}`;
+  const cancelUrl = `${base}/cancel?token=${cr.tokens.cancel}`;
+  const confirmHtml = emailShell(`
+    ${emailHeading(confirmSubject)}
+    ${emailP(`Did you mean to request a schedule change for this game? Nothing reaches ${emailEsc(otherTeam?.label || otherTeam?.name || 'the other coach')} until you confirm below.`)}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: 'Currently scheduled' })}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: 'You proposed' })}
+    ${cr.reason ? emailP(`<strong>Your note:</strong> ${emailEsc(cr.reason)}`) : ''}
+    <div style="margin:18px 0 4px">${emailButton(confirmUrl, 'Yes, send it to the other coach')}${emailButton(cancelUrl, 'No, cancel', 'secondary')}</div>
+    ${emailP('If you ignore this, nothing happens — the request never reaches the other coach.')}
+  `);
   const result = await sendEmail({
     to: requestingTeam.email,
-    subject: `Confirm your change request — Game #${game_id}`,
+    subject: confirmSubject,
     text: [
       `Did you mean to request a schedule change for Game #${game_id}?`,
       '',
+      `Currently: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}`,
       `You proposed: ${describeSlot(cr.proposal, seasonData.fields)}`,
       cr.reason ? `Reason: ${cr.reason}` : null,
       '',
-      `Yes, send it to the other coach: ${base}/confirm?token=${cr.tokens.approve}`,
-      `No, cancel: ${base}/cancel?token=${cr.tokens.cancel}`,
+      `Yes, send it to the other coach: ${confirmUrl}`,
+      `No, cancel: ${cancelUrl}`,
       '',
       'If you ignore this, nothing happens — the request never reaches the other coach.',
       '', '— Eastlake Scheduler',
     ].filter(l => l !== null).join('\n'),
+    html: confirmHtml,
   });
   if (!result.ok) return res.status(500).json({ error: 'Could not send confirmation email', reason: result.reason });
   res.json({ ok: true, change_request: cr });
@@ -1543,7 +1686,7 @@ app.get('/api/change-requests/:id/confirm', async (req, res) => {
     try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
   }
 
-  await notifyTurn(req, cr, seasonData);
+  await notifyTurn(req, cr, seasonData, gameIdx !== -1 ? schedData.games[gameIdx] : null);
   res.send(crActionPage('Request sent',
     `Your proposal for Game #${cr.game_id} has gone to the other coach. The game stays at its current time until you both agree.`));
 });
@@ -1622,15 +1765,27 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   // Tell the coach who proposed it that it's locked in.
   const teams = seasonData.teams || [];
   const proposer = teams.find(t => String(t.id) === String(cr.proposing_team_id));
+  const otherOfPair = [cr.initiating_team_id, cr.other_team_id].find(id => String(id) !== String(cr.proposing_team_id));
+  const otherTeamForProposer = teams.find(t => String(t.id) === String(otherOfPair));
   if (proposer?.email && updatedGame) {
+    const lockedSubject = `Agreed — Game #${cr.game_id} has moved`;
+    const lockedHtml = emailShell(`
+      ${emailHeading(lockedSubject)}
+      ${emailP('Your proposed time was accepted. The schedule has been updated.')}
+      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, caption: 'New date & time' })}
+      ${emailContactCard(otherTeamForProposer, `${otherTeamForProposer?.label || otherTeamForProposer?.name || 'The other coach'} (in case anything else needs sorting out)`)}
+    `);
     await sendEmail({
       to: proposer.email,
-      subject: `Agreed — Game #${cr.game_id} has moved`,
+      subject: lockedSubject,
       text: [
         `Your proposed time for Game #${cr.game_id} was accepted. The schedule has been updated.`,
         '', `New date: ${updatedGame.day} ${updatedGame.date}`, `New time: ${updatedGame.time}`, `Field: ${updatedGame.field_name}`,
+        otherTeamForProposer ? '' : null,
+        otherTeamForProposer ? `${otherTeamForProposer.label || otherTeamForProposer.name} — ${[otherTeamForProposer.phone, otherTeamForProposer.email].filter(Boolean).join(' · ')}` : null,
         '', '— Eastlake Scheduler',
-      ].join('\n'),
+      ].filter(l => l !== null).join('\n'),
+      html: lockedHtml,
     });
   }
 
@@ -1708,7 +1863,7 @@ app.post('/api/change-requests/:id/counter', express.urlencoded({ extended: fals
     cr.status = 'escalated';
     list[idx] = cr;
     writeChangeRequests(list);
-    await notifyNoOptions(req, cr, seasonData, `Game #${cr.game_id} is stuck — no time fits both teams.`);
+    await notifyNoOptions(req, cr, seasonData, `Game #${cr.game_id} is stuck — no time fits both teams.`, game);
     return res.send(crActionPage('No other times work',
       `There's no other date that fits both teams for Game #${cr.game_id}. Your directors have been notified.`));
   }
@@ -1726,7 +1881,7 @@ app.post('/api/change-requests/:id/counter', express.urlencoded({ extended: fals
   list[idx] = cr;
   writeChangeRequests(list);
 
-  await notifyTurn(req, cr, seasonData);
+  await notifyTurn(req, cr, seasonData, game);
   res.send(crActionPage('Sent back',
     `Your suggested time for Game #${cr.game_id} has gone to the other coach. The game stays at its current time until you both agree.`));
 });
@@ -1785,18 +1940,32 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
   const recipients = [otherTeam?.email, ...directors.map(d => d.email)].filter(Boolean);
   const uniqueRecipients = [...new Set(recipients)];
   if (uniqueRecipients.length) {
+    const requesterName = requestingTeam?.label || requestingTeam?.name || 'A coach';
+    const overrideSubject = `Game changed by manual override — Game #${gameId}`;
+    const overrideHtml = emailShell(`
+      ${emailHeading(overrideSubject)}
+      ${emailP(`${emailEsc(requesterName)} changed this game directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`)}
+      ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: 'Original' })}
+      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, caption: 'New' })}
+      ${emailP(`<strong>Confirmed with:</strong> ${emailEsc(cr.manual_override.who)}<br><strong>How:</strong> ${emailEsc(cr.manual_override.how)}`)}
+      ${emailContactCard(requestingTeam, `${requesterName} (made this change)`)}
+    `);
     await sendEmail({
       to: uniqueRecipients,
-      subject: `Game changed by manual override — Game #${gameId}`,
+      subject: overrideSubject,
       text: [
-        `${requestingTeam?.label || requestingTeam?.name || 'A coach'} changed Game #${gameId} directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`,
+        `${requesterName} changed Game #${gameId} directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`,
         '',
+        `Original: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}`,
         `New date: ${updatedGame.day} ${updatedGame.date}`, `New time: ${updatedGame.time}`, `Field: ${updatedGame.field_name}`,
         '',
         `Confirmed with: ${cr.manual_override.who}`,
         `How: ${cr.manual_override.how}`,
+        '',
+        requestingTeam ? `${requesterName} — ${[requestingTeam.phone, requestingTeam.email].filter(Boolean).join(' · ')}` : null,
         '', '— Eastlake Scheduler',
-      ].join('\n'),
+      ].filter(l => l !== null).join('\n'),
+      html: overrideHtml,
     });
   }
 
@@ -2878,9 +3047,10 @@ async function checkEscalations() {
         .filter(d => d.active !== false && d.program_id === awaitingTeam?.program_id)
         .map(d => d.email).filter(Boolean);
       if (emails.length) {
+        const subj = `Action needed: Game #${cr.game_id} change request unanswered`;
         await sendEmail({
           to: emails,
-          subject: `Action needed: Game #${cr.game_id} change request unanswered`,
+          subject: subj,
           text: [
             `${awaitingTeam?.label || 'One of your coaches'} missed their deadline to respond to Game #${cr.game_id}.`,
             `Proposed by ${proposingTeam?.label || 'the other coach'}: ${describeSlot(cr.proposal, seasonData.fields)}`,
@@ -2888,6 +3058,14 @@ async function checkEscalations() {
             `Could you nudge them to either accept it or suggest another time?`,
             '', '— Eastlake Scheduler',
           ].join('\n'),
+          html: emailShell(`
+            ${emailHeading(subj)}
+            ${emailP(`${emailEsc(awaitingTeam?.label || 'One of your coaches')} missed their deadline to respond.`)}
+            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: `Proposed by ${proposingTeam?.label || 'the other coach'}` })}
+            ${emailP(`Round ${cr.round} — they had ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (due ${emailEsc(formatDeadline(cr.response_due_at))}), now ${daysElapsed} days on.`)}
+            ${emailContactCard(awaitingTeam)}
+            ${emailP('Could you nudge them to either accept it or suggest another time?')}
+          `),
         });
       }
       cr.director_notified_at = new Date().toISOString();
@@ -2896,9 +3074,10 @@ async function checkEscalations() {
 
     if (daysElapsed >= deadlineDays + ADMIN_ESCALATION_GRACE_DAYS && !cr.admin_notified_at) {
       if (ADMIN_EMAIL) {
+        const subj = `Escalation: Game #${cr.game_id} change request still unanswered`;
         await sendEmail({
           to: ADMIN_EMAIL,
-          subject: `Escalation: Game #${cr.game_id} change request still unanswered`,
+          subject: subj,
           text: [
             `A proposed time for Game #${cr.game_id} has gone unanswered for ${daysElapsed} days (director already notified).`,
             `Round ${cr.round} — deadline was ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (${formatDeadline(cr.response_due_at)}).`,
@@ -2907,6 +3086,12 @@ async function checkEscalations() {
             `Reason: ${cr.reason || '—'}`,
             '', '— Eastlake Scheduler',
           ].join('\n'),
+          html: emailShell(`
+            ${emailHeading(subj)}
+            ${emailP(`A proposed time has gone unanswered for ${daysElapsed} days (director already notified).`)}
+            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: `Proposed by ${nameOf(cr.proposing_team_id)} — waiting on ${nameOf(cr.awaiting_team_id)}` })}
+            ${emailP(`Round ${cr.round} — deadline was ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (${emailEsc(formatDeadline(cr.response_due_at))}).${cr.reason ? ` Reason: ${emailEsc(cr.reason)}` : ''}`)}
+          `),
         });
       }
       cr.admin_notified_at = new Date().toISOString();
@@ -2920,9 +3105,10 @@ async function checkEscalations() {
       const emails = directorsForTeams(seasonData, [cr.initiating_team_id, cr.other_team_id])
         .map(d => d.email).filter(Boolean);
       if (emails.length) {
+        const subj = `Stuck: Game #${cr.game_id} has been back and forth ${cr.round} times`;
         await sendEmail({
           to: [...new Set(emails)],
-          subject: `Stuck: Game #${cr.game_id} has been back and forth ${cr.round} times`,
+          subject: subj,
           text: [
             `${nameOf(cr.initiating_team_id)} and ${nameOf(cr.other_team_id)} have exchanged ${cr.round} proposals for Game #${cr.game_id} without agreeing.`,
             `Currently on the table: ${describeSlot(cr.proposal, seasonData.fields)} (waiting on ${nameOf(cr.awaiting_team_id)})`,
@@ -2931,6 +3117,12 @@ async function checkEscalations() {
             `They can still resolve it themselves — this is just so you know it's stuck.`,
             '', '— Eastlake Scheduler',
           ].join('\n'),
+          html: emailShell(`
+            ${emailHeading(subj)}
+            ${emailP(`${emailEsc(nameOf(cr.initiating_team_id))} and ${emailEsc(nameOf(cr.other_team_id))} have exchanged ${cr.round} proposals without agreeing.`)}
+            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: `Currently on the table — waiting on ${nameOf(cr.awaiting_team_id)}` })}
+            ${emailP('Every option offered already fits both teams\' stated availability, so this usually means one team\'s availability needs updating. They can still resolve it themselves — this is just so you know it\'s stuck.')}
+          `),
         });
       }
       cr.stalemate_notified_at = new Date().toISOString();
