@@ -564,39 +564,7 @@ document.getElementById('cal-team-select').addEventListener('change', () => {
   }
 });
 
-// Derives the calendar's month tiles from the actual season, not a hardcoded
-// range. Spans season.start through start + weeks (inclusive of partial
-// months on both ends), and extends to cover any game dates that fall outside
-// that window — a manually-moved game shouldn't disappear off the calendar.
-function calendarMonthsFor(season, games) {
-  const MONTH_NAMES = ['January','February','March','April','May','June',
-                       'July','August','September','October','November','December'];
-  const dates = [];
-  if (season?.start) {
-    const start = new Date(season.start + 'T00:00:00Z');
-    dates.push(start);
-    const weeks = Number(season.weeks) || 1;
-    const end = new Date(start);
-    end.setUTCDate(end.getUTCDate() + weeks * 7);
-    dates.push(end);
-  }
-  for (const g of (games || [])) {
-    if (g?.date) dates.push(new Date(g.date + 'T00:00:00Z'));
-  }
-  if (!dates.length) dates.push(new Date());
-
-  const minD = new Date(Math.min(...dates.map(d => d.getTime())));
-  const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
-  const months = [];
-  let y = minD.getUTCFullYear(), m = minD.getUTCMonth();
-  const endY = maxD.getUTCFullYear(), endM = maxD.getUTCMonth();
-  while (y < endY || (y === endY && m <= endM)) {
-    months.push({ year: y, month: m + 1, label: `${MONTH_NAMES[m]} ${y}` });
-    m++; if (m > 11) { m = 0; y++; }
-  }
-  return months;
-}
-
+// calendarMonthsFor is defined once, shared, in ui.js (issue #13).
 function renderCalendarView(divGames, divTeams) {
   const wrapper = document.getElementById('calendar-wrapper');
   if (!divTeams.length) { wrapper.innerHTML = '<p class="empty-state">No teams found.</p>'; return; }

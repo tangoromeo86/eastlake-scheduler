@@ -32,6 +32,7 @@
     <button class="top-nav-btn" data-page="changes" id="nav-changes">&#128221; Changes</button>
     <button class="top-nav-btn" data-page="requests" id="nav-requests">&#128231; Change Requests</button>
     <button class="top-nav-btn" data-page="fields">&#127967; Fields</button>
+    <button class="top-nav-btn" data-page="availability">&#128197; Availability</button>
     <button class="top-nav-btn" data-page="programs">&#127961; Programs</button>
     <button class="top-nav-btn" data-page="season">&#128197; Season</button>
     <button class="top-nav-btn" data-page="backups">&#128190; Backups</button>
@@ -238,6 +239,27 @@
       </div>
     </div>
     <div id="fields-list"></div>
+  </div>
+
+  <div id="page-availability" class="page-section hidden">
+    <div class="changes-toolbar">
+      <span class="changes-toolbar-title">&#128197; League Availability</span>
+    </div>
+    <div class="availability-controls">
+      <label>Division:
+        <select id="acal-division"></select>
+      </label>
+      <label>View:
+        <select id="acal-mode">
+          <option value="team">Team availability</option>
+          <option value="field">Field availability</option>
+        </select>
+      </label>
+      <label><span id="acal-target-label">Team:</span>
+        <select id="acal-target"></select>
+      </label>
+    </div>
+    <div id="admin-avail-cal" class="av-cal-wrapper"></div>
   </div>
 
   <div id="page-programs" class="page-section hidden">

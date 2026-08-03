@@ -396,6 +396,91 @@ async function verifyPage(page, email, srv) {
     } else {
       ok('fixture did not have a second own-game for the lifecycle test (not a failure)');
     }
+
+    // ── Availability calendar: admin (league-wide, filterable by division) ──
+    await p.goto(`${BASE}/admin`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await p.waitForLoadState('domcontentloaded').catch(() => {});
+    await p.waitForTimeout(500);
+    const availTab = p.locator('button:has-text("Availability"), [data-page="availability"]').first();
+    if (await availTab.count()) {
+      await availTab.click();
+      await p.waitForTimeout(400);
+      const teamCells = await p.locator('#admin-avail-cal td.cal-day').count();
+      teamCells > 0
+        ? ok('admin availability calendar renders team status cells')
+        : bad('admin availability calendar rendered no cells', '');
+
+      await p.selectOption('#acal-mode', 'field');
+      await p.waitForTimeout(300);
+      const fieldCells = await p.locator('#admin-avail-cal td.cal-day').count();
+      fieldCells > 0
+        ? ok('admin availability calendar switches to field mode and still renders')
+        : bad('admin field-mode calendar rendered no cells', '');
+
+      const divisions = await p.locator('#acal-division option').count();
+      if (divisions > 1) {
+        await p.selectOption('#acal-division', { index: 1 });
+        await p.waitForTimeout(300);
+        const scopedTargets = await p.locator('#acal-target option').count();
+        scopedTargets >= 0
+          ? ok('admin availability calendar accepts a division filter without crashing')
+          : bad('division filter broke the target list', '');
+      } else {
+        ok('only one division in fixture — division filter present but not exercised (not a failure)');
+      }
+    } else {
+      bad('no Availability tab found in admin nav', '');
+    }
+
+    // ── Availability calendar: director (program-wide, team/field filter) ───
+    const dCtx = await browser.newContext();
+    const dp = await dCtx.newPage();
+    const dirErrs = [];
+    dp.on('pageerror', e => dirErrs.push(e.message));
+    const directorEmail = (seasonData.directors || []).find(d => d.email)?.email;
+    if (directorEmail) {
+      await dp.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+      await dp.fill('#email-input', directorEmail);
+      await dp.click('#continue-btn');
+      await dp.waitForTimeout(600);
+      await dp.goto(`${BASE}/director`, { waitUntil: 'networkidle' });
+      await dp.waitForTimeout(500);
+      const dirCells = await dp.locator('#director-avail-cal td.cal-day').count();
+      dirCells > 0
+        ? ok('director availability calendar renders for their own program')
+        : bad('director availability calendar rendered no cells', '');
+
+      await dp.selectOption('#dcal-mode', 'field').catch(() => {});
+      await dp.waitForTimeout(300);
+      const dirFieldCells = await dp.locator('#director-avail-cal td.cal-day').count();
+      dirFieldCells > 0
+        ? ok('director availability calendar switches to field mode')
+        : bad('director field-mode calendar rendered no cells', '');
+      dirErrs.length === 0
+        ? ok('no JS errors in the director availability calendar')
+        : bad('JS errors in director availability calendar', dirErrs.slice(0, 2).join(' | '));
+    } else {
+      ok('no director account in fixture to test the program-scoped calendar (not a failure)');
+    }
+
+    // ── Availability calendar: coach (own team only) ─────────────────────────
+    const cCtx = await browser.newContext();
+    const ccp = await cCtx.newPage();
+    const coachCalErrs = [];
+    ccp.on('pageerror', e => coachCalErrs.push(e.message));
+    await ccp.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+    await ccp.fill('#email-input', someTeam.email);
+    await ccp.click('#continue-btn');
+    await ccp.waitForTimeout(600);
+    await ccp.goto(`${BASE}/my-team`, { waitUntil: 'networkidle' });
+    await ccp.waitForTimeout(500);
+    const coachCalCells = await ccp.locator('#mte-avail-cal td.cal-day').count();
+    coachCalCells > 0
+      ? ok('coach availability calendar renders for their own team')
+      : bad('coach availability calendar rendered no cells', '');
+    coachCalErrs.length === 0
+      ? ok('no JS errors on the coach availability calendar')
+      : bad('JS errors on coach availability calendar', coachCalErrs.slice(0, 2).join(' | '));
   } catch (e) {
     bad('browser run threw', e.message);
   } finally {

@@ -49,6 +49,7 @@ async function init() {
   document.getElementById('mte-earliest').value = myTeam.earliest_date || '';
   populateFieldSelect();
   renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots);
+  renderMyAvailabilityCalendar();
 
   try { scheduleData = await fetchJSON('api/schedule'); } catch { scheduleData = { games: [] }; }
   renderGamesList();
@@ -293,6 +294,13 @@ function populateFieldSelect() {
   sel.value = String(myTeam.home_field_id || '');
 }
 
+function renderMyAvailabilityCalendar() {
+  renderAvailabilityCalendar('mte-avail-cal', seasonData?.season, (dateStr) => {
+    const isSaturday = uiDayName(dateStr) === 'Saturday';
+    return resolveTeamAvailabilityStatus(myTeam.availability, dateStr, isSaturday);
+  }, 'team');
+}
+
 document.getElementById('mte-save').addEventListener('click', async () => {
   const errEl = document.getElementById('mte-error');
   const okEl  = document.getElementById('mte-success');
@@ -326,6 +334,7 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     myTeam = data.team;
     document.getElementById('team-title').textContent = myTeam.label || 'My Team';
     renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots);
+    renderMyAvailabilityCalendar();
     if (data.email_change_pending) {
       okEl.textContent = data.email_change_sent
         ? `Saved. Check ${data.pending_email} for a link to confirm your new email — until then, your old email stays on file.`

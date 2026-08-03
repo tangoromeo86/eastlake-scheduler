@@ -65,6 +65,7 @@ async function init() {
   populateFieldSelect();
   renderTeamsList();
   renderFieldsList();
+  populateAvailCalTargets();
 
   try { scheduleData = await fetchJSON('api/schedule'); } catch { scheduleData = { games: [] }; }
   renderGamesList();
@@ -311,6 +312,41 @@ function myProgramTeams() {
   return (seasonData?.teams || []).filter(t => t.program_id === session.program_id);
 }
 
+// ── Availability calendar ────────────────────────────────────────────────────
+
+function populateAvailCalTargets() {
+  const mode = document.getElementById('dcal-mode').value;
+  const sel = document.getElementById('dcal-target');
+  document.getElementById('dcal-target-label').textContent = mode === 'field' ? 'Field:' : 'Team:';
+  if (mode === 'field') {
+    const fields = [...myProgramFields()].sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
+    sel.innerHTML = fields.map(f => `<option value="${String(f.id)}">${esc(fieldDisplayName(f))}</option>`).join('');
+  } else {
+    const teams = [...myProgramTeams()].sort((a, b) => teamLabel(a).localeCompare(teamLabel(b)));
+    sel.innerHTML = teams.map(t => `<option value="${String(t.id)}">${esc(teamLabel(t))}</option>`).join('');
+  }
+  renderDirectorAvailCalendar();
+}
+
+function renderDirectorAvailCalendar() {
+  const mode = document.getElementById('dcal-mode').value;
+  const targetId = document.getElementById('dcal-target').value;
+  const wrapper = document.getElementById('director-avail-cal');
+  if (!targetId) { wrapper.innerHTML = `<p class="empty-state">No ${mode === 'field' ? 'fields' : 'teams'} yet.</p>`; return; }
+  if (mode === 'field') {
+    const field = myProgramFields().find(f => String(f.id) === targetId);
+    renderAvailabilityCalendar('director-avail-cal', seasonData?.season, (dateStr) =>
+      resolveFieldAvailabilityStatus(field?.availability, dateStr, uiDayName(dateStr) === 'Saturday'), 'field');
+  } else {
+    const team = myProgramTeams().find(t => String(t.id) === targetId);
+    renderAvailabilityCalendar('director-avail-cal', seasonData?.season, (dateStr) =>
+      resolveTeamAvailabilityStatus(team?.availability, dateStr, uiDayName(dateStr) === 'Saturday'), 'team');
+  }
+}
+
+document.getElementById('dcal-mode').addEventListener('change', populateAvailCalTargets);
+document.getElementById('dcal-target').addEventListener('change', renderDirectorAvailCalendar);
+
 // ── Teams ─────────────────────────────────────────────────────────────────────
 
 function populateDivisionSelect() {
@@ -466,6 +502,7 @@ document.getElementById('tfe-save').addEventListener('click', async () => {
     seasonData = await fetchJSON('api/season');
     document.getElementById('team-editor-form').classList.add('hidden');
     renderTeamsList();
+    populateAvailCalTargets();
     if (data.email_change_pending) {
       toast(data.email_change_sent
         ? `Saved. Email unchanged until ${data.pending_email} clicks the confirmation link.`
@@ -480,6 +517,7 @@ async function deleteTeam(teamId, teamName) {
     if (!await deleteWithBlockers(`api/teams/${teamId}`, teamName, 'delete')) return;
     seasonData = await fetchJSON('api/season');
     renderTeamsList();
+    populateAvailCalTargets();
     populateFieldSelect();
   } catch (e) { toast('Network error. Try again.', 'bad'); }
 }
@@ -587,6 +625,7 @@ document.getElementById('ffe-save').addEventListener('click', async () => {
     seasonData = await fetchJSON('api/season');
     document.getElementById('field-editor-form').classList.add('hidden');
     renderFieldsList();
+    populateAvailCalTargets();
     populateFieldSelect();
   } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
 });
@@ -596,6 +635,7 @@ async function deleteField(fieldId, fieldName) {
     if (!await deleteWithBlockers(`api/season/fields/${fieldId}`, fieldName, 'delete')) return;
     seasonData = await fetchJSON('api/season');
     renderFieldsList();
+    populateAvailCalTargets();
     populateFieldSelect();
   } catch (e) { toast('Network error. Try again.', 'bad'); }
 }

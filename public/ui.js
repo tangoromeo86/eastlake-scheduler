@@ -464,3 +464,128 @@ function fieldAvailabilitySummary(field) {
   if (dateOverrides) parts.push(`${dateOverrides} date exception${dateOverrides !== 1 ? 's' : ''}`);
   return parts.length ? { text: parts.join(', '), restricted: true } : { text: 'Fully open', restricted: false };
 }
+
+// ── Availability calendar (shared by coach/director/admin) ──────────────────
+// Derives the calendar's month tiles from the actual season (start + weeks),
+// not a hardcoded range — same logic that used to live independently in both
+// viewer.js and app.js (issue #13) until it was centralized here.
+function calendarMonthsFor(season, games) {
+  const MONTH_NAMES = ['January','February','March','April','May','June',
+                       'July','August','September','October','November','December'];
+  const dates = [];
+  if (season?.start) {
+    const start = new Date(season.start + 'T00:00:00Z');
+    dates.push(start);
+    const weeks = Number(season.weeks) || 1;
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + weeks * 7);
+    dates.push(end);
+  }
+  for (const g of (games || [])) {
+    if (g?.date) dates.push(new Date(g.date + 'T00:00:00Z'));
+  }
+  if (!dates.length) dates.push(new Date());
+
+  const minD = new Date(Math.min(...dates.map(d => d.getTime())));
+  const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
+  const months = [];
+  let y = minD.getUTCFullYear(), m = minD.getUTCMonth();
+  const endY = maxD.getUTCFullYear(), endM = maxD.getUTCMonth();
+  while (y < endY || (y === endY && m <= endM)) {
+    months.push({ year: y, month: m + 1, label: `${MONTH_NAMES[m]} ${y}` });
+    m++; if (m > 11) { m = 0; y++; }
+  }
+  return months;
+}
+
+const UI_SAT_SLOTS = ['early', 'midday', 'late'];
+
+function uiDayName(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  return ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getUTCDay()];
+}
+
+// Mirrors lib/scheduler.js's resolveTeamAvailability, collapsed to one status
+// per day for calendar display (a Saturday with different-per-slot answers
+// shows as "mixed" rather than picking one slot arbitrarily).
+function resolveTeamAvailabilityStatus(availability, dateStr, isSaturday) {
+  const a = (availability && typeof availability === 'object') ? availability : {};
+  const ex = a.dates && a.dates[dateStr];
+  if (isSaturday) {
+    const vals = UI_SAT_SLOTS.map(k => {
+      if (ex && typeof ex === 'object' && ex[k]) return ex[k];
+      return (a.saturday && a.saturday[k]) || 'both';
+    });
+    const uniq = [...new Set(vals)];
+    return uniq.length === 1 ? uniq[0] : 'mixed';
+  }
+  if (ex && typeof ex === 'object' && ex.status) return ex.status;
+  const day = uiDayName(dateStr);
+  const entry = (a.weekday && a.weekday[day]) || {};
+  return entry.status || 'both';
+}
+
+// Mirrors lib/scheduler.js's resolveFieldAvailability, collapsed to one
+// open/closed/mixed status per day.
+function resolveFieldAvailabilityStatus(availability, dateStr, isSaturday) {
+  const a = (availability && typeof availability === 'object') ? availability : {};
+  const ex = a.dates && a.dates[dateStr];
+  if (isSaturday) {
+    const vals = UI_SAT_SLOTS.map(k => {
+      const v = (ex && typeof ex === 'object' && ex[k] !== undefined) ? ex[k] : (a.saturday ? a.saturday[k] : true);
+      return v !== false;
+    });
+    if (vals.every(Boolean)) return 'open';
+    if (vals.every(v => !v)) return 'closed';
+    return 'mixed';
+  }
+  if (ex !== undefined && ex !== null && typeof ex !== 'object') return ex !== false ? 'open' : 'closed';
+  if (ex && typeof ex === 'object' && ex.status !== undefined) return ex.status !== false ? 'open' : 'closed';
+  const day = uiDayName(dateStr);
+  return (a.weekday ? a.weekday[day] : true) !== false ? 'open' : 'closed';
+}
+
+const AV_STATUS_LABEL = {
+  both: 'Available', home: 'Home only', away: 'Away only', none: 'Unavailable', mixed: 'Mixed',
+  open: 'Open', closed: 'Closed',
+};
+
+function renderAvailabilityMonth(year, month, label, statusFn) {
+  const firstDow = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const DAY_HEADS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push('<td class="cal-empty"></td>');
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = year + '-' + String(month).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+    const status = statusFn(dateStr) || 'both';
+    cells.push(`<td class="cal-day av-${status}" title="${AV_STATUS_LABEL[status] || status}"><span class="cal-day-num">${d}</span><span class="av-label">${AV_STATUS_LABEL[status] || status}</span></td>`);
+  }
+  const remaining = (7 - (cells.length % 7)) % 7;
+  for (let i = 0; i < remaining; i++) cells.push('<td class="cal-empty"></td>');
+  const rows = [];
+  for (let i = 0; i < cells.length; i += 7) rows.push('<tr>' + cells.slice(i, i+7).join('') + '</tr>');
+  return `<div class="cal-month"><div class="cal-month-label">${uiEsc(label)}</div>
+    <div class="table-wrap"><table class="cal-table">
+      <thead><tr>${DAY_HEADS.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table></div></div>`;
+}
+
+function availabilityLegend(kind) {
+  const items = kind === 'field'
+    ? [['open','Open'], ['mixed','Mixed'], ['closed','Closed']]
+    : [['both','Available'], ['home','Home only'], ['away','Away only'], ['mixed','Mixed'], ['none','Unavailable']];
+  return '<div class="cal-legend">' + items.map(([cls, label]) =>
+    `<span class="cal-legend-item"><span class="cal-legend-swatch av-${cls}"></span> ${label}</span>`
+  ).join('') + '</div>';
+}
+
+// containerId: where to render. season: seasonData.season. statusFn(dateStr) => status string.
+function renderAvailabilityCalendar(containerId, season, statusFn, kind) {
+  const wrapper = document.getElementById(containerId);
+  if (!wrapper) return;
+  const months = calendarMonthsFor(season, []);
+  if (!months.length) { wrapper.innerHTML = '<p class="empty-state">No season configured.</p>'; return; }
+  wrapper.innerHTML = availabilityLegend(kind) + months.map(m => renderAvailabilityMonth(m.year, m.month, m.label, statusFn)).join('');
+}

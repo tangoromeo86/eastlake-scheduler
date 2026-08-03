@@ -25,6 +25,7 @@ document.querySelectorAll('.top-nav-btn').forEach(btn => {
     document.getElementById('page-backups').classList.toggle('hidden', currentPage !== 'backups');
     document.getElementById('page-fields').classList.toggle('hidden', currentPage !== 'fields');
     document.getElementById('page-programs').classList.toggle('hidden', currentPage !== 'programs');
+    document.getElementById('page-availability').classList.toggle('hidden', currentPage !== 'availability');
     if (currentPage === 'teams') renderTeamsPage();
     if (currentPage === 'editor') renderSeasonEditor();
     if (currentPage === 'changes') renderChangesPage();
@@ -33,6 +34,7 @@ document.querySelectorAll('.top-nav-btn').forEach(btn => {
     if (currentPage === 'backups') renderBackupsPage();
     if (currentPage === 'fields') renderFieldsPage();
     if (currentPage === 'programs') renderProgramsPage();
+    if (currentPage === 'availability') renderAvailabilityPage();
   });
 });
 
@@ -1400,40 +1402,7 @@ document.getElementById('cal-team-select').addEventListener('change', () => {
   }
 });
 
-// Derives the calendar's month tiles from the actual season (start + weeks),
-// extended to cover any game date outside that nominal window. Ported from
-// public/viewer.js's fix — app.js is a separate browser script with its own
-// independent copy of renderCalendarView, which still had the pre-fix
-// hardcoded spring-2026 months array until now.
-function calendarMonthsFor(season, games) {
-  const MONTH_NAMES = ['January','February','March','April','May','June',
-                       'July','August','September','October','November','December'];
-  const dates = [];
-  if (season?.start) {
-    const start = new Date(season.start + 'T00:00:00Z');
-    dates.push(start);
-    const weeks = Number(season.weeks) || 1;
-    const end = new Date(start);
-    end.setUTCDate(end.getUTCDate() + weeks * 7);
-    dates.push(end);
-  }
-  for (const g of (games || [])) {
-    if (g?.date) dates.push(new Date(g.date + 'T00:00:00Z'));
-  }
-  if (!dates.length) dates.push(new Date());
-
-  const minD = new Date(Math.min(...dates.map(d => d.getTime())));
-  const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
-  const months = [];
-  let y = minD.getUTCFullYear(), m = minD.getUTCMonth();
-  const endY = maxD.getUTCFullYear(), endM = maxD.getUTCMonth();
-  while (y < endY || (y === endY && m <= endM)) {
-    months.push({ year: y, month: m + 1, label: `${MONTH_NAMES[m]} ${y}` });
-    m++; if (m > 11) { m = 0; y++; }
-  }
-  return months;
-}
-
+// calendarMonthsFor is defined once, shared, in ui.js (issue #13).
 function renderCalendarView(divGames, divTeams) {
   const wrapper = document.getElementById('calendar-wrapper');
   if (!divTeams.length) { wrapper.innerHTML = '<p class="no-games">No teams found.</p>'; return; }
@@ -2062,6 +2031,64 @@ function fieldMapLink(f, label) {
   const url = `https://www.google.com/maps?q=${f.coordinates}&t=k`;
   return `<a href="${url}" target="_blank" rel="noopener" class="map-link">${label || '📍 Map'}</a>`;
 }
+
+// ── Availability page (league-wide, filterable by division) ─────────────────
+
+function populateAvailDivisionSelect() {
+  const sel = document.getElementById('acal-division');
+  const prev = sel.value;
+  const divisions = [...(seasonData?.divisions || [])].sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  sel.innerHTML = '<option value="all">All divisions</option>' +
+    divisions.map(d => `<option value="${esc(String(d.id))}">${esc(d.name || d.label || d.id)}</option>`).join('');
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+function populateAvailTargets() {
+  const mode = document.getElementById('acal-mode').value;
+  const divId = document.getElementById('acal-division').value;
+  const sel = document.getElementById('acal-target');
+  document.getElementById('acal-target-label').textContent = mode === 'field' ? 'Field:' : 'Team:';
+  if (mode === 'field') {
+    let fields = [...(seasonData?.fields || [])];
+    if (divId !== 'all') {
+      const teamsInDiv = new Set((seasonData?.teams || []).filter(t => String(t.division_id) === divId).map(t => t.home_field_id));
+      fields = fields.filter(f => teamsInDiv.has(f.id));
+    }
+    fields.sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
+    sel.innerHTML = fields.map(f => `<option value="${String(f.id)}">${esc(fieldDisplayName(f))}</option>`).join('');
+  } else {
+    let teams = [...(seasonData?.teams || [])];
+    if (divId !== 'all') teams = teams.filter(t => String(t.division_id) === divId);
+    teams.sort((a, b) => teamLabel(a).localeCompare(teamLabel(b)));
+    sel.innerHTML = teams.map(t => `<option value="${String(t.id)}">${esc(teamLabel(t))}</option>`).join('');
+  }
+  renderAdminAvailCalendar();
+}
+
+function renderAdminAvailCalendar() {
+  const mode = document.getElementById('acal-mode').value;
+  const targetId = document.getElementById('acal-target').value;
+  const wrapper = document.getElementById('admin-avail-cal');
+  if (!targetId) { wrapper.innerHTML = `<p class="empty-state">No ${mode === 'field' ? 'fields' : 'teams'} found for this division.</p>`; return; }
+  if (mode === 'field') {
+    const field = (seasonData?.fields || []).find(f => String(f.id) === targetId);
+    renderAvailabilityCalendar('admin-avail-cal', seasonData?.season, (dateStr) =>
+      resolveFieldAvailabilityStatus(field?.availability, dateStr, uiDayName(dateStr) === 'Saturday'), 'field');
+  } else {
+    const team = (seasonData?.teams || []).find(t => String(t.id) === targetId);
+    renderAvailabilityCalendar('admin-avail-cal', seasonData?.season, (dateStr) =>
+      resolveTeamAvailabilityStatus(team?.availability, dateStr, uiDayName(dateStr) === 'Saturday'), 'team');
+  }
+}
+
+function renderAvailabilityPage() {
+  populateAvailDivisionSelect();
+  populateAvailTargets();
+}
+
+document.getElementById('acal-division').addEventListener('change', populateAvailTargets);
+document.getElementById('acal-mode').addEventListener('change', populateAvailTargets);
+document.getElementById('acal-target').addEventListener('change', renderAdminAvailCalendar);
 
 function renderFieldsPage() {
   const fields = [...(seasonData?.fields || [])].sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
