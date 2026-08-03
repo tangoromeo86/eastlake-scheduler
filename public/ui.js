@@ -424,3 +424,25 @@ function initVerifyBanner(sessionObj, message, next) {
   codeBtn.addEventListener('click', submitCode);
   codeInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submitCode(); } });
 }
+
+// ── Game confirmation status ─────────────────────────────────────────────────
+// Scheduled -> Pending (one side confirmed) -> Confirmed (both), independent
+// of Negotiating (an active change request in progress — unrelated concept,
+// was itself called "pending" until it got renamed to stop colliding with
+// this one). Shared by every page that lists games, so the four states read
+// identically everywhere rather than drifting per-file.
+//
+// mySide ('home'/'away') personalizes Pending's text for a coach — whether
+// it's their turn or they're waiting on the other coach. Omit it (director,
+// admin, the public viewer) for a neutral "Pending" with no assumed side.
+function gameStatusBadge(status, confirmations, mySide) {
+  confirmations = confirmations || {};
+  if (status === 'negotiating') return '<span class="unconfirmed-badge">Negotiating</span>';
+  if (status === 'confirmed')   return '<span class="confirmed-badge">Confirmed</span>';
+  if (status === 'pending') {
+    if (mySide && !confirmations[mySide]) return '<span class="unconfirmed-badge">Pending — your confirmation</span>';
+    if (mySide && confirmations[mySide])  return '<span class="unconfirmed-badge">Pending — waiting on the other coach</span>';
+    return '<span class="unconfirmed-badge">Pending</span>';
+  }
+  return '<span class="pill pill-neutral">Scheduled</span>';
+}

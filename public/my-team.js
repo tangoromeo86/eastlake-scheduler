@@ -158,18 +158,23 @@ function renderGamesList() {
     <tbody>
     ${games.map(g => {
       const isHome = g.home_team_id === myTeam.id;
+      const mySide = isHome ? 'home' : 'away';
       const opp = opponentTeam(g);
       const status = g.status || 'scheduled';
-      const statusBadge = status === 'pending' ? '<span class="unconfirmed-badge">Pending change</span>'
-        : status === 'confirmed' ? '<span class="confirmed-badge">Confirmed change</span>'
-        : status === 'finalized' ? '<span class="confirmed-badge">Finalized</span>' : '—';
-      const canRequest = status !== 'finalized';
+      const confirmations = g.confirmations || {};
+      const iConfirmed = !!confirmations[mySide];
+      const statusBadge = gameStatusBadge(status, confirmations, mySide);
+      const canRequest = status !== 'negotiating';
+      // Scheduled/Pending-and-not-yet-my-turn both mean "I haven't confirmed
+      // this game as-is yet" — Confirmed and Negotiating never show the button.
+      const canConfirm = (status === 'scheduled' || status === 'pending') && !iConfirmed;
       return `<tr>
         <td>${esc(g.day)} ${esc(g.date)} ${esc(g.time)}</td>
         <td>${esc(opp ? (opp.label || opp.name) : '—')}</td>
         <td>${isHome ? 'Home' : 'Away'}</td>
         <td>${statusBadge}</td>
         <td><div class="row-actions">
+          ${canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id})">Confirm</button>` : ''}
           ${canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id})">Request Change</button>` : ''}
           <button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>
         </div></td>
@@ -177,6 +182,22 @@ function renderGamesList() {
     }).join('')}
     </tbody>
   </table></div>`;
+}
+
+// Confirm the game as scheduled/agreed — the first lifecycle step, distinct
+// from and unrelated to requesting a change. POSTs directly rather than
+// opening a form, since there's nothing to fill in.
+async function confirmGame(gameId) {
+  try {
+    const res = await fetch(`api/games/${gameId}/confirm`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    const data = await res.json();
+    if (!data.ok) { toast(data.error || 'Could not confirm.', 'bad'); return; }
+    scheduleData = await fetchJSON('api/schedule');
+    renderGamesList();
+    toast(data.status === 'confirmed' ? 'Confirmed — both sides have signed off.' : 'Confirmed. Waiting on the other coach.');
+  } catch { toast('Network error. Try again.', 'bad'); }
 }
 
 function populateCrFieldSelects() {

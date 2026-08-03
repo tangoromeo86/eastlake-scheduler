@@ -332,7 +332,7 @@ print(round((due-st).total_seconds()/86400))")
 STILL=$(python3 -c "
 import json, os; d=json.load(open('$SCHED'))
 g=[x for x in d['games'] if x['game_id']==$GID][0]; print(g['date'], g['time'], g['status'])")
-[ "$STILL" = "$ORIGDATE pending" ] && pass "game badged 'pending' but date/time UNCHANGED" || fail "game moved early: $STILL"
+[ "$STILL" = "$ORIGDATE negotiating" ] && pass "game badged 'negotiating' but date/time UNCHANGED" || fail "game moved early: $STILL"
 
 # --- B says it doesn't work and counters ---
 CTOK=$(python3 -c "import json;print(json.load(open('$CRJ'))[-1]['tokens']['counter'])")
@@ -514,18 +514,67 @@ MOMISSING=$(curl -s -o /dev/null -w "%{http_code}" -b coacha.txt -X POST "$BASE/
 
 echo
 echo "=============================================="
-echo "STEP 12 — Admin finalizes the season"
+echo "STEP 12 — Confirmation lifecycle + the settle-pending sweep"
 echo "=============================================="
-FIN=$(curl -s -b admin.txt -X POST "$BASE/api/finalize-games")
-echo "  $FIN"
-FCOUNT=$(echo "$FIN" | python3 -c "import sys,json;print(json.load(sys.stdin)['finalized'])")
-[ "$FCOUNT" -gt 0 ] && pass "games finalized ($FCOUNT)" || fail "finalize count = $FCOUNT"
+# Games are never hard-locked anymore (Ted: "that's not really a thing" —
+# always subject to change, via negotiation 7+ days out or manual override
+# inside 7). This replaces the old finalize-locks-changes test with the
+# actual current lifecycle: Scheduled -> Pending -> Confirmed, a Negotiating
+# game left untouched by the sweep, and change requests still possible on a
+# swept/confirmed game.
 
-LOCKED=$(curl -s -b coacha.txt -X POST "$BASE/api/change-requests" -H "$J" -d "{\"game_id\":$GID,\"reason\":\"after finalize\",\"slot\":{\"date\":\"2030-01-01\",\"time\":\"18:00\"}}" | python3 -c "import sys,json;print(json.load(sys.stdin).get('finalized'))")
-[ "$LOCKED" = "True" ] && pass "change request blocked on finalized game" || fail "finalized lock not enforced: $LOCKED"
-LOCKED2=$(curl -s -b coacha.txt -X POST "$BASE/api/change-requests/$GID/manual-override" -H "$J" \
-  -d '{"time":"21:00","who_spoke_to":"X","how_connected":"phone"}' | python3 -c "import sys,json;print(json.load(sys.stdin).get('finalized'))")
-[ "$LOCKED2" = "True" ] && pass "manual override blocked on finalized game" || fail "override allowed after finalize"
+# Two fresh, untouched games that both involve T1 (coacha's team, established
+# above) — everything below uses coacha.txt, so it needs to actually be a
+# participant or every call 403s regardless of what's being tested. One stays
+# untouched for the sweep to force-confirm; the other gets marked Negotiating
+# directly (the negotiation mechanics that produce this state are already
+# fully exercised above — this only needs to verify the sweep respects it).
+read FRESHID NEGID <<< $(python3 -c "
+import json
+d=json.load(open('$SCHED'))
+untouched=[g['game_id'] for g in d['games']
+           if g['game_id'] not in ($GID,$LOCKID) and g.get('status')=='scheduled'
+           and '$T1' in (str(g['home_team_id']), str(g['away_team_id']))]
+print(untouched[0], untouched[1])")
+python3 -c "
+import json
+d=json.load(open('$SCHED'))
+for g in d['games']:
+    if g['game_id']==$NEGID: g['status']='negotiating'
+json.dump(d, open('$SCHED','w'), indent=2)"
+
+CONF1=$(curl -s -b coacha.txt -X POST "$BASE/api/games/$FRESHID/confirm" -H "$J" -d '{}' | python3 -c "import sys,json;print(json.load(sys.stdin).get('status'))")
+[ "$CONF1" = "pending" ] || [ "$CONF1" = "confirmed" ] && pass "one side confirming moves Scheduled -> Pending (or Confirmed if that resolved both)" || fail "confirm result = $CONF1"
+
+FIN=$(curl -s -b admin.txt -X POST "$BASE/api/games/settle-pending")
+echo "  $FIN"
+SETTLED=$(echo "$FIN" | python3 -c "import sys,json;print(json.load(sys.stdin)['settled'])")
+[ "$SETTLED" -gt 0 ] && pass "settle-pending sweep confirmed $SETTLED game(s)" || fail "settled count = $SETTLED"
+SKIPPED=$(echo "$FIN" | python3 -c "import sys,json;print($NEGID in json.load(sys.stdin)['skipped_negotiating'])")
+[ "$SKIPPED" = "True" ] && pass "sweep skips a game that's actively Negotiating" || fail "negotiating game was not skipped: $FIN"
+
+AFTER=$(python3 -c "
+import json; d=json.load(open('$SCHED'))
+print([g for g in d['games'] if g['game_id']==$FRESHID][0]['status'],
+      [g for g in d['games'] if g['game_id']==$NEGID][0]['status'])")
+[ "$AFTER" = "confirmed negotiating" ] && pass "sweep force-confirmed the pending game, left the negotiating one alone" || fail "post-sweep statuses = $AFTER"
+
+# A made-up date (the old lock test used one, since the finalized check fired
+# before slot validation) would now correctly get rejected as unviable rather
+# than locked — that's a different failure mode, so use a real option instead.
+FRESHOPTS=$(curl -s -b coacha.txt "$BASE/api/change-requests/options?game_id=$FRESHID")
+FRESHSLOT=$(echo "$FRESHOPTS" | python3 -c "
+import sys,json; d=json.load(sys.stdin); s=d['slots'][0]; print(json.dumps({'date':s['date'],'time':s['time']}))")
+# The submit route writes the change-request record before attempting the
+# requester's confirmation email, so (same as every other submit check in this
+# file) verify via the resulting record rather than the HTTP response — a
+# pre-existing, unrelated quirk where a real send failure 500s the response
+# even though the state change it's confirming already succeeded.
+curl -s -b coacha.txt -X POST "$BASE/api/change-requests" -H "$J" -d "{\"game_id\":$FRESHID,\"reason\":\"after sweep\",\"slot\":$FRESHSLOT}" > /dev/null
+STILLOPEN=$(python3 -c "
+import json; d=json.load(open('$CRJ'))
+print(any(c['game_id']==$FRESHID and c['status']=='awaiting_requester_confirm' for c in d))")
+[ "$STILLOPEN" = "True" ] && pass "a confirmed game can still have a change requested — nothing is ever hard-locked" || fail "no change request recorded after sweep"
 
 echo
 echo "=============================================="

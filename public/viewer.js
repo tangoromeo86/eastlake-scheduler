@@ -360,7 +360,7 @@ function renderGames(divGames) {
       <td>${g.day.slice(0,3)}</td>
       <td>${formatTime12h(g.time)}</td>
       <td class="g-home">${esc(g.home_team_name)}</td>
-      <td class="g-away">${esc(g.away_team_name)}${g.status === 'pending' ? ' <span class="pending-badge">Pending change</span>' : ''}</td>
+      <td class="g-away">${esc(g.away_team_name)} ${gameStatusBadge(g.status || 'scheduled', g.confirmations)}</td>
       <td>${esc(g.field_name)}</td>
       <td class="g-addr">${esc(g.field_address)}${fieldMapLink(g.field_id)}</td>
       ${ctx ? `<td><button class="req-btn" data-gid="${g.game_id}" data-tid="${esc(ctx.team_id)}">Request Change</button></td>` : (wantsReqTh ? '<td></td>' : '')}
@@ -375,7 +375,7 @@ function renderGames(divGames) {
       <div class="game-card-top">
         <span>W${g.week} · ${g.day.slice(0,3)} ${formatDate(g.date)} · ${formatTime12h(g.time)}</span>
         ${g.is_rematch ? '<span class="rematch-badge">Rematch</span>' : ''}
-        ${g.status === 'pending' ? '<span class="pending-badge">Pending change</span>' : ''}
+        ${gameStatusBadge(g.status || 'scheduled', g.confirmations)}
       </div>
       <div class="game-card-matchup">
         <span class="home">${esc(g.home_team_name)}</span>

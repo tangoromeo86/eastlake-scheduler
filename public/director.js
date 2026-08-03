@@ -184,18 +184,22 @@ function renderGamesList() {
     <tbody>
     ${games.map(g => {
       const status = g.status || 'scheduled';
-      const statusBadge = status === 'pending' ? '<span class="unconfirmed-badge">Pending change</span>'
-        : status === 'confirmed' ? '<span class="confirmed-badge">Confirmed change</span>'
-        : status === 'finalized' ? '<span class="confirmed-badge">Finalized</span>' : '—';
       // Whichever of our program's teams is involved is who we'd act on behalf of.
       const myTeamId = [g.home_team_id, g.away_team_id].find(id => myProgramTeams().some(t => String(t.id) === String(id)));
-      const canRequest = status !== 'finalized';
+      const mySide = String(myTeamId) === String(g.home_team_id) ? 'home' : 'away';
+      const confirmations = g.confirmations || {};
+      const statusBadge = gameStatusBadge(status, confirmations, mySide);
+      const canRequest = status !== 'negotiating';
+      // A director can confirm on a coach's behalf — Ted: "either nudge them
+      // offline, or confirm them on the coach's behalf."
+      const canConfirm = (status === 'scheduled' || status === 'pending') && !confirmations[mySide];
       return `<tr>
         <td>${esc(g.day)} ${esc(g.date)} ${esc(g.time)}</td>
         <td>${esc(g.home_team_name)}</td>
         <td>${esc(g.away_team_name)}</td>
         <td>${statusBadge}${liveStatusHtml(activeByGame[g.game_id])}</td>
         <td><div class="row-actions">
+          ${canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id},'${String(myTeamId)}')">Confirm</button>` : ''}
           ${canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id},'${String(myTeamId)}')">Request Change</button>` : ''}
           <button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>
         </div></td>
@@ -211,6 +215,20 @@ function populateCrFieldSelects() {
   // There is no #cr-field element — same leftover reference as my-team.js;
   // only #cr-mo-field (the manual-override path) actually exists.
   document.getElementById('cr-mo-field').innerHTML = opts.replace('No preference', 'Keep current');
+}
+
+// Confirm on behalf of whichever of the director's own teams is in this game.
+async function confirmGame(gameId, teamId) {
+  try {
+    const res = await fetch(`api/games/${gameId}/confirm`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ team_id: teamId }),
+    });
+    const data = await res.json();
+    if (!data.ok) { toast(data.error || 'Could not confirm.', 'bad'); return; }
+    scheduleData = await fetchJSON('api/schedule');
+    renderGamesList();
+    toast(data.status === 'confirmed' ? 'Confirmed — both sides have signed off.' : 'Confirmed on their behalf. Waiting on the other coach.');
+  } catch { toast('Network error. Try again.', 'bad'); }
 }
 
 function openChangeRequest(gameId, teamId) {

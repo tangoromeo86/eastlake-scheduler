@@ -640,6 +640,7 @@ function renderGames(divGames) {
       <td class="team-cell away">${esc(g.away_team_name)}</td>
       <td>${esc(g.field_name)}</td>
       <td class="address">${esc(g.field_address)}</td>
+      <td>${gameStatusBadge(g.status || 'scheduled', g.confirmations)}</td>
     </tr>
   `).join('');
 }
@@ -2560,16 +2561,21 @@ async function renderRequestsPage() {
 }
 
 document.getElementById('btn-finalize').addEventListener('click', async () => {
-  const ok = await confirmTyped('Finalize games',
-    'Finalizes every Scheduled and Confirmed game, locking them against further change requests. Games mid-negotiation (Pending) are left alone.', 'finalize');
+  // Games are never hard-locked anymore — this just moves things along for
+  // whoever hasn't confirmed, treating a coach's silence as a non-objection.
+  // A game actively being negotiated is left alone regardless.
+  const ok = await confirmTyped('Settle pending confirmations',
+    'Force-confirms every game still at Scheduled or Pending — treating any coach who hasn\'t responded as fine with it. Games with an active change request (Negotiating) are left alone. This does not lock anything against future changes.', 'settle');
   if (!ok) return;
   try {
-    const res = await fetch('api/finalize-games', { method: 'POST' });
+    const res = await fetch('api/games/settle-pending', { method: 'POST' });
     const data = await res.json();
-    if (!data.ok) { toast(data.error || 'Finalize failed.', 'bad'); return; }
-    let msg = `Finalized ${data.finalized} game${data.finalized !== 1 ? 's' : ''}.`;
-    if (data.skipped_pending?.length) msg += ` ${data.skipped_pending.length} left pending: #${data.skipped_pending.join(', #')}.`;
+    if (!data.ok) { toast(data.error || 'Could not settle pending confirmations.', 'bad'); return; }
+    let msg = `Confirmed ${data.settled} game${data.settled !== 1 ? 's' : ''}.`;
+    if (data.skipped_negotiating?.length) msg += ` ${data.skipped_negotiating.length} left alone (active negotiation): #${data.skipped_negotiating.join(', #')}.`;
     toast(msg, 'good');
+    scheduleData = await fetchJSON('api/schedule');
+    renderCurrentView();
   } catch (e) { toast('Network error. Try again.', 'bad'); }
 });
 

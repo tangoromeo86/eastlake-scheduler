@@ -1289,9 +1289,6 @@ app.get('/api/change-requests/options', requireVerified, (req, res) => {
 
   const myTeamId = resolveRequestingTeam(s, ctx.game, req.query.team_id, ctx.teams);
   if (!myTeamId) return res.status(403).json({ error: 'You can only view options for your own game' });
-  if ((ctx.game.status || 'scheduled') === 'finalized') {
-    return res.status(400).json({ error: 'This game has been finalized and can no longer be changed', finalized: true });
-  }
 
   const { slots } = computeViableSlots(ctx.game, ctx.seasonData, ctx.schedData, { minDaysOut: CHANGE_REQUEST_MIN_DAYS });
   res.json({ ok: true, slots, current: { date: ctx.game.date, time: ctx.game.time, field_name: ctx.game.field_name } });
@@ -1428,9 +1425,6 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
   const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
   const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
 
-  if ((game.status || 'scheduled') === 'finalized') {
-    return res.status(400).json({ error: 'This game has been finalized by the league admin and can no longer be changed', finalized: true });
-  }
   if (daysBetween(new Date().toISOString(), game.date) < CHANGE_REQUEST_MIN_DAYS) {
     return res.status(400).json({ error: `This game is within ${CHANGE_REQUEST_MIN_DAYS} days — use Manual Override instead`, lockout: true });
   }
@@ -1536,10 +1530,12 @@ app.get('/api/change-requests/:id/confirm', async (req, res) => {
   writeChangeRequests(list);
 
   // The game keeps its agreed date — only the badge changes — so nobody turns up
-  // at the wrong field while the coaches are still negotiating.
+  // at the wrong field while the coaches are still negotiating. "negotiating"
+  // (was "pending") — renamed so it stops colliding with the dual-coach
+  // confirm-the-schedule "Pending" status below, a different concept entirely.
   const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
   if (gameIdx !== -1) {
-    schedData.games[gameIdx].status = 'pending';
+    schedData.games[gameIdx].status = 'negotiating';
     try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
   }
 
@@ -1590,7 +1586,11 @@ function applyChangeRequestToGame(cr, schedData, seasonData) {
     date, day: dayName(date), time, field_id,
     field_name: resolvedFieldName, field_address: resolvedFieldAddress,
     week: newWeek,
+    // Both coaches just agreed to this — that IS the dual confirmation, so it
+    // lands straight at Confirmed rather than resetting to Scheduled/Pending
+    // and making them confirm the very thing they just negotiated all over again.
     status: 'confirmed',
+    confirmations: { home: true, away: true },
   };
   schedData.games[gameIdx] = updatedGame;
   schedData.total_games = schedData.games.length;
@@ -1606,12 +1606,6 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   let seasonData, schedData;
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [], fields: [] }; }
   try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
-
-  const targetGame = schedData.games.find(g => g.game_id === cr.game_id);
-  if (targetGame && (targetGame.status || 'scheduled') === 'finalized') {
-    return res.status(200).send(crActionPage('Game already finalized',
-      `Game #${cr.game_id} has been finalized by the league admin, so this change could not be applied. Contact the admin if it still needs to change.`));
-  }
 
   const updatedGame = applyChangeRequestToGame(cr, schedData, seasonData);
   try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
@@ -1756,10 +1750,6 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
   const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
   const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
   const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));
-
-  if ((game.status || 'scheduled') === 'finalized') {
-    return res.status(400).json({ error: 'This game has been finalized by the league admin and can no longer be changed', finalized: true });
-  }
 
   const cr = {
     id: 'cr-' + Date.now(),
@@ -2481,10 +2471,15 @@ app.post('/api/import-schedule', requireAdmin, express.text({ type: '*/*', limit
   res.json({ ok: true, total_games: games.length, warnings });
 });
 
-// Bulk-finalizes the season's games (admin action, not automatic — NOTES.md:
-// "admin finalizes ... when the deadline hits"). Leaves any still-`pending`
-// game untouched so an in-flight change request isn't silently steamrolled;
-// reports those back so admin knows to resolve them first.
+// One-time admin sweep for games stuck without both coaches' confirmation.
+// Replaces the old "Finalize Games" action — Ted: games are never really
+// finalized, they're always subject to change (negotiation 7+ days out,
+// manual override inside 7), so there's no state that should ever hard-block
+// a change again. This just moves things along: any game not yet fully
+// confirmed (Scheduled or Pending) gets force-confirmed, on the theory that a
+// coach's silence isn't an objection. Anything actively Negotiating is left
+// alone — force-settling a game mid-negotiation would steamroll a real,
+// in-flight conversation, not just an unanswered confirmation request.
 // ── Game history ─────────────────────────────────────────────────────────────
 // One chronological story per game, merged from the two stores that already
 // exist (changes.json = admin actions, change_requests.json = coach
@@ -2785,24 +2780,57 @@ app.delete('/api/snapshots/:id', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/finalize-games', requireAdmin, (req, res) => {
-  createSnapshot('Before finalizing games', 'auto');
+app.post('/api/games/settle-pending', requireAdmin, (req, res) => {
+  createSnapshot('Before settling pending game confirmations', 'auto');
   let schedData;
   try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read schedule.json' }); }
 
-  let finalized = 0;
-  const skipped = [];
+  let settled = 0;
+  const skippedNegotiating = [];
   for (const g of schedData.games) {
     const status = g.status || 'scheduled';
-    if (status === 'pending') { skipped.push(g.game_id); continue; }
-    g.status = 'finalized';
-    finalized++;
+    if (status === 'negotiating') { skippedNegotiating.push(g.game_id); continue; }
+    if (status === 'confirmed') continue;
+    g.status = 'confirmed';
+    g.confirmations = { home: true, away: true };
+    settled++;
   }
   try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write schedule.json' }); }
 
-  res.json({ ok: true, finalized, skipped_pending: skipped });
+  res.json({ ok: true, settled, skipped_negotiating: skippedNegotiating });
+});
+
+// Coach-facing confirmation that a game, as currently scheduled, works for
+// them — the first new lifecycle step, distinct from and unrelated to
+// requesting a change. Director/admin can act on a coach's behalf, same
+// permission model as everything else here (resolveRequestingTeam).
+app.post('/api/games/:id/confirm', requireVerified, (req, res) => {
+  const s = getSession(req);
+  const gameId = parseInt(req.params.id, 10);
+  const ctx = loadGameContext(req, gameId);
+  if (ctx.error) return res.status(ctx.status || 500).json({ error: ctx.error });
+
+  const myTeamId = resolveRequestingTeam(s, ctx.game, req.body?.team_id, ctx.teams);
+  if (!myTeamId) return res.status(403).json({ error: 'You can only confirm your own game' });
+
+  const status = ctx.game.status || 'scheduled';
+  if (status === 'negotiating') {
+    return res.status(400).json({ error: 'This game has an active change request — resolve that first, then confirm.' });
+  }
+
+  const side = String(myTeamId) === String(ctx.game.home_team_id) ? 'home' : 'away';
+  const confirmations = { home: false, away: false, ...(ctx.game.confirmations || {}) };
+  confirmations[side] = true;
+
+  const newStatus = confirmations.home && confirmations.away ? 'confirmed' : 'pending';
+  const gameIdx = ctx.schedData.games.findIndex(g => g.game_id === gameId);
+  ctx.schedData.games[gameIdx] = { ...ctx.game, confirmations, status: newStatus };
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(ctx.schedData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write schedule.json' }); }
+
+  res.json({ ok: true, status: newStatus, confirmations });
 });
 
 app.listen(PORT, () => {
