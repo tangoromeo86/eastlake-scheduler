@@ -295,6 +295,65 @@ avgSpread <= spreadLimit
     : bad('delayed team came up short instead of just starting later', `${lateGames.length}/${wanted}`);
 }
 
+// ── Opponent substitution for a genuinely impossible pairing ──────────────────
+// Ted: a team's target game count matters more than a clean round-robin — if
+// two teams can never share a slot (not contention, a hard zero-overlap
+// dead end), route each of them to a different opponent instead of leaving
+// both a game short. Team A can only ever host (Saturday-early only, and
+// only its own field is open then); Team B can only ever host too
+// (Saturday-late only) — since neither can ever be the traveling side, A vs
+// B is mathematically impossible regardless of which week or how many
+// shuffle attempts. C and D are flexible enough to fill in for both.
+{
+  const subSeason = {
+    season: { start: '2026-09-07', weeks: 6, target_games: 2, blackout_dates: [] },
+    divisions: [{ id: 'div-sub', name: 'Sub Test', target_games: 2 }],
+    programs: [{ id: 'prog-sub', name: 'Sub' }],
+    fields: [
+      { id: 'field-a', name: 'Field A', program_id: 'prog-sub', coordinates: '41.60,-81.40',
+        availability: { weekday: {}, saturday: { early: true, midday: false, late: false }, dates: {} } },
+      { id: 'field-b', name: 'Field B', program_id: 'prog-sub', coordinates: '41.61,-81.41',
+        availability: { weekday: {}, saturday: { early: false, midday: false, late: true }, dates: {} } },
+      { id: 'field-c', name: 'Field C', program_id: 'prog-sub', coordinates: '41.62,-81.42' },
+      { id: 'field-d', name: 'Field D', program_id: 'prog-sub', coordinates: '41.63,-81.43' },
+    ],
+    teams: [
+      { id: 'team-sub-a', label: 'Team A', division_id: 'div-sub', program_id: 'prog-sub', home_field_id: 'field-a',
+        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' } },
+                        saturday: { early: 'host', midday: 'none', late: 'none' }, dates: {} } },
+      { id: 'team-sub-b', label: 'Team B', division_id: 'div-sub', program_id: 'prog-sub', home_field_id: 'field-b',
+        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' } },
+                        saturday: { early: 'none', midday: 'none', late: 'host' }, dates: {} } },
+      { id: 'team-sub-c', label: 'Team C', division_id: 'div-sub', program_id: 'prog-sub', home_field_id: 'field-c',
+        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' } },
+                        saturday: { early: 'both', midday: 'both', late: 'both' }, dates: {} } },
+      { id: 'team-sub-d', label: 'Team D', division_id: 'div-sub', program_id: 'prog-sub', home_field_id: 'field-d',
+        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' } },
+                        saturday: { early: 'both', midday: 'both', late: 'both' }, dates: {} } },
+    ],
+  };
+
+  const subRes = scheduleAll(subSeason);
+  const abGame = subRes.games.find(g =>
+    (g.home_team_id === 'team-sub-a' && g.away_team_id === 'team-sub-b') ||
+    (g.home_team_id === 'team-sub-b' && g.away_team_id === 'team-sub-a'));
+  !abGame
+    ? ok('the impossible pairing itself never gets scheduled', '(A vs B correctly never appears)')
+    : bad('an impossible pairing was scheduled anyway', JSON.stringify(abGame));
+
+  (subRes.failures || []).length === 0
+    ? ok('substitution absorbed the impossible pairing with zero reported failures')
+    : bad('substitution left unplaced games', JSON.stringify(subRes.failures));
+
+  const subCounts = {};
+  for (const t of subSeason.teams) subCounts[t.id] = 0;
+  for (const g of subRes.games) { subCounts[g.home_team_id]++; subCounts[g.away_team_id]++; }
+  const allHitTarget = subSeason.teams.every(t => subCounts[t.id] === 2);
+  allHitTarget
+    ? ok('every team still hit its full target game count', JSON.stringify(subCounts))
+    : bad('a team came up short instead of getting a substitute opponent', JSON.stringify(subCounts));
+}
+
 // ── Performance ──────────────────────────────────────────────────────────────
 const avgMs = results.reduce((s, r) => s + r.ms, 0) / results.length;
 avgMs < 10000
