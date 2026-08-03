@@ -29,6 +29,7 @@ function seedSeason() {
   const d = new Date(today);
   d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7) + 28);
   const start = d.toISOString().slice(0, 10);
+  global.__seededSeasonStart = start;
   const season = {
     season: { start, weeks: 8, target_games: 4, weekday_time: '18:30',
               saturday_times: { 'div-1': '10:00' }, blackout_dates: [] },
@@ -53,13 +54,28 @@ function seedSeason() {
   }
 }
 
+// This environment has no real RESEND_API_KEY, so the verify email never
+// actually sends — same as test/e2e.sh, a throwaway instrumented copy logs the
+// verification code to stdout so the test can drive the real verify-code
+// endpoint without needing a real inbox. The committed server.js is untouched.
+const INSTRUMENTED_COPY = path.join(ROOT, '.server.browsertest.js');
+
 function startServer() {
-  const srv = spawn('node', ['server.js'], {
+  const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  const instrumented = src.replace(
+    'const { token, code } = createVerifyToken(s.email);',
+    'const { token, code } = createVerifyToken(s.email);\n  console.log("DEBUG_LOGIN_CODE:" + s.email + ":" + code);'
+  );
+  fs.writeFileSync(INSTRUMENTED_COPY, instrumented);
+
+  const srv = spawn('node', [INSTRUMENTED_COPY], {
     cwd: ROOT,
     env: { ...process.env, PORT: String(PORT), ADMIN_EMAIL: 'admin@example.com',
            ADMIN_PASSWORD: 'testpass', SESSION_SECRET: 'uitest', RESEND_API_KEY: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  srv.__log = '';
+  srv.stdout.on('data', d => { srv.__log += d.toString(); });
   return new Promise((resolve, reject) => {
     const to = setTimeout(() => reject(new Error('server did not start')), 15000);
     srv.stdout.on('data', d => {
@@ -147,11 +163,15 @@ async function loginAs(page, email, password) {
     const dpage = await dctx.newPage();
     const derr = [];
     dpage.on('pageerror', e => derr.push(e.message));
-    // A refused write logs a console error for the failed resource. That's the
-    // auth guard doing its job, and is asserted explicitly below.
+    // A refused write logs a console error for the failed resource — that's the
+    // auth guard doing its job, asserted explicitly below. request-verify also
+    // 500s here since this environment has no real RESEND_API_KEY to send
+    // through; the code is still generated and logged regardless (see
+    // startServer's instrumented copy), which is what's actually being tested.
     dpage.on('console', m => {
       const t = m.text();
-      if (m.type() === 'error' && !/403|Forbidden/.test(t)) derr.push(t);
+      const url = m.location()?.url || '';
+      if (m.type() === 'error' && !/403|Forbidden/.test(t) && !url.includes('request-verify')) derr.push(t);
     });
 
     await loginAs(dpage, 'dana@example.com');
@@ -160,6 +180,57 @@ async function loginAs(page, email, password) {
     (await dpage.locator('#teams-list').count())
       ? ok('director page loads with its team list')
       : bad('director page did not render', 'no #teams-list');
+
+    // ── Verification gates the form itself, not just the save ───────────────
+    // Ted: filling in a whole Add Team form only to lose it at Save (because
+    // the session wasn't verified) is the actual problem — the button should
+    // refuse to open the form at all rather than let that happen.
+    await dpage.click('#btn-add-team');
+    await dpage.waitForTimeout(250);
+    const formOpenedUnverified = await dpage.locator('#team-editor-form:not(.hidden)').count();
+    formOpenedUnverified === 0
+      ? ok('Add Team refuses to open while unverified')
+      : bad('Add Team form opened for an unverified session', '');
+    const toastShown = await dpage.locator('.toast').count();
+    toastShown > 0
+      ? ok('a toast explains why, instead of silence')
+      : bad('no feedback shown when the gate blocks the click', '');
+
+    // Defense in depth: the server must refuse an unverified write on its own,
+    // independent of whether the client-side gate above is what actually
+    // stopped it (e.g. a form left open from before a session's verification
+    // lapsed shouldn't be able to save just because it's already open).
+    const rawWriteStatus = await dpage.evaluate(async () => {
+      const res = await fetch('api/season/fields', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Should be refused' }),
+      });
+      return res.status;
+    });
+    rawWriteStatus === 403
+      ? ok('server refuses an unverified write independent of the UI gate', '403 as expected')
+      : bad('unverified write was not refused server-side', `status ${rawWriteStatus}`);
+
+    // Verify via the code endpoint directly — the real UI path (typing a code
+    // sent by email) can't be driven here since there's no live inbox in this
+    // environment, but this exercises the same server route a typed code
+    // would hit, and unblocks the rest of this section's write-based checks.
+    await dpage.evaluate(async () => {
+      await fetch('api/auth/request-verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    });
+    await dpage.waitForTimeout(200);
+    const log = srv.__log || '';
+    const codeLine = log.split('\n').reverse().find(l => l.includes('DEBUG_LOGIN_CODE:dana@example.com:'));
+    const code = codeLine ? codeLine.split(':').pop().trim() : null;
+    const verifyResult = await dpage.evaluate(async (c) => {
+      const res = await fetch('api/auth/verify-code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: c }),
+      });
+      return res.json();
+    }, code);
+    verifyResult.ok
+      ? ok('code-based verification succeeds against a real code')
+      : bad('code verification failed', JSON.stringify(verifyResult));
+    await dpage.reload({ waitUntil: 'networkidle' });
 
     // Readiness banner — added so a director can see what blocks the scheduler.
     const banner = await dpage.locator('.notice').first().textContent().catch(() => '');
@@ -202,11 +273,11 @@ async function loginAs(page, email, password) {
       stillErr === 0 ? ok('error clears once the value is corrected')
                      : bad('stale error persisted', 'has-error still set after a valid entry');
 
-      // This session logged in but never clicked a magic link, so the write must
-      // be refused. Confirms the two-stage auth actually holds from the browser.
-      writeRes && writeRes.status() === 403
-        ? ok('unverified director is blocked from writing', '403 as expected')
-        : bad('unverified write was not refused', `status ${writeRes && writeRes.status()}`);
+      // dana is verified by this point (see above), so the corrected form
+      // should now actually save rather than be refused.
+      writeRes && writeRes.ok()
+        ? ok('save succeeds once verified and the input is valid')
+        : bad('save was refused even though verified', `status ${writeRes && writeRes.status()}`);
     } else {
       bad('team form did not open', '#tfe-email not found');
     }
@@ -276,9 +347,73 @@ async function loginAs(page, email, password) {
       bad('geocode button not found on the field form', 'expected #ffe-geocode-btn');
     }
 
+    // ── Availability collapsed on Add, open on Edit ──────────────────────────
+    // Ted: setting availability is the coach's job, later — a director adding
+    // a team shouldn't be shown it as though it's part of registration.
+    await dpage.goto(`${BASE}/director`, { waitUntil: 'networkidle' });
+    await dpage.click('#btn-add-team');
+    await dpage.waitForTimeout(250);
+    const addOpenState = await dpage.locator('#tfe-availability-details').evaluate(el => el.open);
+    addOpenState === false
+      ? ok('availability is collapsed by default when adding a team')
+      : bad('availability was expanded on Add', `open=${addOpenState}`);
+
+    await dpage.locator('#team-editor-form #tfe-cancel').click();
+    await dpage.waitForTimeout(200);
+    const editBtn = dpage.locator('button:has-text("Edit")').first();
+    if (await editBtn.count()) {
+      await editBtn.click();
+      await dpage.waitForTimeout(250);
+      const editOpenState = await dpage.locator('#tfe-availability-details').evaluate(el => el.open).catch(() => null);
+      editOpenState === true
+        ? ok('availability is already open when editing an existing team')
+        : bad('availability was not open on Edit', `open=${editOpenState}`);
+    } else {
+      bad('no existing team found to test Edit availability state', '');
+    }
+
     derr.length === 0
       ? ok('no JS errors during the director flow')
       : bad('JS errors in director flow', derr.slice(0, 2).join(' | '));
+
+    // ── Calendar view shows the real season, not a hardcoded one ─────────────
+    // renderCalendarView used to hardcode April/May/June 2026 regardless of the
+    // actual season — Ted found this with real data loaded and asked to
+    // confirm it's fixed without needing live data to check it again.
+    const seasonStart = global.__seededSeasonStart;
+    const expectedMonth = new Date(seasonStart + 'T00:00:00Z')
+      .toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    fs.writeFileSync(path.join(ROOT, 'schedule.json'), JSON.stringify({
+      games: [{
+        game_id: 'g1', date: seasonStart, day: 'Monday', time: '18:30',
+        division_id: 'div-1', field_id: 'field-1', field_name: 'Main Park',
+        home_team_id: 'team-1', home_team_name: 'Wildcats',
+        away_team_id: 'team-2', away_team_name: 'Rockets', status: 'scheduled',
+      }],
+      failures: [], generated_at: new Date().toISOString(), total_games: 1,
+    }, null, 2));
+
+    const vctx = await browser.newContext();
+    const vpage = await vctx.newPage();
+    const verr = [];
+    vpage.on('pageerror', e => verr.push(e.message));
+    await vpage.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+    await vpage.click('button[data-view="calendar"]').catch(() => {});
+    await vpage.waitForTimeout(400);
+    const monthLabels = await vpage.locator('.cal-month-label').allTextContents();
+    monthLabels.some(l => l.includes(expectedMonth))
+      ? ok('calendar shows the actual season\'s month', monthLabels.join(', '))
+      : bad('calendar month does not match the season', `expected "${expectedMonth}", got: ${monthLabels.join(', ')}`);
+    monthLabels.some(l => l.includes('2026') && (l.includes('April') || l.includes('May') || l.includes('June')))
+      ? bad('the old hardcoded April/May/June 2026 range is still showing', monthLabels.join(', '))
+      : ok('no trace of the old hardcoded calendar range');
+    const gameShown = await vpage.locator('.cal-game').count();
+    gameShown > 0
+      ? ok('the scheduled game itself renders on its date')
+      : bad('scheduled game did not appear on the calendar', '');
+    verr.length === 0
+      ? ok('no JS errors on the calendar view')
+      : bad('JS errors on calendar view', verr.slice(0, 2).join(' | '));
 
     // ── Mobile layout ────────────────────────────────────────────────────────
     // The specific failure this guards against: a wide table pushing the whole
@@ -360,6 +495,7 @@ async function loginAs(page, email, password) {
   } finally {
     await browser.close();
     srv.kill();
+    try { fs.unlinkSync(INSTRUMENTED_COPY); } catch {}
     for (const f of ['season.json', 'schedule.json', 'change_requests.json', 'changes.json']) {
       try { fs.unlinkSync(path.join(ROOT, f)); } catch {}
     }

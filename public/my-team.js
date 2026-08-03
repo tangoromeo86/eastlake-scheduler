@@ -52,7 +52,7 @@ async function init() {
   try { scheduleData = await fetchJSON('api/schedule'); } catch { scheduleData = { games: [] }; }
   renderGamesList();
 
-  initVerifyBanner();
+  initMyTeamVerifyBanner();
 }
 
 // ── Games list + change requests ─────────────────────────────────────────────
@@ -300,27 +300,8 @@ document.getElementById('mte-save').addEventListener('click', async () => {
 
 // ── Verify-email banner ──────────────────────────────────────────────────────
 
-function initVerifyBanner() {
-  if (!session || session.verified) return;
-  const banner = document.createElement('div');
-  banner.id = 'verify-banner';
-  banner.style.cssText = 'background:#fef3c7;border-bottom:1px solid #f59e0b;color:#92400e;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px;justify-content:center';
-  banner.innerHTML = `<span>Verify your email to save changes to your team.</span>
-    <button id="verify-banner-btn" class="btn btn-secondary btn-sm">Send verification link</button>`;
-  document.body.prepend(banner);
-
-  document.getElementById('verify-banner-btn').addEventListener('click', async (e) => {
-    e.target.disabled = true;
-    e.target.textContent = 'Sending…';
-    try {
-      const res = await fetch('api/auth/request-verify', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ next: '/my-team' }),
-      });
-      const data = await res.json();
-      e.target.textContent = data.ok ? 'Check your email!' : (data.error || 'Failed — try again');
-    } catch { e.target.textContent = 'Network error — try again'; e.target.disabled = false; }
-  });
+function initMyTeamVerifyBanner() {
+  initVerifyBanner(session, 'Verify your email to save changes to your team.', '/my-team');
 }
 
 init();

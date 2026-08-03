@@ -96,10 +96,20 @@ function clearSession(res) {
 const VERIFY_TOKEN_TTL_MS = 15 * 60 * 1000;
 const verifyTokens = new Map(); // token -> { type, exp, ...payload }
 
+// A 6-digit code is generated alongside the link and emailed in the same
+// message. Ted: clicking a link navigates away from whatever page you were
+// filling in; typing a code lets you verify without ever leaving it. Both
+// redeem the same underlying entry — whichever gets used first invalidates
+// the other, since it's the same one-time record either way.
+function randomCode() {
+  return String(crypto.randomInt(100000, 1000000)); // always 6 digits, no leading zero
+}
+
 function createVerifyToken(email) {
   const token = crypto.randomBytes(24).toString('base64url');
-  verifyTokens.set(token, { type: 'login-verify', email, exp: Date.now() + VERIFY_TOKEN_TTL_MS });
-  return token;
+  const code = randomCode();
+  verifyTokens.set(token, { type: 'login-verify', email, code, exp: Date.now() + VERIFY_TOKEN_TTL_MS });
+  return { token, code };
 }
 
 function redeemVerifyToken(token, email) {
@@ -108,6 +118,22 @@ function redeemVerifyToken(token, email) {
   verifyTokens.delete(token); // one-time use
   if (entry.exp < Date.now()) return false;
   return entry.email === email;
+}
+
+// Codes aren't a Map key (they're short and meant to be typed, not looked up
+// by), so this scans the small set of pending verifications for a match
+// scoped to the requesting session's own email — a code from someone else's
+// pending verification can never redeem yours.
+function redeemVerifyCode(email, code) {
+  const trimmed = String(code || '').trim();
+  if (!trimmed) return false;
+  for (const [token, entry] of verifyTokens) {
+    if (entry.type === 'login-verify' && entry.email === email && entry.code === trimmed) {
+      verifyTokens.delete(token); // one-time use, same record the link would have redeemed
+      return entry.exp >= Date.now();
+    }
+  }
+  return false;
 }
 
 function createEmailChangeToken(teamId, newEmail) {
@@ -516,13 +542,15 @@ app.post('/api/auth/login', (req, res) => {
 app.post('/api/auth/request-verify', requireAuth, async (req, res) => {
   const s = getSession(req);
   if (s.verified) return res.json({ ok: true, alreadyVerified: true });
-  const token = createVerifyToken(s.email);
+  const { token, code } = createVerifyToken(s.email);
   const next = (req.body && req.body.next) || '';
   const verifyUrl = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/auth/verify?token=${token}${next ? `&next=${encodeURIComponent(next)}` : ''}`;
   const result = await sendEmail({
     to: s.email,
     subject: 'Verify your email — Eastlake League Scheduler',
-    text: `Hi ${s.name},\n\nClick the link below to verify your email so you can make schedule changes:\n\n${verifyUrl}\n\nThis link expires in 15 minutes and can only be used once.\n\n— Eastlake Scheduler`,
+    text: `Hi ${s.name},\n\nClick the link below to verify your email so you can make schedule changes:\n\n${verifyUrl}\n\n` +
+      `Or, if you'd rather stay on the page you were on, enter this code there instead: ${code}\n\n` +
+      `Either one expires in 15 minutes and can only be used once — using one cancels the other.\n\n— Eastlake Scheduler`,
   });
   if (!result.ok) return res.status(500).json({ error: 'Could not send verification email', reason: result.reason });
   res.json({ ok: true });
@@ -538,6 +566,20 @@ app.get('/api/auth/verify', (req, res) => {
   }
   setSession(res, { ...s, verified: true });
   res.redirect(BASE_PATH + (req.query.next || '/'));
+});
+
+// Same upgrade as the link above, but redeemed without leaving the page —
+// the whole reason this exists. Scoped to the caller's own session email, so
+// a code only ever verifies the person it was actually sent to.
+app.post('/api/auth/verify-code', requireAuth, (req, res) => {
+  const s = getSession(req);
+  if (s.verified) return res.json({ ok: true, alreadyVerified: true });
+  const code = (req.body && req.body.code) || '';
+  if (!redeemVerifyCode(s.email, code)) {
+    return res.status(400).json({ error: 'That code is wrong or has expired. Request a new one and try again.' });
+  }
+  setSession(res, { ...s, verified: true });
+  res.json({ ok: true });
 });
 
 // Return current session info (null if not logged in)
@@ -584,9 +626,24 @@ app.get('/api/schedule', requireAuth, (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// There is no stored season "end" date — only start + weeks — so several
+// places (the admin season bar, the season-summary API response) used to read
+// `season.end` and get `undefined`, rendering as "NaN/NaN/". Computed once
+// here from buildSeasonWeeks (the same calendar every other date-dependent
+// route already treats as authoritative) rather than duplicated per caller,
+// so a future date-math tweak only has to happen in one place.
+function seasonEndDate(season) {
+  const weeks = buildSeasonWeeks(season);
+  const last = weeks[weeks.length - 1];
+  return last ? (last.saturday || last.weekdays?.[last.weekdays.length - 1] || null) : null;
+}
+
 app.get('/api/season', requireAuth, (req, res) => {
-  try { res.json(JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'))); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  try {
+    const data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8'));
+    if (data.season) data.season = { ...data.season, end: seasonEndDate(data.season) };
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/season/slots', requireAuth, (req, res) => {
@@ -815,7 +872,7 @@ app.post('/api/upload-season', requireAdmin, (req, res) => {
       teams: confirmedTeams.length,
       per_division: data.divisions.map(d => ({ id: d.id, name: d.name, teams: perDivision[d.id] || 0 })),
       season_start: data.season?.start,
-      season_end: data.season?.end,
+      season_end: seasonEndDate(data.season),
       target_games: data.season?.target_games,
     },
   });

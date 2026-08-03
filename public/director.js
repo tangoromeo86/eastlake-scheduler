@@ -71,7 +71,7 @@ async function init() {
   await loadActiveNegotiations(myProgramGames());
   renderGamesList();
 
-  initVerifyBanner();
+  initDirectorVerifyBanner();
 }
 
 // ── Games list + change requests ─────────────────────────────────────────────
@@ -331,7 +331,19 @@ function renderTeamsList() {
   </table></div>`;
 }
 
+// Opening any editor when unverified means a director can fill in the whole
+// form and lose it all at Save, since requireVerified only rejects the write —
+// it never stops the form from being filled in first. Gating here instead
+// means the only thing that gets interrupted is a click, not typed-in work.
+function requireVerifiedToEdit() {
+  if (session?.verified) return true;
+  toast('Verify your email first — send the link or enter the code in the banner above.', 'bad');
+  document.getElementById('verify-banner')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  return false;
+}
+
 function openTeamAdd() {
+  if (!requireVerifiedToEdit()) return;
   if (!(seasonData?.divisions || []).length) { toast('No divisions exist yet — ask the admin to set them up first.', 'bad'); return; }
   editingTeamId = null;
   document.getElementById('team-form-title').textContent = 'Add Team';
@@ -343,12 +355,16 @@ function openTeamAdd() {
   populateDivisionSelect();
   populateFieldSelect();
   renderAvailabilityGrid('tfe-availability', null, seasonSlots);
+  // Collapsed by default on Add — setting availability is the coach's job,
+  // later. A director who genuinely needs to set it now can still open this.
+  document.getElementById('tfe-availability-details').open = false;
   document.getElementById('tfe-error').classList.add('hidden');
   document.getElementById('team-editor-form').classList.remove('hidden');
   document.getElementById('tfe-label').focus();
 }
 
 function openTeamEdit(teamId) {
+  if (!requireVerifiedToEdit()) return;
   const team = myProgramTeams().find(t => String(t.id) === teamId);
   if (!team) return;
   editingTeamId = teamId;
@@ -363,6 +379,8 @@ function openTeamEdit(teamId) {
   document.getElementById('tfe-division').value = String(team.division_id || '');
   document.getElementById('tfe-field').value = String(team.home_field_id || '');
   renderAvailabilityGrid('tfe-availability', team.availability, seasonSlots);
+  // Open on Edit — this is the director deliberately going looking for it.
+  document.getElementById('tfe-availability-details').open = true;
   document.getElementById('tfe-error').classList.add('hidden');
   document.getElementById('team-editor-form').classList.remove('hidden');
   document.getElementById('tfe-label').focus();
@@ -459,6 +477,7 @@ function renderFieldsList() {
 }
 
 function openFieldAdd() {
+  if (!requireVerifiedToEdit()) return;
   editingFieldId = null;
   document.getElementById('field-form-title').textContent = 'Add Field';
   document.getElementById('ffe-name').value = '';
@@ -474,6 +493,7 @@ function openFieldAdd() {
 }
 
 function openFieldEdit(fieldId) {
+  if (!requireVerifiedToEdit()) return;
   const field = myProgramFields().find(f => String(f.id) === fieldId);
   if (!field) return;
   editingFieldId = fieldId;
@@ -538,27 +558,8 @@ async function deleteField(fieldId, fieldName) {
 
 // ── Verify-email banner ──────────────────────────────────────────────────────
 
-function initVerifyBanner() {
-  if (!session || session.verified) return;
-  const banner = document.createElement('div');
-  banner.id = 'verify-banner';
-  banner.style.cssText = 'background:#fef3c7;border-bottom:1px solid #f59e0b;color:#92400e;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px;justify-content:center';
-  banner.innerHTML = `<span>Verify your email to add or edit teams and fields.</span>
-    <button id="verify-banner-btn" class="btn btn-secondary btn-sm">Send verification link</button>`;
-  document.body.prepend(banner);
-
-  document.getElementById('verify-banner-btn').addEventListener('click', async (e) => {
-    e.target.disabled = true;
-    e.target.textContent = 'Sending…';
-    try {
-      const res = await fetch('api/auth/request-verify', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ next: '/director' }),
-      });
-      const data = await res.json();
-      e.target.textContent = data.ok ? 'Check your email!' : (data.error || 'Failed — try again');
-    } catch { e.target.textContent = 'Network error — try again'; e.target.disabled = false; }
-  });
+function initDirectorVerifyBanner() {
+  initVerifyBanner(session, 'Verify your email to add or edit teams and fields.', '/director');
 }
 
 init();

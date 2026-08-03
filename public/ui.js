@@ -352,3 +352,75 @@ function resetFieldGeocodeUI() {
 
 document.addEventListener('DOMContentLoaded', wireFieldGeocode);
 if (document.readyState !== 'loading') wireFieldGeocode();
+
+// ── Verify banner (link + code) ──────────────────────────────────────────────
+// Shared by director.js and my-team.js — was two near-identical copies. The
+// code path exists because clicking the emailed link navigates away from
+// whatever form was being filled in; typing the code verifies in place.
+// `sessionObj` is mutated directly (not reassigned) so the caller's own
+// `session` variable — which points at this same object — sees `.verified`
+// flip to true without needing any global cross-script wiring.
+function initVerifyBanner(sessionObj, message, next) {
+  if (!sessionObj || sessionObj.verified) return;
+  const banner = document.createElement('div');
+  banner.id = 'verify-banner';
+  banner.className = 'verify-banner';
+  banner.innerHTML = `
+    <span>${uiEsc(message)}</span>
+    <button id="verify-banner-btn" class="btn btn-secondary btn-sm">Send verification link</button>
+    <span id="verify-code-row" class="verify-code-row hidden">
+      <input id="verify-code-input" type="text" inputmode="numeric" autocomplete="one-time-code"
+             maxlength="6" placeholder="6-digit code">
+      <button id="verify-code-btn" class="btn btn-secondary btn-sm">Verify</button>
+    </span>`;
+  document.body.prepend(banner);
+
+  const sendBtn   = document.getElementById('verify-banner-btn');
+  const codeRow   = document.getElementById('verify-code-row');
+  const codeInput = document.getElementById('verify-code-input');
+  const codeBtn   = document.getElementById('verify-code-btn');
+
+  sendBtn.addEventListener('click', async () => {
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Sending…';
+    try {
+      const res = await fetch('api/auth/request-verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ next }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        sendBtn.textContent = 'Sent — click the link, or enter the code below';
+        codeRow.classList.remove('hidden');
+        codeInput.focus();
+      } else {
+        sendBtn.textContent = data.error || 'Failed — try again';
+        sendBtn.disabled = false;
+      }
+    } catch { sendBtn.textContent = 'Network error — try again'; sendBtn.disabled = false; }
+  });
+
+  async function submitCode() {
+    const code = codeInput.value.trim();
+    if (!code) { codeInput.focus(); return; }
+    codeBtn.disabled = true;
+    try {
+      const res = await fetch('api/auth/verify-code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        sessionObj.verified = true;
+        toast('Verified — you can carry on where you left off.');
+        banner.remove();
+      } else {
+        toast(data.error || 'That code is wrong or has expired.', 'bad');
+        codeInput.select();
+      }
+    } catch { toast('Network error — try again.', 'bad'); }
+    codeBtn.disabled = false;
+  }
+  codeBtn.addEventListener('click', submitCode);
+  codeInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submitCode(); } });
+}

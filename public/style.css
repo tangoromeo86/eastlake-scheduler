@@ -1478,3 +1478,29 @@ input.has-error:focus, select.has-error:focus {
   border-radius: 4px;
   font-size: 12.5px;
 }
+
+/* ── Verify banner ───────────────────────────────────────────────────────────
+   Was inline-styled per page (two copies). Now shared, and holds a code-entry
+   row that appears once a link/code has been sent — verifying without ever
+   navigating away from whatever was being filled in. */
+.verify-banner {
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn);
+  color: #92400e;
+  padding: 10px 16px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.verify-code-row { display: flex; align-items: center; gap: 8px; }
+.verify-code-row.hidden { display: none; }
+.verify-code-row input {
+  width: 110px;
+  padding: 6px 9px;
+  font-size: 14px;
+  letter-spacing: .06em;
+  text-align: center;
+}

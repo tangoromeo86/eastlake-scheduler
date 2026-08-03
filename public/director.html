@@ -38,9 +38,11 @@
           <label>Coach Phone<input id="tfe-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 555-5555"></label>
           <label>Games this season <span class="field-form-hint">(blank = league default)</span><input id="tfe-target" type="number" min="1" max="20"></label>
         </div>
-        <h3 style="margin-top:20px">Weekly Availability</h3>
-        <p class="field-form-hint" style="margin-bottom:10px">Fields left blank default to "Available for both."</p>
-        <div id="tfe-availability"></div>
+        <details id="tfe-availability-details" class="av-group" style="margin-top:20px">
+          <summary>Weekly Availability <span class="field-form-hint">(usually set by the coach later — open this only if you need to set it now)</span></summary>
+          <p class="field-form-hint" style="margin:10px 0">Fields left blank default to "Available for both."</p>
+          <div id="tfe-availability"></div>
+        </details>
         <div class="field-form-actions">
           <button id="tfe-cancel" class="btn btn-secondary">Cancel</button>
           <button id="tfe-save" class="btn btn-primary">Save Team</button>

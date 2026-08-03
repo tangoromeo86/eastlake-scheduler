@@ -65,7 +65,10 @@ function renderSeasonBar(seas) {
   const perDiv = {};
   confirmedTeams.forEach(t => { perDiv[t.division_id] = (perDiv[t.division_id] || 0) + 1; });
   const start = seas.season?.start || '';
-  const end   = seas.season?.end   || '';
+  // /api/season now computes and attaches `end` server-side (buildSeasonWeeks
+  // is the one authoritative calendar) — there was never a stored `end` field,
+  // which is why this used to read undefined and render as "NaN/NaN/".
+  const end = seas.season?.end || '';
   document.getElementById('season-bar-text').textContent =
     `${seas.divisions.length} divisions · ${confirmedTeams.length} teams` +
     (start ? ` · ${formatDate(start)} – ${formatDate(end)}` : '');

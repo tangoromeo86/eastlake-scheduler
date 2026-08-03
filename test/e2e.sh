@@ -29,7 +29,7 @@ setup_server() {
     return 1
   fi
   cp "$repo/server.js" "$repo/.server.e2e.js"
-  perl -0pi -e 's/(const token = createVerifyToken\(s\.email\);)/$1\n  console.log("DEBUG_LOGIN_TOKEN:" + s.email + ":" + token);/' "$repo/.server.e2e.js"
+  perl -0pi -e 's/(const \{ token, code \} = createVerifyToken\(s\.email\);)/$1\n  console.log("DEBUG_LOGIN_TOKEN:" + s.email + ":" + token);\n  console.log("DEBUG_LOGIN_CODE:" + s.email + ":" + code);/' "$repo/.server.e2e.js"
   perl -0pi -e 's/(const confirmUrl = `\$\{req\.protocol\})/console.log("DEBUG_EMAILCHANGE_TOKEN:" + token);\n  $1/' "$repo/.server.e2e.js"
   perl -0pi -e 's/(^setInterval\(\(\) => \{ checkEscalations.*$)/$1\napp.post("\/api\/_test\/check-escalations", requireAdmin, async (req, res) => { await checkEscalations(); res.json({ ok: true }); });/m' "$repo/.server.e2e.js"
   ( cd "$repo" && ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=testpass \
@@ -128,6 +128,26 @@ verify_session dana.txt dana@example.com
 verify_session mike.txt mike@example.com
 V=$(curl -s -b dana.txt "$BASE/api/auth/me" | python3 -c "import sys,json;print(json.load(sys.stdin)['verified'])")
 [ "$V" = "True" ] && pass "director verified via magic link" || fail "verified = $V"
+
+# Same upgrade, reached without ever following a link — Ted asked for this
+# specifically because clicking the emailed link navigates away from whatever
+# was being filled in. A separate identity so it doesn't disturb dana's state.
+curl -s -b admin.txt -X POST "$BASE/api/season/directors" -H "$J" \
+  -d "{\"name\":\"Cody Codepath\",\"email\":\"cody@example.com\",\"program_id\":\"$P1\"}" > /dev/null
+curl -s -c cody.txt -X POST "$BASE/api/auth/login" -H "$J" -d '{"email":"cody@example.com"}' > /dev/null
+curl -s -b cody.txt -X POST "$BASE/api/auth/request-verify" -H "$J" -d '{}' > /dev/null
+BADCODE=$(curl -s -b cody.txt -X POST "$BASE/api/auth/verify-code" -H "$J" -d '{"code":"000000"}' | python3 -c "import sys,json;print(json.load(sys.stdin).get('error','') != '')")
+[ "$BADCODE" = "True" ] && pass "wrong verification code is rejected" || fail "wrong code was not rejected"
+CODE=$(grep "DEBUG_LOGIN_CODE:cody@example.com:" "$LOG" | tail -1 | cut -d: -f3)
+curl -s -b cody.txt -c cody.txt -X POST "$BASE/api/auth/verify-code" -H "$J" -d "{\"code\":\"$CODE\"}" > /dev/null
+CV=$(curl -s -b cody.txt "$BASE/api/auth/me" | python3 -c "import sys,json;print(json.load(sys.stdin)['verified'])")
+[ "$CV" = "True" ] && pass "director verified via code, without following a link" || fail "code verification left verified = $CV"
+REUSE=$(curl -s -b cody.txt -X POST "$BASE/api/auth/verify-code" -H "$J" -d "{\"code\":\"$CODE\"}" | python3 -c "import sys,json;print(json.load(sys.stdin))")
+echo "$REUSE" | grep -q "alreadyVerified" && pass "re-submitting after verifying short-circuits cleanly" || fail "unexpected reuse response: $REUSE"
+# Throwaway identity for the code-path test only — removed so it doesn't shift
+# the director/program counts later steps (e.g. rollover) assert on exactly.
+CODY_ID=$(curl -s -b admin.txt "$BASE/api/season" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(x['id'] for x in d['directors'] if x['email']=='cody@example.com'))")
+curl -s -b admin.txt -X DELETE "$BASE/api/season/directors/$CODY_ID" > /dev/null
 
 echo
 echo "=============================================="
