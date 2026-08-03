@@ -2139,6 +2139,7 @@ let editingDirectorId = null;
 function renderProgramsPage() {
   renderProgramsList();
   renderDirectorsList();
+  renderCoachesList();
   populateDirectorProgramSelect();
 }
 
@@ -2332,6 +2333,106 @@ async function deleteDirector(directorId, directorName) {
     renderProgramsPage();
   } catch (e) { toast('Network error. Try again.', 'bad'); }
 }
+
+// ── Coaches ──────────────────────────────────────────────────────────────────
+// A coach isn't a separate record — it's the coach/email/phone fields on a
+// team. This lists every team as a coach row so the admin can fix contact
+// details directly, without opening the full team editor (division, home
+// field, availability) for what's usually just a wrong phone number or email.
+let editingCoachTeamId = null;
+
+function renderCoachesList() {
+  const teams = [...(seasonData?.teams || [])].sort((a, b) => teamLabel(a).localeCompare(teamLabel(b)));
+  const programs = seasonData?.programs || [];
+  const programName = id => programs.find(p => String(p.id) === String(id))?.name || '—';
+  const list = document.getElementById('coaches-list');
+
+  if (!teams.length) {
+    list.innerHTML = '<p class="empty-note">No teams registered yet, so there are no coaches to show.</p>';
+    return;
+  }
+
+  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
+    <thead><tr><th>Coach</th><th>Team</th><th>Program</th><th>Email</th><th>Phone</th><th></th></tr></thead>
+    <tbody>
+    ${teams.map(t => `<tr>
+        <td>${t.coach ? `<strong>${esc(t.coach)}</strong>` : '<span class="pill pill-wait">no coach set</span>'}</td>
+        <td>${esc(teamLabel(t))}</td>
+        <td>${esc(programName(t.program_id))}</td>
+        <td>${t.email ? esc(t.email) : '<span class="pill pill-wait">none</span>'}</td>
+        <td>${esc(t.phone || '—')}</td>
+        <td><div class="row-actions">
+          <button class="btn btn-secondary btn-sm" onclick="openCoachEdit('${String(t.id)}')">Edit</button>
+        </div></td>
+      </tr>`).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+function openCoachEdit(teamId) {
+  const team = (seasonData?.teams || []).find(t => String(t.id) === teamId);
+  if (!team) return;
+  editingCoachTeamId = teamId;
+  document.getElementById('coach-form-title').textContent = `Edit Coach — ${teamLabel(team)}`;
+  document.getElementById('cfe-team-name').textContent = `(${teamLabel(team)})`;
+  document.getElementById('cfe-name').value = team.coach || '';
+  document.getElementById('cfe-email').value = team.email || '';
+  document.getElementById('cfe-phone').value = team.phone || '';
+  clearFieldErrors('coach-editor-form');
+  document.getElementById('cfe-error').classList.add('hidden');
+  document.getElementById('coach-editor-form').classList.remove('hidden');
+  document.getElementById('cfe-name').focus();
+}
+
+document.getElementById('cfe-cancel').addEventListener('click', () => {
+  document.getElementById('coach-editor-form').classList.add('hidden');
+});
+
+document.getElementById('cfe-save').addEventListener('click', async () => {
+  const errEl = document.getElementById('cfe-error');
+  errEl.classList.add('hidden');
+  clearFieldErrors('coach-editor-form');
+  if (!validateForm([
+    { id: 'cfe-name',  label: 'Coach name',  required: false },
+    { id: 'cfe-email', label: 'Coach email', required: false, type: 'email' },
+    { id: 'cfe-phone', label: 'Coach phone', required: false, type: 'phone' },
+  ])) return;
+
+  const team = (seasonData?.teams || []).find(t => String(t.id) === editingCoachTeamId);
+  if (!team) { errEl.textContent = 'That team no longer exists.'; errEl.classList.remove('hidden'); return; }
+
+  // The team route expects the whole record — label/division/home field are
+  // sent unchanged so this stays a coach-only edit rather than resetting them.
+  const body = {
+    label:         team.label,
+    division_id:   team.division_id,
+    home_field_id: team.home_field_id || null,
+    coach:         document.getElementById('cfe-name').value.trim(),
+    email:         document.getElementById('cfe-email').value.trim(),
+    phone:         document.getElementById('cfe-phone').value.trim(),
+  };
+  try {
+    const res  = await fetch(`api/teams/${editingCoachTeamId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      if (!applyServerError(data)) { errEl.textContent = data.error || 'Save failed.'; errEl.classList.remove('hidden'); }
+      return;
+    }
+    seasonData = await fetchJSON('api/season');
+    document.getElementById('coach-editor-form').classList.add('hidden');
+    renderCoachesList();
+    if (data.email_change_pending) {
+      toast(data.email_change_sent
+        ? `Saved. Email unchanged until ${data.pending_email} clicks the confirmation link.`
+        : `Saved, but the confirmation email failed to send — the email is unchanged.`,
+        data.email_change_sent ? 'good' : 'bad');
+    } else {
+      toast('Coach updated.');
+    }
+  } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
+});
 
 // ── Verify-email banner (view vs. act) ───────────────────────────────────────────
 

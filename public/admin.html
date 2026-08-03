@@ -279,6 +279,32 @@
       </div>
     </div>
     <div id="directors-list"></div>
+
+    <div class="changes-toolbar" class="section-gap">
+      <span class="changes-toolbar-title">&#9917; Coaches</span>
+    </div>
+    <p class="field-form-hint section-gap" style="margin-bottom:10px">
+      One coach per team, so there's no "add" here — register a new team under the Teams tab.
+      This is for fixing a coach's contact details directly.</p>
+    <div id="coach-editor-form" class="field-editor-form hidden">
+      <div class="field-form-inner">
+        <h3 id="coach-form-title">Edit Coach</h3>
+        <div class="field-form-row">
+          <label>Coach Name<input id="cfe-name" type="text" placeholder="e.g. Jane Smith"></label>
+          <label>Team <span class="field-form-hint" id="cfe-team-name"></span></label>
+        </div>
+        <div class="field-form-row">
+          <label>Coach Email<input id="cfe-email" type="email" inputmode="email" autocomplete="email" spellcheck="false" placeholder="jane@example.com"></label>
+          <label>Coach Phone<input id="cfe-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 555-5555"></label>
+        </div>
+        <div class="field-form-actions">
+          <button id="cfe-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="cfe-save" class="btn btn-primary">Save Coach</button>
+        </div>
+        <div id="cfe-error" class="field-form-error hidden"></div>
+      </div>
+    </div>
+    <div id="coaches-list"></div>
   </div>
 
   <div id="page-season" class="page-section hidden">

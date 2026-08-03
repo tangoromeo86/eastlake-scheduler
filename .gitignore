@@ -5,3 +5,4 @@ change_requests.json
 snapshots/
 *backup*.json
 *.bak
+.scratch/
