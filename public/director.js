@@ -5,7 +5,6 @@ let seasonData = null;
 let editingTeamId = null;
 let editingFieldId = null;
 let scheduleData = null;
-let crGameId = null;
 let crTeamId = null;
 let seasonSlots = null;
 
@@ -92,7 +91,6 @@ function openChangeRequestFromUrl() {
     .find(id => myProgramTeams().some(t => String(t.id) === String(id)));
   if (!resolvedTeamId) return;
   openChangeRequest(gameId, String(resolvedTeamId));
-  document.getElementById('cr-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // ── Games list + change requests ─────────────────────────────────────────────
@@ -103,56 +101,8 @@ function myProgramGames() {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function daysUntil(dateStr) {
-  const ms = new Date(dateStr + 'T00:00:00') - new Date(new Date().toDateString());
-  return Math.floor(ms / (24 * 60 * 60 * 1000));
-}
-
 function teamById(id) {
   return (seasonData?.teams || []).find(t => String(t.id) === String(id));
-}
-
-
-// ── Change-request slot picker ───────────────────────────────────────────────
-// Slots come from the server, which only offers times valid for BOTH teams.
-let crSelectedSlot = null;
-
-function crSlotLabel(s) {
-  const d = new Date(s.date + 'T12:00:00Z');
-  const nice = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
-  return `${nice} at ${s.time}`;
-}
-
-async function loadChangeSlots(gameId) {
-  const box = document.getElementById('cr-slots');
-  const submitBtn = document.getElementById('cr-submit');
-  box.innerHTML = '<p class="muted">Finding times that work for both teams…</p>';
-  submitBtn.disabled = true;
-  try {
-    const params = new URLSearchParams({ game_id: gameId });
-    if (crTeamId) params.set('team_id', crTeamId);
-    const data = await fetchJSON('api/change-requests/options?' + params.toString());
-    if (!data.slots.length) {
-      box.innerHTML = '<p class="danger-text">No other time fits both teams\' availability. You may need to adjust a team\'s availability or open up a field.</p>';
-      return;
-    }
-    box.innerHTML = data.slots.map((s, i) => `
-      <label class="cr-slot">
-        <input type="radio" name="cr-slot" value="${i}">${esc(crSlotLabel(s))}
-      </label>`).join('');
-    box.querySelectorAll('input[name="cr-slot"]').forEach(r => {
-      r.addEventListener('change', () => {
-        crSelectedSlot = data.slots[parseInt(r.value, 10)];
-        submitBtn.disabled = false;
-        const sel = document.getElementById('cr-time');
-        sel.innerHTML = (crSelectedSlot.allowed_times || [crSelectedSlot.time])
-          .map(t => `<option value="${t}"${t === crSelectedSlot.time ? ' selected' : ''}>${t}</option>`).join('');
-        document.getElementById('cr-time-row').style.display = '';
-      });
-    });
-  } catch (e) {
-    box.innerHTML = '<p class="danger-text">Could not load available times. Try again.</p>';
-  }
 }
 
 
@@ -210,14 +160,6 @@ function renderGamesList() {
   </table></div>`;
 }
 
-function populateCrFieldSelects() {
-  const fields = [...(seasonData?.fields || [])].sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
-  const opts = '<option value="">— No preference —</option>' + fields.map(f => `<option value="${String(f.id)}">${esc(fieldDisplayName(f))}</option>`).join('');
-  // There is no #cr-field element — same leftover reference as my-team.js;
-  // only #cr-mo-field (the manual-override path) actually exists.
-  document.getElementById('cr-mo-field').innerHTML = opts.replace('No preference', 'Keep current');
-}
-
 // Confirm on behalf of whichever of the director's own teams is in this game.
 async function confirmGame(gameId, teamId) {
   try {
@@ -235,75 +177,13 @@ async function confirmGame(gameId, teamId) {
 function openChangeRequest(gameId, teamId) {
   const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
   if (!game) return;
-  crGameId = gameId;
   crTeamId = teamId;
   const otherId = String(game.home_team_id) === teamId ? game.away_team_id : game.home_team_id;
-  const other = teamById(otherId);
-  document.getElementById('cr-error').classList.add('hidden');
-  populateCrFieldSelects();
-
-  crSelectedSlot = null;
-  const tr = document.getElementById('cr-time-row');
-  if (tr) tr.style.display = 'none';
-  const locked = daysUntil(game.date) < 7;
-  document.getElementById('cr-form-title').textContent = locked ? 'Change Locked — Manual Override' : 'Request Change';
-  document.getElementById('cr-normal-form').classList.toggle('hidden', locked);
-  document.getElementById('cr-lockout-form').classList.toggle('hidden', !locked);
-  if (locked) {
-    document.getElementById('cr-other-phone').textContent = other?.phone || '(no phone on file)';
-    document.getElementById('cr-mo-date').value = game.date;
-    document.getElementById('cr-mo-time').value = game.time;
-  } else {
-    document.getElementById('cr-reason').value = '';
-    loadChangeSlots(gameId);
-  }
-  document.getElementById('cr-form').classList.remove('hidden');
+  openChangeRequestModal({
+    game, teamId, otherTeam: teamById(otherId), fields: seasonData?.fields || [],
+    refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
+  });
 }
-
-document.getElementById('cr-cancel').addEventListener('click', () => document.getElementById('cr-form').classList.add('hidden'));
-document.getElementById('cr-mo-cancel').addEventListener('click', () => document.getElementById('cr-form').classList.add('hidden'));
-
-document.getElementById('cr-submit').addEventListener('click', async () => {
-  const errEl = document.getElementById('cr-error');
-  errEl.classList.add('hidden');
-  if (!crSelectedSlot) { errEl.textContent = 'Pick a proposed time first.'; errEl.classList.remove('hidden'); return; }
-  const body = {
-    game_id: crGameId, team_id: crTeamId,
-    reason: document.getElementById('cr-reason').value.trim(),
-    slot: { date: crSelectedSlot.date, slot_key: crSelectedSlot.slot_key || null,
-            time: document.getElementById('cr-time').value || crSelectedSlot.time },
-  };
-  try {
-    const res = await fetch('api/change-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const data = await res.json();
-    if (!data.ok) { errEl.textContent = data.error || 'Could not submit request.'; errEl.classList.remove('hidden'); return; }
-    document.getElementById('cr-form').classList.add('hidden');
-    toast("Check the coach's email to confirm this request before it reaches the other coach.", 'good');
-  } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
-});
-
-document.getElementById('cr-mo-submit').addEventListener('click', async () => {
-  const errEl = document.getElementById('cr-error');
-  errEl.classList.add('hidden');
-  const who = document.getElementById('cr-mo-who').value.trim();
-  const how = document.getElementById('cr-mo-how').value.trim();
-  const date = document.getElementById('cr-mo-date').value;
-  const time = document.getElementById('cr-mo-time').value.trim();
-  if (!who || !how || !date || !time) { errEl.textContent = 'Date, time, who, and how are all required.'; errEl.classList.remove('hidden'); return; }
-  const body = {
-    team_id: crTeamId, date, time,
-    field_id: document.getElementById('cr-mo-field').value || null,
-    who_spoke_to: who, how_connected: how,
-  };
-  try {
-    const res = await fetch(`api/change-requests/${crGameId}/manual-override`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const data = await res.json();
-    if (!data.ok) { errEl.textContent = data.error || 'Could not apply change.'; errEl.classList.remove('hidden'); return; }
-    document.getElementById('cr-form').classList.add('hidden');
-    scheduleData = await fetchJSON('api/schedule');
-    renderGamesList();
-  } catch (e) { errEl.textContent = 'Network error. Try again.'; errEl.classList.remove('hidden'); }
-});
 
 function myProgramFields() {
   return (seasonData?.fields || []).filter(f => f.program_id === session.program_id);

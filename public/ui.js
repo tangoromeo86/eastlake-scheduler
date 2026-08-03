@@ -425,6 +425,277 @@ function initVerifyBanner(sessionObj, message, next) {
   codeInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submitCode(); } });
 }
 
+// ── Request Change modal ──────────────────────────────────────────────────────
+// Was a static form bolted below the games list on my-team.html/director.html —
+// Ted: confusing, since clicking "Request Change" on a game near the top of the
+// page opened the team page and stuck the form far below whatever you clicked,
+// with no game context inside the form to confirm you had the right one. Now a
+// real overlay (same .modal-overlay/.modal pattern as admin's game-edit modal),
+// built once and reused, with the game it's for always visible in the header.
+//
+// Also replaces the old single "why does this need to change?" text field with
+// a structured first question — Ted: coaches almost always know whether it's a
+// small ask (same day, different kickoff) or a big one (this day doesn't work
+// at all), and that distinction should drive the flow instead of being buried
+// in free text. "Just the time" reuses the current day's slot data and only
+// asks for a new time; "The day" finds a day that works for both teams first,
+// then asks for a time the same way. The old reason field survives as an
+// optional note, not the leading question.
+let crmGame = null, crmTeamId = null, crmOtherTeam = null, crmFields = null, crmRefresh = null, crmNoPhoneText = null;
+let crmSlots = null, crmDaysMap = null, crmSelectedDate = null, crmSelectedTime = null;
+
+function ensureChangeModal() {
+  if (document.getElementById('crm-overlay')) return;
+  const el = document.createElement('div');
+  el.id = 'crm-overlay';
+  el.className = 'modal-overlay hidden';
+  el.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h3 id="crm-title">Request Change</h3>
+          <p id="crm-subtitle" class="field-form-hint" style="margin-top:2px"></p>
+        </div>
+        <button id="crm-close" class="modal-close" type="button">&times;</button>
+      </div>
+      <div id="crm-body" class="modal-body"></div>
+      <div id="crm-error" class="field-form-error hidden" style="margin:0 20px 14px"></div>
+      <div id="crm-footer" class="modal-footer"></div>
+    </div>`;
+  document.body.appendChild(el);
+  document.getElementById('crm-close').addEventListener('click', closeChangeModal);
+  el.addEventListener('click', e => { if (e.target === el) closeChangeModal(); });
+}
+
+function closeChangeModal() {
+  document.getElementById('crm-overlay')?.classList.add('hidden');
+}
+
+function crmErr(msg) {
+  const el = document.getElementById('crm-error');
+  if (!el) return;
+  if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function crmDayLabel(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+function crmGameLabel(game) {
+  const d = new Date(game.date + 'T12:00:00Z');
+  const nice = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return `${nice} at ${game.time}`;
+}
+
+// { game, teamId, otherTeam, fields, refresh, noPhoneText }
+// - game: the full game object being changed.
+// - teamId: the requesting team's id (a director may act on behalf of any of
+//   their own teams, so this is always explicit rather than inferred).
+// - otherTeam: the opposing team object, for the lockout flow's phone number.
+// - fields: seasonData.fields, for the lockout flow's field picker.
+// - refresh: called after a successful submit so the caller's own games list
+//   (whatever shape that takes on their page) reflects the new state.
+async function openChangeRequestModal({ game, teamId, otherTeam, fields, refresh, noPhoneText }) {
+  ensureChangeModal();
+  crmGame = game; crmTeamId = teamId; crmOtherTeam = otherTeam; crmFields = fields || [];
+  crmRefresh = refresh; crmNoPhoneText = noPhoneText || '(no phone on file)';
+  crmSlots = null; crmDaysMap = null; crmSelectedDate = null; crmSelectedTime = null;
+  crmErr(null);
+
+  const daysOut = Math.floor((new Date(game.date + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000);
+  const locked = daysOut < 7;
+
+  const isHome = String(game.home_team_id) === String(teamId);
+  const oppName = otherTeam ? (otherTeam.label || otherTeam.name || 'the other team') : 'the other team';
+  document.getElementById('crm-subtitle').textContent =
+    `${isHome ? 'Home' : 'Away'} vs ${oppName} — currently ${crmGameLabel(game)}${game.field_name ? ` at ${game.field_name}` : ''}`;
+  document.getElementById('crm-title').textContent = locked ? 'Change Locked — Manual Override' : 'Request Change';
+  document.getElementById('crm-overlay').classList.remove('hidden');
+
+  if (locked) { renderCrmLocked(); return; }
+
+  document.getElementById('crm-body').innerHTML = '<p class="muted">Finding times that work for both teams…</p>';
+  document.getElementById('crm-footer').innerHTML = '';
+  try {
+    const params = new URLSearchParams({ game_id: game.game_id });
+    if (teamId) params.set('team_id', teamId);
+    const res = await fetch('api/change-requests/options?' + params.toString());
+    const data = await res.json();
+    crmSlots = data.slots || [];
+    crmDaysMap = new Map();
+    for (const s of crmSlots) if (!crmDaysMap.has(s.date)) crmDaysMap.set(s.date, s);
+    if (!crmSlots.length) {
+      document.getElementById('crm-body').innerHTML =
+        `<p class="danger-text">No time works for both teams right now. Ask your director for help — they can adjust availability or free up a field.</p>`;
+      document.getElementById('crm-footer').innerHTML = `<button id="crm-cancel-btn" class="btn btn-secondary" type="button">Close</button>`;
+      document.getElementById('crm-cancel-btn').addEventListener('click', closeChangeModal);
+      return;
+    }
+    renderCrmTypeStep();
+  } catch {
+    document.getElementById('crm-body').innerHTML = `<p class="danger-text">Could not load available times. Try again.</p>`;
+  }
+}
+
+// Step 1 — what actually needs to change, instead of a free-text "why".
+function renderCrmTypeStep() {
+  document.getElementById('crm-body').innerHTML = `
+    <p class="field-form-hint">What needs to change?</p>
+    <div class="cr-slot" id="crm-choice-time">
+      <strong>Just the time</strong> — keep ${uiEsc(crmDayLabel(crmGame.date))}
+      <div class="field-form-hint" style="margin-top:3px">The day works fine, just not this kickoff time.</div>
+    </div>
+    <div class="cr-slot" id="crm-choice-day">
+      <strong>The day</strong>
+      <div class="field-form-hint" style="margin-top:3px">Find a day that works for both teams, then pick a time.</div>
+    </div>`;
+  document.getElementById('crm-footer').innerHTML = `<button id="crm-cancel-btn" class="btn btn-secondary" type="button">Cancel</button>`;
+  document.getElementById('crm-cancel-btn').addEventListener('click', closeChangeModal);
+  document.getElementById('crm-choice-time').addEventListener('click', () => {
+    if (!crmDaysMap.has(crmGame.date)) {
+      crmErr('This day no longer works for one of the teams — try "The day" instead.');
+      return;
+    }
+    crmSelectedDate = crmGame.date;
+    renderCrmTimeStep({ back: renderCrmTypeStep, excludeCurrentTime: true });
+  });
+  document.getElementById('crm-choice-day').addEventListener('click', renderCrmDayStep);
+}
+
+// Step 2a — pick a day (only reached from "The day").
+function renderCrmDayStep() {
+  crmErr(null);
+  const days = [...crmDaysMap.keys()].filter(d => d !== crmGame.date).sort();
+  if (!days.length) {
+    document.getElementById('crm-body').innerHTML = `<p class="danger-text">No other day works for both teams right now.</p>`;
+    document.getElementById('crm-footer').innerHTML = `<button id="crm-back-btn" class="btn btn-secondary" type="button">Back</button>`;
+    document.getElementById('crm-back-btn').addEventListener('click', renderCrmTypeStep);
+    return;
+  }
+  document.getElementById('crm-body').innerHTML = `
+    <p class="field-form-hint">Pick a day that works for both teams:</p>
+    <div id="crm-day-list">${days.map(d =>
+      `<label class="cr-slot"><input type="radio" name="crm-day" value="${uiEsc(d)}">${uiEsc(crmDayLabel(d))}</label>`
+    ).join('')}</div>`;
+  document.getElementById('crm-footer').innerHTML = `
+    <button id="crm-back-btn" class="btn btn-secondary" type="button">Back</button>
+    <button id="crm-next-btn" class="btn btn-primary" type="button" disabled>Next: pick a time</button>`;
+  document.getElementById('crm-back-btn').addEventListener('click', renderCrmTypeStep);
+  const nextBtn = document.getElementById('crm-next-btn');
+  document.querySelectorAll('input[name="crm-day"]').forEach(r => {
+    r.addEventListener('change', () => { crmSelectedDate = r.value; nextBtn.disabled = false; });
+  });
+  nextBtn.addEventListener('click', () => renderCrmTimeStep({ back: renderCrmDayStep, excludeCurrentTime: false }));
+}
+
+// Step 2b/3 — pick a time on crmSelectedDate. Full legal window for the day
+// type (same bounds used everywhere else games get timed), minus anything
+// already booked on the field that day, minus the current time itself when
+// this is a same-day change (picking the same time back isn't a change).
+function renderCrmTimeStep({ back, excludeCurrentTime }) {
+  crmErr(null);
+  crmSelectedTime = null;
+  const entry = crmDaysMap.get(crmSelectedDate);
+  const blocked = new Set((entry.field_games || []).map(g => g.time));
+  if (excludeCurrentTime) blocked.add(crmGame.time);
+  const times = (entry.allowed_times || []).filter(t => !blocked.has(t));
+
+  document.getElementById('crm-body').innerHTML = `
+    <p class="field-form-hint">${uiEsc(crmDayLabel(crmSelectedDate))} — pick a kickoff time:</p>
+    ${times.length
+      ? `<div id="crm-time-list" class="crm-time-grid">${times.map(t =>
+          `<label class="cr-slot crm-time-chip"><input type="radio" name="crm-time" value="${t}">${t}</label>`
+        ).join('')}</div>`
+      : `<p class="danger-text">Every time on this day is already taken on the field. Try a different day.</p>`}
+    <label class="field-form-row" style="margin-top:12px;display:block">
+      <span class="field-form-hint" style="margin:0 0 4px;display:block">Add a note for the other coach (optional)</span>
+      <input id="crm-note" type="text" placeholder="e.g. Field conflict with another team">
+    </label>`;
+  document.getElementById('crm-footer').innerHTML = `
+    <button id="crm-back-btn" class="btn btn-secondary" type="button">Back</button>
+    <button id="crm-submit-btn" class="btn btn-primary" type="button" disabled>Send Request</button>`;
+  document.getElementById('crm-back-btn').addEventListener('click', back);
+  const submitBtn = document.getElementById('crm-submit-btn');
+  document.querySelectorAll('input[name="crm-time"]').forEach(r => {
+    r.addEventListener('change', () => { crmSelectedTime = r.value; submitBtn.disabled = false; });
+  });
+  submitBtn.addEventListener('click', submitCrmRequest);
+}
+
+async function submitCrmRequest() {
+  crmErr(null);
+  if (!crmSelectedDate || !crmSelectedTime) { crmErr('Pick a time first.'); return; }
+  const body = {
+    game_id: crmGame.game_id, team_id: crmTeamId,
+    reason: (document.getElementById('crm-note')?.value || '').trim(),
+    slot: { date: crmSelectedDate, time: crmSelectedTime },
+  };
+  try {
+    const res = await fetch('api/change-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { crmErr(data.error || 'Could not submit request.'); return; }
+    closeChangeModal();
+    toast("Check the coach's email to confirm this request before it reaches the other coach.", 'good');
+    if (crmRefresh) crmRefresh();
+  } catch { crmErr('Network error. Try again.'); }
+}
+
+// <7 days out — same manual-override flow as before, just relocated into the
+// modal instead of a static panel at the bottom of the page.
+function renderCrmLocked() {
+  document.getElementById('crm-body').innerHTML = `
+    <p class="field-form-hint">This game is less than 7 days away, so it's too late for the normal request/approve flow. Call or text the other coach directly at <strong>${uiEsc(crmOtherTeam?.phone || crmNoPhoneText)}</strong> to work it out, then record it here.</p>
+    <div class="field-form-row">
+      <label>New Date *<input id="crm-mo-date" type="date" value="${uiEsc(crmGame.date)}"></label>
+      <label>New Time *<input id="crm-mo-time" type="text" placeholder="e.g. 18:30" value="${uiEsc(crmGame.time)}"></label>
+    </div>
+    <div class="field-form-row">
+      <label>Field<select id="crm-mo-field"></select></label>
+    </div>
+    <div class="field-form-row">
+      <label>Who did you speak with? *<input id="crm-mo-who" type="text" placeholder="e.g. Coach Smith"></label>
+    </div>
+    <div class="field-form-row">
+      <label>How did you connect? *<input id="crm-mo-how" type="text" placeholder="e.g. Phone call, text message"></label>
+    </div>`;
+  const fields = [...crmFields].sort((a, b) =>
+    (a.sub_field ? `${a.name} – ${a.sub_field}` : a.name).localeCompare(b.sub_field ? `${b.name} – ${b.sub_field}` : b.name));
+  document.getElementById('crm-mo-field').innerHTML =
+    '<option value="">— Keep current —</option>' +
+    fields.map(f => `<option value="${String(f.id)}">${uiEsc(f.sub_field ? `${f.name} – ${f.sub_field}` : f.name)}</option>`).join('');
+
+  document.getElementById('crm-footer').innerHTML = `
+    <button id="crm-cancel-btn" class="btn btn-secondary" type="button">Cancel</button>
+    <button id="crm-mo-submit-btn" class="btn btn-primary" type="button">Record &amp; Apply Change</button>`;
+  document.getElementById('crm-cancel-btn').addEventListener('click', closeChangeModal);
+  document.getElementById('crm-mo-submit-btn').addEventListener('click', submitCrmManualOverride);
+}
+
+async function submitCrmManualOverride() {
+  crmErr(null);
+  const who = document.getElementById('crm-mo-who').value.trim();
+  const how = document.getElementById('crm-mo-how').value.trim();
+  const date = document.getElementById('crm-mo-date').value;
+  const time = document.getElementById('crm-mo-time').value.trim();
+  if (!who || !how || !date || !time) { crmErr('Date, time, who, and how are all required.'); return; }
+  const body = {
+    team_id: crmTeamId, date, time,
+    field_id: document.getElementById('crm-mo-field').value || null,
+    who_spoke_to: who, how_connected: how,
+  };
+  try {
+    const res = await fetch(`api/change-requests/${crmGame.game_id}/manual-override`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { crmErr(data.error || 'Could not apply change.'); return; }
+    closeChangeModal();
+    toast('Change recorded.', 'good');
+    if (crmRefresh) crmRefresh();
+  } catch { crmErr('Network error. Try again.'); }
+}
+
 // ── Game confirmation status ─────────────────────────────────────────────────
 // Scheduled -> Pending (one side confirmed) -> Confirmed (both), independent
 // of Negotiating (an active change request in progress — unrelated concept,

@@ -57,48 +57,6 @@
 
     <h3 class="section-gap">Upcoming Games</h3>
     <div id="games-list"></div>
-
-    <div id="cr-form" class="field-editor-form hidden">
-      <div class="field-form-inner">
-        <h3 id="cr-form-title">Request Change</h3>
-        <div id="cr-normal-form">
-          <div class="field-form-row">
-            <label style="flex:1">Why does this need to change?<input id="cr-reason" type="text" placeholder="e.g. Field conflict with another team"></label>
-          </div>
-          <p class="field-form-hint" style="margin:10px 0">Pick a time that works for you. These are the only times that fit both teams' availability and field openings:</p>
-          <div id="cr-slots"></div>
-          <div class="field-form-row" id="cr-time-row" style="display:none">
-            <label>Kickoff time <span class="field-form-hint">(you and the other coach can fine-tune this)</span>
-              <select id="cr-time"></select></label>
-          </div>
-          <div class="field-form-actions">
-            <button id="cr-cancel" class="btn btn-secondary">Cancel</button>
-            <button id="cr-submit" class="btn btn-primary">Send Request</button>
-          </div>
-        </div>
-        <div id="cr-lockout-form" class="hidden">
-          <p class="field-form-hint">This game is less than 7 days away, so it's too late for the normal request/approve flow. Call or text the other coach directly at <strong id="cr-other-phone"></strong> to work it out, then record it here.</p>
-          <div class="field-form-row">
-            <label>New Date *<input id="cr-mo-date" type="date"></label>
-            <label>New Time *<input id="cr-mo-time" type="text" placeholder="e.g. 18:30"></label>
-          </div>
-          <div class="field-form-row">
-            <label>Field<select id="cr-mo-field"><option value="">— Keep current —</option></select></label>
-          </div>
-          <div class="field-form-row">
-            <label>Who did you speak with? *<input id="cr-mo-who" type="text" placeholder="e.g. Coach Smith"></label>
-          </div>
-          <div class="field-form-row">
-            <label>How did you connect? *<input id="cr-mo-how" type="text" placeholder="e.g. Phone call, text message"></label>
-          </div>
-          <div class="field-form-actions">
-            <button id="cr-mo-cancel" class="btn btn-secondary">Cancel</button>
-            <button id="cr-mo-submit" class="btn btn-primary">Record &amp; Apply Change</button>
-          </div>
-        </div>
-        <div id="cr-error" class="field-form-error hidden"></div>
-      </div>
-    </div>
   </div>
 
   <script src="availability-editor.js"></script>

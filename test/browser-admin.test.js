@@ -203,7 +203,7 @@ async function verifyPage(page, email, srv) {
     if (await reqBtn.count()) {
       await reqBtn.click();
       await cp.waitForTimeout(500);
-      const formOpened = await cp.locator('#cr-form:not(.hidden)').count();
+      const formOpened = await cp.locator('#crm-overlay:not(.hidden)').count();
       formOpened > 0
         ? ok('Request Change opens the form without crashing')
         : bad('Request Change form did not open', '');
@@ -249,7 +249,7 @@ async function verifyPage(page, email, srv) {
         landedUrl.includes('/my-team') && landedUrl.includes(`game_id=${myOwnGame.game_id}`)
           ? ok('redirect carries the specific game id', landedUrl)
           : bad('redirect lost the game context', landedUrl);
-        const formOpen = await cp.locator('#cr-form:not(.hidden)').count();
+        const formOpen = await cp.locator('#crm-overlay:not(.hidden)').count();
         formOpen > 0
           ? ok('landing on my-team opens that exact game\'s change form')
           : bad('my-team did not auto-open the change form from the deep link', '');
@@ -288,7 +288,7 @@ async function verifyPage(page, email, srv) {
         landedUrl.includes('/director') && landedUrl.includes(`game_id=${dirOwnGame.game_id}`) && landedUrl.includes('team_id=')
           ? ok('director redirect carries game id + resolved team id', landedUrl)
           : bad('director redirect missing context', landedUrl);
-        const formOpen = await dp.locator('#cr-form:not(.hidden)').count();
+        const formOpen = await dp.locator('#crm-overlay:not(.hidden)').count();
         formOpen > 0
           ? ok('landing on director opens that exact game\'s change form')
           : bad('director page did not auto-open the change form from the deep link', '');

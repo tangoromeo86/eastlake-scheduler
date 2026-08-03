@@ -478,7 +478,7 @@ async function loginAs(page, email, password) {
       .toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
     fs.writeFileSync(path.join(ROOT, 'schedule.json'), JSON.stringify({
       games: [{
-        game_id: 'g1', date: seasonStart, day: 'Monday', time: '18:30',
+        game_id: 1, date: seasonStart, day: 'Monday', time: '18:30',
         division_id: 'div-1', field_id: 'field-1', field_name: 'Main Park',
         home_team_id: 'team-1', home_team_name: 'Wildcats',
         away_team_id: 'team-2', away_team_name: 'Rockets', status: 'scheduled',
@@ -507,6 +507,99 @@ async function loginAs(page, email, password) {
     verr.length === 0
       ? ok('no JS errors on the calendar view')
       : bad('JS errors on calendar view', verr.slice(0, 2).join(' | '));
+
+    // ── Request Change modal ─────────────────────────────────────────────────
+    // Was a static form bolted below the games list, with no game context
+    // inside it and a free-text "why" as the only question. Now a real modal
+    // that names the game up top, and asks a structured "time or day?"
+    // question instead. Reuses g1 (team-1 vs team-2, far enough out not to be
+    // locked) from the calendar test just above.
+    const rctx = await browser.newContext();
+    const rpage = await rctx.newPage();
+    const rerr = [];
+    rpage.on('pageerror', e => rerr.push(e.message));
+    await loginAs(rpage, 'dana@example.com');
+    // Submitting a change request needs a verified session (403 otherwise) —
+    // same code-endpoint shortcut as the earlier verification check, since
+    // there's no live inbox in this environment.
+    await rpage.evaluate(async () => {
+      await fetch('api/auth/request-verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    });
+    await rpage.waitForTimeout(200);
+    const rlog = srv.__log || '';
+    const rCodeLine = rlog.split('\n').reverse().find(l => l.includes('DEBUG_LOGIN_CODE:dana@example.com:'));
+    const rCode = rCodeLine ? rCodeLine.split(':').pop().trim() : null;
+    await rpage.evaluate(async c => {
+      await fetch('api/auth/verify-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: c }) });
+    }, rCode);
+    await rpage.goto(`${BASE}/director`, { waitUntil: 'networkidle' });
+    await rpage.waitForTimeout(400);
+    await rpage.click('button:has-text("Request Change")');
+    await rpage.waitForTimeout(300);
+
+    (await rpage.locator('#crm-overlay:not(.hidden)').count()) > 0
+      ? ok('Request Change opens a real modal, not a scroll-to form')
+      : bad('modal did not open', '');
+    const subtitle = await rpage.locator('#crm-subtitle').textContent().catch(() => '');
+    subtitle && subtitle.includes('Rockets')
+      ? ok('the modal names the specific game, not just a bare title', subtitle.trim())
+      : bad('modal has no game context in it', subtitle);
+    await rpage.locator('#crm-choice-time').waitFor({ timeout: 5000 }).catch(() => {});
+    (await rpage.locator('#crm-choice-time, #crm-choice-day').count()) === 2
+      ? ok('leads with the structured time/day question, not a free-text reason')
+      : bad('structured question did not render', '');
+
+    // "Just the time" — same day, time chips only.
+    await rpage.click('#crm-choice-time');
+    await rpage.waitForTimeout(300);
+    const timeChips = await rpage.locator('input[name="crm-time"]').count();
+    timeChips > 0
+      ? ok('"Just the time" offers same-day time chips', `${timeChips} options`)
+      : bad('no time chips rendered for the same-day path', '');
+    // The currently-scheduled time itself shouldn't be offered as a "new" time.
+    const offeredCurrentTime = await rpage.locator('input[name="crm-time"][value="18:30"]').count();
+    offeredCurrentTime === 0
+      ? ok('the game\'s current time is excluded from its own re-time options')
+      : bad('current time was offered as a "change" for a same-day request', '');
+    await rpage.click('#crm-back-btn');
+    await rpage.waitForTimeout(200);
+    (await rpage.locator('#crm-choice-time').count()) > 0
+      ? ok('Back returns to the type question')
+      : bad('Back did not return to the type step', '');
+
+    // "The day" — a day list first, then the same time step for that day.
+    await rpage.click('#crm-choice-day');
+    await rpage.waitForTimeout(300);
+    const dayOptions = await rpage.locator('input[name="crm-day"]').count();
+    if (dayOptions > 0) {
+      await rpage.locator('input[name="crm-day"]').first().check();
+      await rpage.click('#crm-next-btn');
+      await rpage.waitForTimeout(300);
+      const dayTimeChips = await rpage.locator('input[name="crm-time"]').count();
+      dayTimeChips > 0
+        ? ok('picking a day leads into the same time-picker', `${dayTimeChips} options`)
+        : bad('no time options after picking a different day', '');
+
+      // The radio itself is visually hidden (styled as a chip via its label),
+      // so click the label rather than checking the input directly.
+      await rpage.locator('.crm-time-chip').first().click();
+      await rpage.fill('#crm-note', 'Field conflict with another team');
+      await rpage.click('#crm-submit-btn');
+      await rpage.waitForTimeout(500);
+
+      (await rpage.locator('#crm-overlay:not(.hidden)').count()) === 0
+        ? ok('submitting closes the modal')
+        : bad('modal stayed open after a successful submit', '');
+      const crList = JSON.parse(fs.readFileSync(path.join(ROOT, 'change_requests.json'), 'utf8'));
+      const cr = crList.find(c => c.game_id === 1 && c.reason === 'Field conflict with another team');
+      cr ? ok('the request was actually recorded, not just the UI closing', cr.id)
+         : bad('no matching change request found on disk', JSON.stringify(crList));
+    } else {
+      ok('only one viable day in this 8-week fixture — day path present but not exercised further (not a failure)');
+    }
+    rerr.length === 0
+      ? ok('no JS errors in the Request Change modal')
+      : bad('JS errors in the Request Change modal', rerr.slice(0, 2).join(' | '));
 
     // ── Mobile layout ────────────────────────────────────────────────────────
     // The specific failure this guards against: a wide table pushing the whole

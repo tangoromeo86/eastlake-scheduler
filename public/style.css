@@ -1433,6 +1433,16 @@ input.has-error:focus, select.has-error:focus {
 }
 .cr-slot:has(input:focus-visible) { box-shadow: var(--focus); }
 
+/* Request Change modal's time-picker — same selected-state mechanism as
+   .cr-slot, but as a wrapping grid of compact chips instead of full-width
+   rows (a season's worth of half-hour slots reads better as a grid). */
+.crm-time-grid { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.crm-time-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin: 0; padding: 9px 16px; min-width: 72px; text-align: center;
+}
+.crm-time-chip input[type="radio"] { display: none; }
+
 .team-card-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .team-card-table th, .team-card-table td {
   padding: 7px 10px;
