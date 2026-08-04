@@ -462,7 +462,7 @@ function renderAdminProgramView() {
   const byDate = new Map();
   for (const g of games) { if (!byDate.has(g.date)) byDate.set(g.date, []); byDate.get(g.date).push(g); }
 
-  const utilHtml = `<p class="field-utilization"><strong>${esc(name)}</strong> — <strong>${games.length}</strong> game${games.length !== 1 ? 's' : ''} across <strong>${byDate.size}</strong> date${byDate.size !== 1 ? 's' : ''} <button onclick="adminExportProgramCSV('${programId}')" style="margin-left:8px;font-size:11px;padding:2px 8px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;color:#475569">↓ CSV</button></p>`;
+  const utilHtml = `<p class="field-utilization"><strong>${esc(name)}</strong> — <strong>${games.length}</strong> game${games.length !== 1 ? 's' : ''} across <strong>${byDate.size}</strong> date${byDate.size !== 1 ? 's' : ''} <button onclick="adminExportProgramCSV(${escAttr(programId)})" style="margin-left:8px;font-size:11px;padding:2px 8px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;color:#475569">↓ CSV</button></p>`;
 
   const groups = [...byDate.entries()].map(([date, dateGames]) => {
     const isSat = dateGames[0].day === 'Saturday';
@@ -2379,7 +2379,7 @@ function renderFieldsPage() {
         <td><span class="pill ${avail.restricted ? 'pill-wait' : 'pill-good'}">${esc(avail.text)}</span></td>
         <td><div class="row-actions">
           <button class="btn btn-secondary btn-sm" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
-          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteField('${String(f.id)}','${esc(fieldDisplayName(f))}')">Delete</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteField(${escAttr(f.id)},${escAttr(fieldDisplayName(f))})">Delete</button>
         </div></td>
       </tr>`;
     }).join('')}
@@ -2505,7 +2505,7 @@ function renderProgramsList() {
         <td>${dirCount[p.id] ? `<span class="field-used-badge">${dirCount[p.id]} director${dirCount[p.id] !== 1 ? 's' : ''}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
         <td><div class="row-actions">
           <button class="btn btn-secondary btn-sm" onclick="openProgramEdit('${String(p.id)}')">Edit</button>
-          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteProgram('${String(p.id)}','${esc(p.name)}')">Delete</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteProgram(${escAttr(p.id)},${escAttr(p.name)})">Delete</button>
         </div></td>
       </tr>`).join('')}
     </tbody>
@@ -2598,7 +2598,7 @@ function renderDirectorsList() {
         <td>${d.active === false ? '<span style="color:#dc2626">Inactive</span>' : '<span style="color:#16a34a">Active</span>'}</td>
         <td><div class="row-actions">
           <button class="btn btn-secondary btn-sm" onclick="openDirectorEdit('${String(d.id)}')">Edit</button>
-          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteDirector('${String(d.id)}','${esc(d.name)}')">Delete</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteDirector(${escAttr(d.id)},${escAttr(d.name)})">Delete</button>
         </div></td>
       </tr>`).join('')}
     </tbody>
@@ -2919,8 +2919,8 @@ function renderDivisionsList(divisions) {
         <td>${d.game_length_minutes ? d.game_length_minutes + ' min' : '60 min (default)'}</td>
         <td>${n || '—'}</td>
         <td><div class="row-actions">
-          <button class="btn btn-secondary btn-sm" onclick="openDivisionEdit('${esc(d.id)}','${esc(d.name)}',${d.target_games || 0},${d.game_length_minutes || 0})">Edit</button>
-          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteDivision('${esc(d.id)}')">Delete</button>
+          <button class="btn btn-secondary btn-sm" onclick="openDivisionEdit(${escAttr(d.id)},${escAttr(d.name)},${d.target_games || 0},${d.game_length_minutes || 0})">Edit</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteDivision(${escAttr(d.id)})">Delete</button>
         </div></td></tr>`;
     }).join('')}</tbody></table></div>`;
 }
@@ -3024,7 +3024,7 @@ async function renderBackupsPage() {
       <td>${s.kind === 'manual' ? '<span class="confirmed-badge">Manual</span>' : '<span style="color:#94a3b8">Auto</span>'}</td>
       <td style="font-size:12px;color:#64748b">${s.summary.teams} teams · ${s.summary.games} games · ${s.summary.programs} programs${s.summary.open_requests ? ` · ${s.summary.open_requests} open request(s)` : ''}</td>
       <td><div class="row-actions">
-        <button class="btn btn-secondary btn-sm" onclick="restoreSnapshot('${s.id}','${esc(s.label)}')">Restore</button>
+        <button class="btn btn-secondary btn-sm" onclick="restoreSnapshot(${escAttr(s.id)},${escAttr(s.label)})">Restore</button>
         <button class="btn btn-secondary btn-sm danger-text" onclick="deleteSnapshot('${s.id}')">Delete</button>
       </div></td></tr>`).join('')}</tbody></table></div>`;
 }

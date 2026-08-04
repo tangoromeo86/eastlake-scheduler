@@ -10,9 +10,13 @@ const { scheduleAll, validateGameEdit, dayName, teamName,
         resolveTeamAvailability, resolveFieldAvailability, nearestSaturdaySlot,
         SATURDAY_SLOTS, SATURDAY_SLOT_TIMES, WEEKDAY_TIME, TIME_BOUNDS, isValidGameTime, allowedTimes,
         buildSeasonWeeks, weekdayStartTimeForField, allowedWeekdayTimesForField,
-        isExemptBackToBack, MAX_GAMES_PER_WEEK } = require('./lib/scheduler');
+        isExemptBackToBack, MAX_GAMES_PER_WEEK, DEFAULT_GAME_LENGTH_MINUTES, toMinutes } = require('./lib/scheduler');
 
 const app = express();
+// Deployed behind nginx — without this, req.ip is always nginx's own address,
+// which would turn the per-IP rate limits below into one shared global limit
+// for every real visitor instead of one per actual client.
+app.set('trust proxy', true);
 const PORT = process.env.PORT || 3010;
 const BASE_PATH = process.env.BASE_PATH || '';
 
@@ -25,8 +29,17 @@ const CHANGE_REQUESTS_FILE = path.join(__dirname, 'change_requests.json');
 const ADMIN_EMAIL    = (process.env.ADMIN_EMAIL    || '').toLowerCase().trim();
 const ADMIN_PASSWORD =  process.env.ADMIN_PASSWORD || 'changeme';
 const SESSION_SECRET =  process.env.SESSION_SECRET || 'eastlake-dev-secret';
+// These two fallbacks are public (they're sitting right here in source) — if
+// either env var is ever left unset, anyone could forge a valid signed admin
+// session or just log in outright. Refuse to boot rather than silently run
+// wide open; every real deploy (dev droplet, tests) already sets both.
+if (process.env.ADMIN_PASSWORD === undefined || process.env.SESSION_SECRET === undefined) {
+  console.error('FATAL: ADMIN_PASSWORD and SESSION_SECRET must both be set via environment — refusing to start with an insecure built-in fallback.');
+  process.exit(1);
+}
 const SESSION_COOKIE = 'el_sess';
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days in seconds
+const IS_HTTPS = process.env.FORCE_HTTPS_COOKIE === '1' || process.env.NODE_ENV === 'production';
 
 // ── Email config ──────────────────────────────────────────────────────────────
 const RESEND_API_KEY  = process.env.RESEND_API_KEY  || '';
@@ -50,6 +63,36 @@ async function sendEmail({ to, subject, text, html }) {
   }
 }
 
+// Plain `===` on a secret leaks its comparison time byte-by-byte in theory —
+// impractical to actually exploit over a network at this app's traffic, but
+// crypto.timingSafeEqual costs nothing and removes the question entirely.
+// Needs equal-length buffers, so a length mismatch is checked (and rejected)
+// first rather than passed through to timingSafeEqual, which throws on it.
+function secureEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+// ── Simple in-memory rate limiting for auth endpoints ─────────────────────────
+// No external store — this runs as a single process, and a restart clearing
+// counters is an acceptable tradeoff for a small league tool. Protects the
+// admin password from brute force (login) and a coach/director's inbox from
+// being mail-bombed by anyone who knows their email (request-verify) — both
+// reachable without any prior authentication.
+const rateLimitHits = new Map(); // key -> [timestamps]
+function rateLimited(key, maxHits, windowMs) {
+  const now = Date.now();
+  const hits = (rateLimitHits.get(key) || []).filter(t => now - t < windowMs);
+  hits.push(now);
+  rateLimitHits.set(key, hits);
+  if (rateLimitHits.size > 5000) {
+    for (const [k, v] of rateLimitHits) if (!v.length || now - v[v.length - 1] > 60 * 60 * 1000) rateLimitHits.delete(k);
+  }
+  return hits.length > maxHits;
+}
+
 // ── Cookie & session helpers ──────────────────────────────────────────────────
 function getCookie(req, name) {
   return (req.headers.cookie || '').split(';')
@@ -70,7 +113,7 @@ function parseSession(token) {
   const data = token.slice(0, dot);
   const sig  = token.slice(dot + 1);
   const expected = crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
-  if (sig !== expected) return null;
+  if (!secureEqual(sig, expected)) return null;
   try {
     const p = JSON.parse(Buffer.from(data, 'base64url').toString());
     if (p.exp < Date.now()) return null;
@@ -85,11 +128,11 @@ function getSession(req) {
 function setSession(res, payload) {
   const token = signSession({ ...payload, exp: Date.now() + SESSION_MAX_AGE * 1000 });
   res.setHeader('Set-Cookie',
-    `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${SESSION_MAX_AGE}; SameSite=Lax`);
+    `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${SESSION_MAX_AGE}; SameSite=Lax${IS_HTTPS ? '; Secure' : ''}`);
 }
 
 function clearSession(res) {
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0`);
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0${IS_HTTPS ? '; Secure' : ''}`);
 }
 
 // ── Magic-link verification tokens (in-memory, short-lived) ──────────────────
@@ -473,24 +516,26 @@ function loginPage(next) {
 // ── Page routes ───────────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'viewer.html')));
 
-app.get('/admin', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+// admin.html, director.html, and my-team.html are served from views/, not
+// public/ — express.static below only serves the public/ directory, so none
+// of these have a static path a role could guess/bypass their way into.
+// requireAdmin/requireDirector/requireAuth below are the real gate; the
+// separate directory means there's no static fallback that could ever bypass
+// them (same reasoning as admin-guide.html, which started this pattern).
+app.get('/admin', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'views', 'admin.html')));
 app.get('/admin/', (req, res) => res.redirect((BASE_PATH || '') + '/admin'));
 
-app.get('/director', requireDirector, (req, res) => res.sendFile(path.join(__dirname, 'public', 'director.html')));
+app.get('/director', requireDirector, (req, res) => res.sendFile(path.join(__dirname, 'views', 'director.html')));
 app.get('/director/', (req, res) => res.redirect((BASE_PATH || '') + '/director'));
 
 app.get('/guide', (req, res) => res.sendFile(path.join(__dirname, 'public', 'guide.html')));
 
-// Served from views/, not public/ — express.static below only serves the
-// public/ directory, so this file has no path a director or coach could guess
-// their way into. requireAdmin is the real gate; the separate directory means
-// there's no static fallback that could ever bypass it.
 app.get('/admin-guide', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'views', 'admin-guide.html')));
 
 app.get('/my-team', requireAuth, (req, res) => {
   const s = getSession(req);
   if (s.role !== 'coach') return res.redirect(BASE_PATH + '/');
-  res.sendFile(path.join(__dirname, 'public', 'my-team.html'));
+  res.sendFile(path.join(__dirname, 'views', 'my-team.html'));
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -525,8 +570,12 @@ app.post('/api/auth/login', (req, res) => {
   const next     =  req.body.next     || req.query.next || '';
   if (!email) return res.status(400).json({ error: 'Email required' });
 
+  if (rateLimited(`login:${req.ip}`, 10, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many login attempts from this connection. Try again in a few minutes.' });
+  }
+
   if (ADMIN_EMAIL && email === ADMIN_EMAIL) {
-    if (password !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Incorrect password' });
+    if (!secureEqual(password, ADMIN_PASSWORD)) return res.status(401).json({ error: 'Incorrect password' });
     // Password already proves identity — no separate verify step needed.
     setSession(res, { email, role: 'admin', name: 'Admin', verified: true });
     return res.json({ ok: true, redirect: BASE_PATH + (next === 'admin' ? '/admin' : '/') });
@@ -544,6 +593,9 @@ app.post('/api/auth/login', (req, res) => {
 app.post('/api/auth/request-verify', requireAuth, async (req, res) => {
   const s = getSession(req);
   if (s.verified) return res.json({ ok: true, alreadyVerified: true });
+  if (rateLimited(`verify:${s.email}`, 5, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many verification emails requested for this address. Try again in a few minutes.' });
+  }
   const { token, code } = createVerifyToken(s.email);
   const next = (req.body && req.body.next) || '';
   const verifyUrl = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/auth/verify?token=${token}${next ? `&next=${encodeURIComponent(next)}` : ''}`;
@@ -686,6 +738,8 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
   const fields = seasonData.fields || [];
   const season = seasonData.season || {};
   const gameLengthMinutes = (seasonData.divisions || []).find(d => d.id === game.division_id)?.game_length_minutes;
+  const divisionLengths = new Map((seasonData.divisions || []).map(d => [d.id, d.game_length_minutes]));
+  const gameLengthFor = g => divisionLengths.get(g.division_id) || DEFAULT_GAME_LENGTH_MINUTES;
 
   const home_team_id = homeTeamId !== undefined ? homeTeamId : game.home_team_id;
   const away_team_id = awayTeamId !== undefined ? awayTeamId : game.away_team_id;
@@ -778,9 +832,25 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
         if (homeFieldObj && !resolveFieldAvailability(homeFieldObj, date, type, slotKey)) continue;
       }
 
-      // The home field can host other games that day now (different slots), so
-      // only a clash at this exact time rules the slot out.
-      if (homeFieldId && otherGames.some(g => g.field_id === homeFieldId && g.date === date && g.time === time)) continue;
+      // The home field can host other games that day now (different slots) —
+      // but "different slot" has to mean real non-overlapping time ranges,
+      // not just a different time *string*. Divisions can have different
+      // game lengths and independently sunset-adjusted weekday kickoffs, so
+      // two games can show different times and still physically overlap on
+      // the same field (e.g. an 80-min game at 17:45 running to 19:05
+      // against a 50-min game starting 18:00) — checked as real intervals so
+      // that case is actually caught instead of quietly offering it.
+      if (homeFieldId) {
+        const candStart = toMinutes(time);
+        const candEnd = candStart + (gameLengthMinutes || DEFAULT_GAME_LENGTH_MINUTES);
+        const clash = otherGames.some(g => {
+          if (g.field_id !== homeFieldId || g.date !== date || !g.time) return false;
+          const gStart = toMinutes(g.time);
+          const gEnd = gStart + gameLengthFor(g);
+          return candStart < gEnd && gStart < candEnd;
+        });
+        if (clash) continue;
+      }
 
       const fieldGames = homeFieldId
         ? otherGames.filter(g => g.field_id === homeFieldId && g.date === date)
@@ -798,7 +868,7 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
   return { slots: slotsOut, home_field_name: homeFieldName };
 }
 
-app.get('/api/game/:id/suggest-dates', requireDirector, (req, res) => {
+app.get('/api/game/:id/suggest-dates', requireDirector, requireVerified, (req, res) => {
   const s = getSession(req);
   const gameId = parseInt(req.params.id, 10);
 
@@ -929,7 +999,7 @@ app.post('/api/upload-season', requireAdmin, (req, res) => {
 // coaches" (coaches stay entirely on the negotiated Request Change/Rain Out
 // path, which hard-enforces every rule with no force option). Scoped below
 // to games touching at least one of the director's own program's teams.
-app.post('/api/game', requireDirector, (req, res) => {
+app.post('/api/game', requireDirector, requireVerified, (req, res) => {
   const s = getSession(req);
   const { division_id, date, time, field_id, home_team_id, away_team_id, force } = req.body;
   if (!division_id || !date || !time || !field_id || home_team_id == null || away_team_id == null)
@@ -956,7 +1026,7 @@ app.post('/api/game', requireDirector, (req, res) => {
   const gameId = Math.max(0, ...schedData.games.map(g => g.game_id || 0)) + 1;
 
   const gameForValidation = { id: gameId, date, time, field_id: field_id_p, home_team_id: home_team_id_p, away_team_id: away_team_id_p, division_id, week: null };
-  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [] };
+  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [], _fields: seasonData.fields || [], _divisions: seasonData.divisions || [] };
   const violations = validateGameEdit(gameForValidation, schedData.games, seasonForValidation);
   if (violations.length && !force) return res.status(409).json({ violations });
 
@@ -1020,10 +1090,18 @@ app.post('/api/game', requireDirector, (req, res) => {
   res.json({ ok: true, game: newGame, violations, change: changeRecord });
 });
 
-app.put('/api/game/:id', requireDirector, (req, res) => {
+app.put('/api/game/:id', requireDirector, requireVerified, (req, res) => {
   const s = getSession(req);
   const gameId = parseInt(req.params.id, 10);
-  const { date, time, field_id, home_team_id, away_team_id, force } = req.body;
+  const { date, time, force } = req.body;
+  // Coerce the same way POST /api/game does — ids come from the client as
+  // whatever type its <select> produced, and a raw type mismatch here would
+  // silently fail every downstream .find(t => t.id === ...) lookup instead
+  // of erroring, since both branches already handle "no team object found".
+  const rawHome = req.body.home_team_id, rawAway = req.body.away_team_id, rawField = req.body.field_id;
+  const home_team_id = isNaN(parseInt(rawHome, 10)) ? rawHome : parseInt(rawHome, 10);
+  const away_team_id = isNaN(parseInt(rawAway, 10)) ? rawAway : parseInt(rawAway, 10);
+  const field_id = isNaN(parseInt(rawField, 10)) ? rawField : parseInt(rawField, 10);
 
   let schedData;
   try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
@@ -1055,7 +1133,7 @@ app.put('/api/game/:id', requireDirector, (req, res) => {
   };
 
   const editedGame = { id: gameId, date, time, field_id, home_team_id, away_team_id, division_id: existingGame.division_id, week: existingGame.week };
-  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [] };
+  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [], _fields: seasonData.fields || [], _divisions: seasonData.divisions || [] };
   const violations = validateGameEdit(editedGame, schedData.games, seasonForValidation);
   if (violations.length && !force) return res.status(409).json({ violations });
 
@@ -1157,7 +1235,7 @@ app.post('/api/game/:id/rainout', requireAdmin, (req, res) => {
     home_team_id: original.home_team_id, away_team_id: original.away_team_id,
     division_id: original.division_id, week: original.week,
   };
-  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [] };
+  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [], _fields: seasonData.fields || [], _divisions: seasonData.divisions || [] };
   const violations = validateGameEdit(editedGame, schedData.games, seasonForValidation);
   if (violations.length && !force) return res.status(409).json({ violations });
 
@@ -2331,7 +2409,11 @@ app.post('/api/notify-change', requireAdmin, async (req, res) => {
 // A director may only touch fields/teams in their own program; admin is unrestricted.
 function canManageProgram(session, programId) {
   if (session.role === 'admin') return true;
-  if (session.role === 'director') return !programId || programId === session.program_id;
+  // A falsy programId means a shared/admin-owned resource (e.g. a field with
+  // no program_id) — only admin manages those. A director only ever owns
+  // resources actually tagged with their own program_id, never "whoever gets
+  // there first" on an unassigned one.
+  if (session.role === 'director') return !!programId && programId === session.program_id;
   return false;
 }
 

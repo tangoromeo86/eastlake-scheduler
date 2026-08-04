@@ -7,6 +7,19 @@ function uiEsc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// For embedding a value as a JS-literal ARGUMENT inside an inline onclick="..."
+// attribute — e.g. onclick="deleteTeam(${escAttr(id)}, ${escAttr(name)})".
+// uiEsc()/esc() only escape &, <, > for HTML *text content*; a value that
+// still contains a raw quote (an apostrophe in "O'Brien", or a crafted name)
+// breaks out of the surrounding quotes and, once inside onclick, executes as
+// script. JSON.stringify produces a valid, fully-escaped JS string literal
+// (handles quotes, backslashes, newlines); replacing its outer double quotes
+// with &quot; then makes that literal safe to sit inside the double-quoted
+// HTML attribute itself. Two independent layers, both needed.
+function escAttr(v) {
+  return JSON.stringify(v == null ? '' : v).replace(/"/g, '&quot;');
+}
+
 // "2026-09-05" -> "09-05-2026" — American date order, zero-padded. The ISO
 // pieces are already zero-padded, so a straight reorder is all this needs.
 function formatDateUS(dateStr) {

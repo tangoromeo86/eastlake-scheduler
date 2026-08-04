@@ -479,6 +479,145 @@ avgSpread <= spreadLimit
     : bad('scheduled kickoff disagrees with the standalone calculation', JSON.stringify(mismatched.slice(0, 3)));
 }
 
+// ── validateGameEdit: same-day double-booking + field host-availability ──────
+// Same 2026-08-04 review: validateGameEdit (the manual-edit soft-violation
+// check shared by admin and director editors) is supposed to enforce exactly
+// what the auto-scheduler enforces, so a manual edit can never be MORE
+// permissive except via explicit "Save Anyway" (force). Two gaps found —
+// neither had any test coverage before this: (1) the team-conflict check
+// only flagged a SECOND game for a team on the same date if the TIME also
+// matched exactly, so a director could put a team in two games on one day
+// as long as the times differed, with zero warning; (2) there was no field
+// host-availability check at all, so a field marked closed for a day/slot
+// could be silently saved onto, again with zero warning.
+{
+  const { validateGameEdit } = require('../lib/scheduler');
+  const vgeSeason = {
+    start: '2026-10-19', weeks: 2, target_games: 4, blackout_dates: [],
+    _teams: [
+      { id: 'vge-home', label: 'Home', availability: {} },
+      { id: 'vge-away', label: 'Away', availability: {} },
+      { id: 'vge-other', label: 'Other', availability: {} },
+    ],
+    _fields: [
+      { id: 'vge-field-open', name: 'Open Field', availability: { weekday: {}, saturday: {}, dates: {} } },
+      { id: 'vge-field-closed', name: 'Closed Field',
+        availability: { weekday: { Monday: false }, saturday: {}, dates: {} } },
+    ],
+    _divisions: [{ id: 'vge-div', game_length_minutes: 60 }],
+  };
+  const EXISTING_DATE = '2026-10-19'; // a Monday in this season
+
+  // (1) Same-day double-booking at a DIFFERENT time — must be flagged.
+  const existingGames = [{
+    game_id: 1, division_id: 'vge-div', date: EXISTING_DATE, time: '17:00',
+    field_id: 'vge-field-open', home_team_id: 'vge-home', away_team_id: 'vge-other', week: 1,
+  }];
+  const sameDayDifferentTime = {
+    id: 2, division_id: 'vge-div', date: EXISTING_DATE, time: '18:30',
+    field_id: 'vge-field-open', home_team_id: 'vge-home', away_team_id: 'vge-away',
+  };
+  const v1 = validateGameEdit(sameDayDifferentTime, existingGames, vgeSeason);
+  v1.some(v => /already has a game on/.test(v))
+    ? ok('validateGameEdit flags a team double-booked on the same date even at a different time')
+    : bad('a same-day, different-time double-booking was not flagged', JSON.stringify(v1));
+
+  // (2) Field closed for that weekday — must be flagged.
+  const onClosedField = {
+    id: 3, division_id: 'vge-div', date: EXISTING_DATE, time: '18:30',
+    field_id: 'vge-field-closed', home_team_id: 'vge-home', away_team_id: 'vge-away',
+  };
+  const v2 = validateGameEdit(onClosedField, [], vgeSeason);
+  v2.some(v => /not open to host/.test(v))
+    ? ok('validateGameEdit flags a game saved onto a field closed for that day')
+    : bad('a game on a closed field was not flagged', JSON.stringify(v2));
+
+  // (3) Field interval overlap across two DIFFERENT-length games — must be
+  // flagged even though the time strings differ (the field.js fix above).
+  const longExisting = [{
+    game_id: 4, division_id: 'vge-div-long', date: EXISTING_DATE, time: '17:45',
+    field_id: 'vge-field-open', home_team_id: 'vge-other', away_team_id: 'vge-other', week: 1,
+  }];
+  const vgeSeasonTwoLengths = { ...vgeSeason, _divisions: [
+    { id: 'vge-div', game_length_minutes: 50 },
+    { id: 'vge-div-long', game_length_minutes: 80 },
+  ] };
+  const overlappingShortGame = {
+    id: 5, division_id: 'vge-div', date: EXISTING_DATE, time: '18:15', // 18:15-19:05 overlaps 17:45-19:05
+    field_id: 'vge-field-open', home_team_id: 'vge-home', away_team_id: 'vge-away',
+  };
+  const v3 = validateGameEdit(overlappingShortGame, longExisting, vgeSeasonTwoLengths);
+  v3.some(v => /already booked/.test(v))
+    ? ok('validateGameEdit flags a field-interval overlap across two different-length games')
+    : bad('an interval overlap across differently-sized games was not flagged', JSON.stringify(v3));
+}
+
+// ── Field-interval overlap across divisions of different game lengths ────────
+// Found in a 2026-08-04 codebase review, not by a user report: fieldUsage
+// used to key on an exact "field_date_time" string. Two divisions sharing a
+// field on a weekday can each get pulled to a *different* sunset-adjusted
+// kickoff (weekdayStartTimeForField depends on the division's own game
+// length), so their time strings never match as strings even when the
+// actual games physically overlap — e.g. an 80-min game pulled to 17:45
+// (ends 19:05) and a 50-min game pulled to 18:15 (ends 19:05) on the same
+// field/date, fully overlapping. The exact-string check would have let both
+// through. Forces two divisions of different lengths onto the SAME single
+// available field+date (one weekday date open, everything else closed) so
+// this is guaranteed to be tested, not left to scheduling-order luck.
+{
+  const LAT = 41.578, LNG = -81.209;
+  const ONLY_DATE = '2026-10-19'; // dusk ~19:06 here — see the sunset fixture above for the same date/coords
+  const closedExceptOneDate = {
+    weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' },
+               Thursday: { status: 'none' }, Friday: { status: 'none' } },
+    saturday: { early: 'none', midday: 'none', late: 'none' },
+    dates: { [ONLY_DATE]: { status: 'both' } },
+  };
+  const overlapSeason = {
+    season: { start: '2026-10-19', weeks: 2, target_games: 1, weekday_time: '18:30', blackout_dates: [] },
+    divisions: [
+      { id: 'div-ovl-long', name: 'Overlap Long', target_games: 1, game_length_minutes: 80 },
+      { id: 'div-ovl-short', name: 'Overlap Short', target_games: 1, game_length_minutes: 50 },
+    ],
+    programs: [{ id: 'prog-ovl', name: 'Overlap' }],
+    fields: [
+      { id: 'field-ovl-shared', name: 'Shared Field', program_id: 'prog-ovl', coordinates: `${LAT},${LNG}`,
+        availability: closedExceptOneDate },
+    ],
+    teams: [
+      { id: 'team-ovl-long-a', label: 'Long A', division_id: 'div-ovl-long', program_id: 'prog-ovl', home_field_id: 'field-ovl-shared', availability: closedExceptOneDate },
+      { id: 'team-ovl-long-b', label: 'Long B', division_id: 'div-ovl-long', program_id: 'prog-ovl', home_field_id: 'field-ovl-shared', availability: closedExceptOneDate },
+      { id: 'team-ovl-short-a', label: 'Short A', division_id: 'div-ovl-short', program_id: 'prog-ovl', home_field_id: 'field-ovl-shared', availability: closedExceptOneDate },
+      { id: 'team-ovl-short-b', label: 'Short B', division_id: 'div-ovl-short', program_id: 'prog-ovl', home_field_id: 'field-ovl-shared', availability: closedExceptOneDate },
+    ],
+  };
+
+  const divLenById = Object.fromEntries(overlapSeason.divisions.map(d => [d.id, d.game_length_minutes]));
+  const toMin = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+
+  let sawOverlap = false, sawBothPlaced = false, sawAnyPlaced = false;
+  for (let i = 0; i < RUNS; i++) {
+    const res = scheduleAll(overlapSeason);
+    const onSharedSlot = (res.games || []).filter(g => g.field_id === 'field-ovl-shared' && g.date === ONLY_DATE);
+    if (onSharedSlot.length > 0) sawAnyPlaced = true;
+    if (onSharedSlot.length >= 2) sawBothPlaced = true;
+    for (let a = 0; a < onSharedSlot.length; a++) {
+      for (let b = a + 1; b < onSharedSlot.length; b++) {
+        const gA = onSharedSlot[a], gB = onSharedSlot[b];
+        const aStart = toMin(gA.time), aEnd = aStart + divLenById[gA.division_id];
+        const bStart = toMin(gB.time), bEnd = bStart + divLenById[gB.division_id];
+        if (aStart < bEnd && bStart < aEnd) sawOverlap = true;
+      }
+    }
+  }
+  sawAnyPlaced
+    ? ok('the field-overlap fixture actually placed at least one game to check')
+    : bad('no games were placed at all — fixture is broken, nothing else in this block is meaningful', '');
+  !sawOverlap
+    ? ok('two divisions with different game lengths never get overlapping intervals on a shared field/date', `both-placed seen: ${sawBothPlaced}`)
+    : bad('two games with overlapping time ranges were both scheduled on the same field/date', 'interval-overlap check failed');
+}
+
 // ── Friday: real option, exempt from back-to-back with Saturday, 2/week cap ──
 // Ted, 2026-08-04: other programs wanted Friday as a schedulable weeknight.
 // It uses the same time bounds as any other weekday, but a Friday game does

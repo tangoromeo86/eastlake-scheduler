@@ -540,7 +540,7 @@ function renderTeamsList() {
         <td>${t.home_field_id ? esc(fieldName(t.home_field_id)) : '<span class="pill pill-wait">not set</span>'}</td>
         <td><div class="row-actions">
           <button class="btn btn-secondary btn-sm" onclick="openTeamEdit('${String(t.id)}')">Edit</button>
-          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteTeam('${String(t.id)}','${esc(teamLabel(t))}')">Delete</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteTeam(${escAttr(t.id)},${escAttr(teamLabel(t))})">Delete</button>
         </div></td>
       </tr>`).join('')}
     </tbody>
@@ -691,7 +691,7 @@ function renderFieldsList() {
         <td><span class="pill ${avail.restricted ? 'pill-wait' : 'pill-good'}">${esc(avail.text)}</span></td>
         <td><div class="row-actions">
           <button class="btn btn-secondary btn-sm" onclick="openFieldEdit('${String(f.id)}')">Edit</button>
-          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteField('${String(f.id)}','${esc(fieldDisplayName(f))}')">Delete</button>
+          <button class="btn btn-secondary btn-sm danger-text" onclick="deleteField(${escAttr(f.id)},${escAttr(fieldDisplayName(f))})">Delete</button>
         </div></td>
       </tr>`;
     }).join('')}

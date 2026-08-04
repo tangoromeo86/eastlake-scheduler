@@ -168,35 +168,6 @@ header h1 {
   background: #fff;
 }
 
-/* ── Filter row ──────────────────────────────────────────────────────────── */
-.filter-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 12px 0 8px;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-top: none;
-  border-bottom: none;
-  padding: 10px 16px;
-}
-
-.filter-row label {
-  font-weight: 500;
-  color: #475569;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.filter-row select {
-  padding: 5px 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 5px;
-  font-size: 13px;
-  background: #fff;
-}
-
 .game-count {
   margin-left: auto;
   font-size: 12px;
@@ -400,7 +371,6 @@ header h1 {
 
 .opp-name { font-weight: 500; color: #1a1a2e; }
 .field-small { color: #94a3b8; font-size: 11px; }
-.wk-num { color: #94a3b8; font-size: 11px; min-width: 28px; }
 
 /* ── Matrix view ─────────────────────────────────────────────────────────── */
 .matrix-scroll {
@@ -1106,7 +1076,6 @@ td.cal-day.av-mixed, .cal-legend-swatch.av-mixed                            { ba
 .fields-table tr:last-child td { border-bottom: none; }
 .fields-table tbody tr:hover { background: #f8fafc; }
 .field-subfield-badge { display: inline-block; font-size: 10px; background: #ede9fe; color: #6d28d9; border-radius: 3px; padding: 1px 6px; margin-left: 6px; font-weight: 600; }
-.field-row-actions { display: flex; gap: 6px; }
 .field-used-badge { font-size: 10px; color: #94a3b8; background: #f1f5f9; border-radius: 3px; padding: 1px 6px; }
 .map-link { font-size: 11px; color: #2563eb; text-decoration: none; margin-left: 6px; white-space: nowrap; }
 .map-link:hover { text-decoration: underline; }
@@ -1196,7 +1165,6 @@ td.cal-day.av-mixed, .cal-legend-swatch.av-mixed                            { ba
 
 /* Inline feedback, replacing alert() for anything that isn't destructive. */
 .notice { border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 10px; border: 1px solid transparent; }
-.notice-info { background: #eff6ff; border-color: #bfdbfe; color: #1e40af; }
 .notice-good { background: #dcfce7; border-color: #86efac; color: #166534; }
 .notice-warn { background: #fef3c7; border-color: #fcd34d; color: #92400e; }
 .notice-bad  { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
@@ -1246,7 +1214,6 @@ td.cal-day.av-mixed, .cal-legend-swatch.av-mixed                            { ba
 .av-group > summary::before { content: '▸ '; color: #94a3b8; }
 .av-group[open] > summary::before { content: '▾ '; }
 .av-group[open] > summary { border-bottom: 1px solid #e2e8f0; }
-.av-set { color: #2d6cf0; font-weight: 700; }
 
 @media (max-width: 720px) {
   header { flex-direction: column; align-items: flex-start; gap: 10px; }
@@ -1387,26 +1354,6 @@ input.has-error:focus, select.has-error:focus {
 }
 .fields-table tbody tr { transition: background-color .12s; }
 .fields-table tbody tr:hover { background: var(--surface-2); }
-
-/* Loading and empty states, so a slow fetch doesn't look like a broken page. */
-.is-loading {
-  color: var(--ink-4);
-  font-size: 13.5px;
-  padding: 22px;
-  text-align: center;
-}
-.is-loading::after {
-  content: "";
-  display: inline-block;
-  width: 13px; height: 13px;
-  margin-left: 8px;
-  vertical-align: -2px;
-  border: 2px solid var(--line-2);
-  border-top-color: var(--brand);
-  border-radius: 50%;
-  animation: spin .7s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
