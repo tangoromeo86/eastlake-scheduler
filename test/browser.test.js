@@ -789,6 +789,22 @@ async function loginAs(page, email, password) {
       ? ok('coach page renders the availability editor')
       : bad('coach availability editor missing', 'no #mte-availability');
 
+    // Ted's three small asks: the game id visible, an American MM-DD-YYYY
+    // date, and "vs X" / "@ X" instead of a separate Home/Away label. Casey
+    // coaches Wildcats (team-1), home in game #1 vs Rockets.
+    const [sy, sm, sd] = global.__seededSeasonStart.split('-');
+    const expectedUSDate = `${sm}-${sd}-${sy}`;
+    const firstCardText = await cpage.locator('#games-list .mg-card').first().innerText().catch(() => '');
+    firstCardText.includes('#1')
+      ? ok('game id is shown on the card')
+      : bad('game id missing from the card', firstCardText);
+    firstCardText.includes(expectedUSDate)
+      ? ok('date is formatted MM-DD-YYYY', expectedUSDate)
+      : bad('date is not in MM-DD-YYYY format', firstCardText);
+    firstCardText.includes('vs Rockets')
+      ? ok('home game reads "vs Rockets", not a separate Home/Away label')
+      : bad('home game does not use the vs/@ convention', firstCardText);
+
     // The mobile keyboard hints — the reason phone fields were changed to tel.
     const telType = await cpage.locator('#mte-phone').getAttribute('type').catch(() => null);
     telType === 'tel' ? ok('phone field requests the numeric keypad')

@@ -7,6 +7,13 @@ function uiEsc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// "2026-09-05" -> "09-05-2026" — American date order, zero-padded. The ISO
+// pieces are already zero-padded, so a straight reorder is all this needs.
+function formatDateUS(dateStr) {
+  const [y, m, d] = String(dateStr || '').split('-');
+  return (y && m && d) ? `${m}-${d}-${y}` : (dateStr || '');
+}
+
 // Transient confirmation. Non-blocking, unlike alert().
 function toast(message, kind) {
   let host = document.getElementById('toast-host');

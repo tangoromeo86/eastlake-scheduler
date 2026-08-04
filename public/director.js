@@ -169,10 +169,11 @@ function renderGamesList() {
   const rows = games.map(dirGameRowCtx);
 
   const table = `<div class="mg-table-wrap table-wrap"><table class="fields-table">
-    <thead><tr><th>Date</th><th>Home</th><th>Away</th><th>Status</th><th>Score</th><th></th></tr></thead>
+    <thead><tr><th>#</th><th>Date</th><th>Home</th><th>Away</th><th>Status</th><th>Score</th><th></th></tr></thead>
     <tbody>
     ${rows.map(ctx => `<tr>
-        <td>${esc(ctx.g.day)} ${esc(ctx.g.date)} ${esc(ctx.g.time)}</td>
+        <td>#${ctx.g.game_id}</td>
+        <td>${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</td>
         <td>${esc(ctx.g.home_team_name)}</td>
         <td>${esc(ctx.g.away_team_name)}</td>
         <td>${ctx.statusBadge}${liveStatusHtml(activeByGame[ctx.g.game_id])}</td>
@@ -185,7 +186,7 @@ function renderGamesList() {
   const cards = `<div class="mg-cards">
     ${rows.map(ctx => `<div class="mg-card">
         <div class="mg-card-top">
-          <span>${esc(ctx.g.day)} ${esc(ctx.g.date)} ${esc(ctx.g.time)}</span>
+          <span>#${ctx.g.game_id} &middot; ${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</span>
         </div>
         <div class="mg-card-matchup">${esc(ctx.g.home_team_name)} <span class="mg-ha">vs</span> ${esc(ctx.g.away_team_name)}</div>
         <div class="mg-card-badges">${ctx.statusBadge}${liveStatusHtml(activeByGame[ctx.g.game_id])} ${resultBadge(ctx.g)}</div>

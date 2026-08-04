@@ -115,8 +115,13 @@ function myGameRowCtx(g) {
   const status = g.status || 'scheduled';
   const confirmations = g.confirmations || {};
   const iConfirmed = !!confirmations[mySide];
+  const oppName = esc(opp ? (opp.label || opp.name) : '—');
   return {
     g, isHome, opp, status,
+    // Ted: "a home game is 'vs ___', an away game is '@ ___'" — replaces a
+    // separate Home/Away label, since this already says which it is. Already
+    // escaped here since it's assembled with markup below, not raw text.
+    matchupLabel: `${isHome ? 'vs' : '@'} ${oppName}`,
     statusBadge: gameStatusBadge(status, confirmations, mySide),
     canRequest: status !== 'negotiating',
     // TODO: once tested, gate this to the day before the game through 2
@@ -152,12 +157,12 @@ function renderGamesList() {
   const rows = games.map(myGameRowCtx);
 
   const table = `<div class="mg-table-wrap table-wrap"><table class="fields-table">
-    <thead><tr><th>Date</th><th>Opponent</th><th>H/A</th><th>Status</th><th>Score</th><th></th></tr></thead>
+    <thead><tr><th>#</th><th>Date</th><th>Opponent</th><th>Status</th><th>Score</th><th></th></tr></thead>
     <tbody>
     ${rows.map(ctx => `<tr>
-        <td>${esc(ctx.g.day)} ${esc(ctx.g.date)} ${esc(ctx.g.time)}</td>
-        <td>${esc(ctx.opp ? (ctx.opp.label || ctx.opp.name) : '—')}</td>
-        <td>${ctx.isHome ? 'Home' : 'Away'}</td>
+        <td>#${ctx.g.game_id}</td>
+        <td>${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</td>
+        <td>${ctx.matchupLabel}</td>
         <td>${ctx.statusBadge}</td>
         <td>${resultBadge(ctx.g)}</td>
         <td><div class="row-actions">${myGameActionButtons(ctx)}</div></td>
@@ -168,10 +173,9 @@ function renderGamesList() {
   const cards = `<div class="mg-cards">
     ${rows.map(ctx => `<div class="mg-card">
         <div class="mg-card-top">
-          <span>${esc(ctx.g.day)} ${esc(ctx.g.date)} ${esc(ctx.g.time)}</span>
-          <span class="mg-ha">${ctx.isHome ? 'Home' : 'Away'}</span>
+          <span>#${ctx.g.game_id} &middot; ${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</span>
         </div>
-        <div class="mg-card-matchup">vs ${esc(ctx.opp ? (ctx.opp.label || ctx.opp.name) : '—')}</div>
+        <div class="mg-card-matchup">${ctx.matchupLabel}</div>
         <div class="mg-card-badges">${ctx.statusBadge} ${resultBadge(ctx.g)}</div>
         <div class="mg-card-actions">${myGameActionButtons(ctx)}</div>
       </div>`).join('')}
