@@ -14,7 +14,7 @@
 // The scheduler randomises and retries, so every assertion runs across several
 // attempts and asserts on the aggregate rather than a single lucky run.
 
-const { scheduleAll } = require('../lib/scheduler');
+const { scheduleAll, maxMeetingsPerPairFor } = require('../lib/scheduler');
 
 const RUNS = Number(process.env.SCHED_RUNS || 5);
 
@@ -187,12 +187,14 @@ gapBreaches.length === 0
   : bad('home/away exceeded ±1', gapBreaches.slice(0, 3).join(', '));
 
 // ── Per-team game counts ─────────────────────────────────────────────────────
-// Ted: teams should never meet a 3rd time in a season — capped at
-// lib/scheduler.js's buildMatchupList. That makes 2*(teammates in the same
-// division - 1) a hard mathematical ceiling on any team's game count, no
-// matter how much substitution effort goes in. u10-girls has 6 teams, so its
-// ceiling is 10 — exactly the target_games=10 override some teams there get,
-// with zero slack for even one pair failing to find its 2nd meeting.
+// Ted: teams should never meet a 3rd time in a season, for a realistic
+// division (6+ teams — his stated norm) — capped in
+// lib/scheduler.js's buildMatchupList via maxMeetingsPerPairFor. That makes
+// maxMeetings*(teammates in the same division - 1) a hard mathematical
+// ceiling on any team's game count, no matter how much substitution effort
+// goes in. u10-girls has 6 teams (cap 2), so its ceiling is 10 — exactly the
+// target_games=10 override some teams there get, with zero slack for even
+// one pair failing to find its 2nd meeting.
 //
 // Even under the ceiling, a division where several teams sit near their own
 // ceiling at once leaves buildMatchupList's greedy pairing no slack to
@@ -212,7 +214,7 @@ for (const r of results) {
   const failureTeamNames = new Set((r.failures || []).map(f => f.blocking_matchup));
   for (const t of data.teams) {
     const want = t.target_games || 8;
-    const ceiling = 2 * (divisionSize[t.division_id] - 1);
+    const ceiling = maxMeetingsPerPairFor(divisionSize[t.division_id]) * (divisionSize[t.division_id] - 1);
     const expected = Math.min(want, ceiling);
     const got = r.games.filter(g => g.home_team_id === t.id || g.away_team_id === t.id).length;
     const shortfall = expected - got;

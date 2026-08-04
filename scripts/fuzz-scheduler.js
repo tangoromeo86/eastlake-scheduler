@@ -12,7 +12,15 @@
 //   node scripts/fuzz-scheduler.js                     # 200 runs, default sweep
 //   node scripts/fuzz-scheduler.js --runs 1000
 //   node scripts/fuzz-scheduler.js --runs 500 --save-worst 10
-//   node scripts/fuzz-scheduler.js --min-teams 4 --max-teams 20
+//   node scripts/fuzz-scheduler.js --min-teams 2 --max-teams 20   # stress tiny divisions on purpose
+//
+// Default sweep is 6-16 teams/division — Ted: "realistically I'd expect each
+// division to have at least 6 teams." That's the shape worth spending most
+// of the fuzzing budget on; pass --min-teams below 6 explicitly when you
+// want to stress the tiny-division edge cases (still supported — the
+// maxMeetingsPerPairFor size-aware rematch cap in lib/scheduler.js exists
+// specifically to keep those from being outliers that need special-casing —
+// just not what a default run should spend its time on).
 //
 // Exits non-zero if any run hits an invariant violation, so it can be wired
 // into CI or just run by hand after touching lib/scheduler.js.
@@ -24,7 +32,7 @@ const { randomFieldAvailability, randomTeamAvailabilityFor, seasonSaturdays } = 
 
 // ── CLI args ─────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const opts = { runs: 200, saveWorst: 5, minTeams: 4, maxTeams: 16, outDir: path.join(__dirname, 'fuzz-output') };
+  const opts = { runs: 200, saveWorst: 5, minTeams: 6, maxTeams: 16, outDir: path.join(__dirname, 'fuzz-output') };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--runs') opts.runs = Number(argv[++i]);

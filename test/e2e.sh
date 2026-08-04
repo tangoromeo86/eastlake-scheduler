@@ -1035,7 +1035,7 @@ echo "=============================================="
 # anywhere, so this step silently could never have passed on a fresh clone.
 # Inlined here so the whole suite is actually self-contained.
 cat > "$WORK/bigtest.js" <<'BIGTEST'
-const { scheduleAll } = require(process.env.REPO + '/lib/scheduler');
+const { scheduleAll, maxMeetingsPerPairFor } = require(process.env.REPO + '/lib/scheduler');
 
 // Seven real Northeast-Ohio communities, actual coordinates.
 const PROGRAMS = {
@@ -1130,7 +1130,7 @@ for (const t of teams) {
   const h = g.filter(x => x.home_team_id === t.id).length;
   const a = g.filter(x => x.away_team_id === t.id).length;
   const want = t.target_games || 8;
-  const ceiling = 2 * (divSize[t.division_id] - 1);
+  const ceiling = maxMeetingsPerPairFor(divSize[t.division_id]) * (divSize[t.division_id] - 1);
   const expected = Math.min(want, ceiling);
   if (Math.abs(h-a) > 1) { breaches++; console.log(`  BREACH ${t.id} ${h}/${a}`); }
   if (h + a !== expected) {
