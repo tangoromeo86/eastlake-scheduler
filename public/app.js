@@ -2891,16 +2891,17 @@ function renderDivisionsList(divisions) {
   const el = document.getElementById('divisions-list');
   if (!divisions.length) { el.innerHTML = '<p class="empty-note">No divisions yet. Add one above.</p>'; return; }
   el.innerHTML = `<div class="table-wrap"><table class="fields-table">
-    <thead><tr><th>ID</th><th>Name</th><th>Games</th><th>Teams</th><th></th></tr></thead>
+    <thead><tr><th>ID</th><th>Name</th><th>Games</th><th>Game length</th><th>Teams</th><th></th></tr></thead>
     <tbody>${divisions.map(d => {
       const n = (seasonData?.teams || []).filter(t => String(t.division_id) === String(d.id)).length;
       return `<tr>
         <td><code>${esc(d.id)}</code></td>
         <td><strong>${esc(d.name)}</strong></td>
         <td>${d.target_games || '—'}</td>
+        <td>${d.game_length_minutes ? d.game_length_minutes + ' min' : '60 min (default)'}</td>
         <td>${n || '—'}</td>
         <td><div class="row-actions">
-          <button class="btn btn-secondary btn-sm" onclick="openDivisionEdit('${esc(d.id)}','${esc(d.name)}',${d.target_games || 0})">Edit</button>
+          <button class="btn btn-secondary btn-sm" onclick="openDivisionEdit('${esc(d.id)}','${esc(d.name)}',${d.target_games || 0},${d.game_length_minutes || 0})">Edit</button>
           <button class="btn btn-secondary btn-sm danger-text" onclick="deleteDivision('${esc(d.id)}')">Delete</button>
         </div></td></tr>`;
     }).join('')}</tbody></table></div>`;
@@ -2911,16 +2912,18 @@ function openDivisionAdd() {
   document.getElementById('dv-id').value = '';
   document.getElementById('dv-name').value = '';
   document.getElementById('dv-target').value = '';
+  document.getElementById('dv-length').value = '';
   document.getElementById('dv-id').disabled = false;
   document.getElementById('dv-error').classList.add('hidden');
   document.getElementById('division-form').classList.remove('hidden');
 }
-function openDivisionEdit(id, name, target) {
+function openDivisionEdit(id, name, target, gameLength) {
   editingDivisionId = id;
   document.getElementById('dv-id').value = id;
   document.getElementById('dv-id').disabled = true;
   document.getElementById('dv-name').value = name;
   document.getElementById('dv-target').value = target || '';
+  document.getElementById('dv-length').value = gameLength || '';
   document.getElementById('dv-error').classList.add('hidden');
   document.getElementById('division-form').classList.remove('hidden');
 }
@@ -2934,6 +2937,7 @@ document.getElementById('dv-save').addEventListener('click', async () => {
     id: document.getElementById('dv-id').value.trim(),
     name: document.getElementById('dv-name').value.trim(),
     target_games: document.getElementById('dv-target').value || undefined,
+    game_length_minutes: document.getElementById('dv-length').value || undefined,
   };
   const url = editingDivisionId ? `api/season/divisions/${editingDivisionId}` : 'api/season/divisions';
   try {

@@ -861,9 +861,14 @@ print(len(c), mon.weekday()==0)")
 BADDATE=$(curl -s -b admin.txt -X PUT "$BASE/api/season/config" -H "$J" -d '{"start":"nonsense"}' | python3 -c "import sys,json;print('error' in json.load(sys.stdin))")
 [ "$BADDATE" = "True" ] && pass "invalid start date rejected" || fail "bad date accepted"
 
-curl -s -b admin.txt -X POST "$BASE/api/season/divisions" -H "$J" -d '{"id":"u12b","name":"U12 Boys","target_games":3}' > /dev/null
+curl -s -b admin.txt -X POST "$BASE/api/season/divisions" -H "$J" -d '{"id":"u12b","name":"U12 Boys","target_games":3,"game_length_minutes":75}' > /dev/null
 NDIV=$(curl -s -b admin.txt "$BASE/api/season/config" | python3 -c "import sys,json;print(len(json.load(sys.stdin)['divisions']))")
 [ "$NDIV" = "2" ] && pass "division added via UI endpoint" || fail "division count = $NDIV"
+GLEN=$(curl -s -b admin.txt "$BASE/api/season/config" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(x['game_length_minutes'] for x in d['divisions'] if x['id']=='u12b'))")
+[ "$GLEN" = "75" ] && pass "division game length round-trips through the API" || fail "game_length_minutes = $GLEN"
+curl -s -b admin.txt -X PUT "$BASE/api/season/divisions/u12b" -H "$J" -d '{"name":"U12 Boys","target_games":3,"game_length_minutes":90}' > /dev/null
+GLEN2=$(curl -s -b admin.txt "$BASE/api/season/config" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(x['game_length_minutes'] for x in d['divisions'] if x['id']=='u12b'))")
+[ "$GLEN2" = "90" ] && pass "division game length updates via PUT" || fail "updated game_length_minutes = $GLEN2"
 
 INUSE=$(curl -s -b admin.txt -X DELETE "$BASE/api/season/divisions/u10b" | python3 -c "import sys,json;print(json.load(sys.stdin).get('error','none'))")
 [[ "$INUSE" == *"still in it"* ]] && pass "cannot delete a division that still has teams" || fail "delete guard: $INUSE"

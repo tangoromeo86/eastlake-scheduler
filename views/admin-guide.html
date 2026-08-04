@@ -60,14 +60,18 @@
     </ul>
     <p>The <strong>Resulting Calendar</strong> below updates as you save, so you can see exactly which weeks
       and Saturdays you've created before anyone relies on them.</p>
-    <p>Then add your <strong>divisions</strong> (e.g. U10 Boys, U12 Girls). A division can't be deleted while
-      teams are still in it.</p>
+    <p>Then add your <strong>divisions</strong> (e.g. U10 Boys, U12 Girls), including each one's <strong>game
+      length in minutes</strong> — this drives the sunset check below. A division can't be deleted while teams
+      are still in it.</p>
 
     <div class="callout">
-      <p><strong>Kickoff times are fixed, not per-team.</strong> Weekday games start at <strong>6:30pm</strong>;
-        Saturday slots are <strong>10:00, 12:00 and 2:00</strong>. Coaches don't pick times when setting
-        availability — they only say whether they can play. The exact time gets nudged later, by the two coaches,
-        when a game actually needs to move.</p>
+      <p><strong>Kickoff times default to fixed times, adjusted for daylight.</strong> Weekday games default to
+        <strong>6:30pm</strong>; Saturday slots are <strong>10:00, 12:00 and 2:00</strong> and never move. As fall
+        days shorten, a weekday game's default kickoff is pulled earlier automatically — using the field's actual
+        location and the division's game length — so it's never scheduled to run past civil twilight (roughly
+        half an hour after sunset). This affects both the initial schedule and every time option offered later
+        during a change request, so nobody, coach or scheduler, is ever offered a slot that ends after dark.
+        Coaches still don't pick times when setting availability — they only say whether they can play.</p>
     </div>
 
     <h3 id="a2">2. Add programs and directors</h3>

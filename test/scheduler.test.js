@@ -405,6 +405,80 @@ avgSpread <= spreadLimit
     : bad('a team came up short instead of getting a substitute opponent', JSON.stringify(subCounts));
 }
 
+// ── Sunset-aware weekday kickoffs ───────────────────────────────────────────
+// Ted: as fall days shorten, a weekday game's default kickoff should get
+// pulled earlier rather than scheduling a game that runs past civil
+// twilight. Both teams' Saturdays are closed here so the scheduler is
+// forced onto weekdays, and the season itself starts in late October so
+// every game it produces is guaranteed to land in the shortened-daylight
+// window this feature exists for — not left to placement luck across a wide
+// season the way an early-vs-late comparison within one run would be.
+{
+  const sun = require('../lib/sun');
+  const LAT = 41.578, LNG = -81.209, TZ = 'America/New_York';
+  const GAME_LENGTH = 75;
+  const sunSeason = {
+    season: { start: '2026-10-19', weeks: 6, target_games: 4, weekday_time: '18:30', blackout_dates: [] },
+    divisions: [{ id: 'div-sun', name: 'Sunset Test', target_games: 4, game_length_minutes: GAME_LENGTH }],
+    programs: [{ id: 'prog-sun', name: 'Sun' }],
+    fields: [
+      { id: 'field-sun-a', name: 'Field A', program_id: 'prog-sun', coordinates: `${LAT},${LNG}`,
+        availability: { weekday: {}, saturday: { early: false, midday: false, late: false }, dates: {} } },
+      { id: 'field-sun-b', name: 'Field B', program_id: 'prog-sun', coordinates: `${LAT + 0.02},${LNG + 0.02}`,
+        availability: { weekday: {}, saturday: { early: false, midday: false, late: false }, dates: {} } },
+    ],
+    teams: [
+      { id: 'team-sun-a', label: 'Team A', division_id: 'div-sun', program_id: 'prog-sun', home_field_id: 'field-sun-a',
+        availability: { weekday: {}, saturday: { early: 'none', midday: 'none', late: 'none' }, dates: {} } },
+      { id: 'team-sun-b', label: 'Team B', division_id: 'div-sun', program_id: 'prog-sun', home_field_id: 'field-sun-b',
+        availability: { weekday: {}, saturday: { early: 'none', midday: 'none', late: 'none' }, dates: {} } },
+      { id: 'team-sun-c', label: 'Team C', division_id: 'div-sun', program_id: 'prog-sun', home_field_id: 'field-sun-a',
+        availability: { weekday: {}, saturday: { early: 'none', midday: 'none', late: 'none' }, dates: {} } },
+      { id: 'team-sun-d', label: 'Team D', division_id: 'div-sun', program_id: 'prog-sun', home_field_id: 'field-sun-b',
+        availability: { weekday: {}, saturday: { early: 'none', midday: 'none', late: 'none' }, dates: {} } },
+    ],
+  };
+
+  const sunRes = scheduleAll(sunSeason);
+  const sunGames = sunRes.games || [];
+  sunGames.length > 0
+    ? ok('the sunset-fixture actually produced weekday games to check', `${sunGames.length} games`)
+    : bad('no games were scheduled at all — fixture is broken, nothing else in this block is meaningful', JSON.stringify(sunRes.failures));
+
+  const fieldsById = Object.fromEntries(sunSeason.fields.map(f => [f.id, f]));
+  const overdue = sunGames.filter(g => {
+    const field = fieldsById[g.field_id];
+    const [lat, lng] = field.coordinates.split(',').map(Number);
+    const dusk = sun.civilDuskMinutesLocal(g.date, lat, lng, TZ);
+    const [h, m] = g.time.split(':').map(Number);
+    return dusk != null && (h * 60 + m + GAME_LENGTH) > dusk;
+  });
+  overdue.length === 0
+    ? ok('no scheduled weekday game runs past civil twilight for its field/date')
+    : bad('a game was scheduled to run past civil twilight', JSON.stringify(overdue.slice(0, 3)));
+
+  // Every game in this late-October-onward season should have been pulled
+  // earlier than the plain 18:30 default — proof the adjustment actually
+  // engages, not just that it never produces something unsafe.
+  const notPulled = sunGames.filter(g => g.time >= '18:30');
+  notPulled.length === 0
+    ? ok('every game in the shortened-daylight window is pulled earlier than the 18:30 default', `${sunGames.length} checked`)
+    : bad('a game kept (or exceeded) the full 18:30 default despite short days', JSON.stringify(notPulled.slice(0, 3)));
+
+  // Cross-check against the standalone calculation directly, not just "some
+  // adjustment happened" — the exact time the scheduler used should match
+  // what weekdayStartTimeForField independently computes for that game's own
+  // field, date and game length.
+  const { weekdayStartTimeForField } = require('../lib/scheduler');
+  const mismatched = sunGames.filter(g => {
+    const expected = weekdayStartTimeForField('18:30', GAME_LENGTH, fieldsById[g.field_id], g.date);
+    return g.time !== expected;
+  });
+  mismatched.length === 0
+    ? ok('the scheduled kickoff matches weekdayStartTimeForField exactly for every game')
+    : bad('scheduled kickoff disagrees with the standalone calculation', JSON.stringify(mismatched.slice(0, 3)));
+}
+
 // ── Performance ──────────────────────────────────────────────────────────────
 const avgMs = results.reduce((s, r) => s + r.ms, 0) / results.length;
 avgMs < 10000

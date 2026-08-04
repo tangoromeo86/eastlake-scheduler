@@ -9,7 +9,7 @@ const { Resend } = require('resend');
 const { scheduleAll, validateGameEdit, dayName, teamName,
         resolveTeamAvailability, resolveFieldAvailability, nearestSaturdaySlot,
         SATURDAY_SLOTS, SATURDAY_SLOT_TIMES, WEEKDAY_TIME, TIME_BOUNDS, isValidGameTime, allowedTimes,
-        buildSeasonWeeks } = require('./lib/scheduler');
+        buildSeasonWeeks, weekdayStartTimeForField, allowedWeekdayTimesForField } = require('./lib/scheduler');
 
 const app = express();
 const PORT = process.env.PORT || 3010;
@@ -684,6 +684,7 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
   const teams = seasonData.teams || [];
   const fields = seasonData.fields || [];
   const season = seasonData.season || {};
+  const gameLengthMinutes = (seasonData.divisions || []).find(d => d.id === game.division_id)?.game_length_minutes;
 
   const home_team_id = homeTeamId !== undefined ? homeTeamId : game.home_team_id;
   const away_team_id = awayTeamId !== undefined ? awayTeamId : game.away_team_id;
@@ -720,7 +721,14 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
   for (const wk of buildSeasonWeeks(season)) {
     // Saturdays expand into their three real slots, so a coach can pick which
     // part of the day rather than being handed a single division-fixed time.
-    const daySlots = wk.weekdays.map(d => ({ date: d, day: dayName(d), type: 'weekday', slotKey: null, time: WEEKDAY_TIME }));
+    // A weekday's default kickoff is pulled earlier when the home field's
+    // civil twilight would otherwise cut the game off mid-play (same
+    // adjustment the scheduler itself applies) — the date is dropped
+    // entirely if even the earliest allowed kickoff would run past dark.
+    const daySlots = wk.weekdays
+      .map(d => ({ date: d, day: dayName(d), type: 'weekday', slotKey: null,
+                   time: weekdayStartTimeForField(WEEKDAY_TIME, gameLengthMinutes, homeFieldObj, d) }))
+      .filter(s => s.time !== null);
     if (wk.saturday) {
       for (const k of SATURDAY_SLOTS) {
         daySlots.push({ date: wk.saturday, day: 'Saturday', type: 'saturday', slotKey: k, time: SATURDAY_SLOT_TIMES[k] });
@@ -760,7 +768,9 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
         : [];
 
       slotsOut.push({ date, day, week: wk.week, type, slot_key: slotKey, time,
-                      allowed_times: allowedTimes(type),
+                      allowed_times: type === 'weekday'
+                        ? allowedWeekdayTimesForField(gameLengthMinutes, homeFieldObj, date)
+                        : allowedTimes(type),
                       field_id: homeFieldId, field_games: fieldGames });
     }
   }
@@ -3071,7 +3081,7 @@ app.put('/api/season/config', requireAdmin, (req, res) => {
 app.post('/api/season/divisions', requireAdmin, (req, res) => {
   const data = readJsonSafe(SEASON_FILE, null);
   if (!data) return res.status(500).json({ error: 'Could not read season.json' });
-  const { id, name, target_games } = req.body || {};
+  const { id, name, target_games, game_length_minutes } = req.body || {};
   if (!id || !String(id).trim())   return res.status(400).json({ error: 'Division id is required (e.g. u10b)' });
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Division name is required' });
   data.divisions = data.divisions || [];
@@ -3080,6 +3090,7 @@ app.post('/api/season/divisions', requireAdmin, (req, res) => {
   }
   const div = { id: String(id).trim(), name: String(name).trim() };
   if (target_games) div.target_games = Number(target_games);
+  if (game_length_minutes) div.game_length_minutes = Number(game_length_minutes);
   data.divisions.push(div);
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch { return res.status(500).json({ error: 'Could not write season.json' }); }
@@ -3091,10 +3102,11 @@ app.put('/api/season/divisions/:id', requireAdmin, (req, res) => {
   if (!data) return res.status(500).json({ error: 'Could not read season.json' });
   const idx = (data.divisions || []).findIndex(d => String(d.id) === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Division not found' });
-  const { name, target_games } = req.body || {};
+  const { name, target_games, game_length_minutes } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Division name is required' });
   data.divisions[idx] = { ...data.divisions[idx], name: String(name).trim(),
-    ...(target_games ? { target_games: Number(target_games) } : {}) };
+    ...(target_games ? { target_games: Number(target_games) } : {}),
+    ...(game_length_minutes ? { game_length_minutes: Number(game_length_minutes) } : {}) };
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch { return res.status(500).json({ error: 'Could not write season.json' }); }
   res.json({ ok: true, division: data.divisions[idx] });
