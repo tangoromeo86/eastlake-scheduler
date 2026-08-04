@@ -1794,10 +1794,16 @@ function buildTeamEditorRow(team, fieldOptions) {
     ? '<span class="confirmed-badge">Confirmed</span>'
     : '<span class="unconfirmed-badge">Unconfirmed</span>';
   const blackoutStr = (team.blackout_dates || []).join('\n');
+  // JSON.stringify(id) embeds literal double quotes for a string id (e.g.
+  // "team-1") — fine inside a JS string, but breaks a double-quoted HTML
+  // attribute outright (onclick="fn("team-1")" truncates at the first
+  // embedded quote). Only ever bit real string-id teams, which is why this
+  // went unnoticed against numeric-id fixtures.
+  const idAttr = JSON.stringify(id).replace(/"/g, '&quot;');
 
   return `
   <div class="editor-team" id="editor-team-${id}">
-    <div class="editor-team-row" onclick="toggleTeamForm(${JSON.stringify(id)})">
+    <div class="editor-team-row" onclick="toggleTeamForm(${idAttr})">
       <span class="editor-team-name">${esc(name)}</span>
       <span class="editor-team-coach">${esc(team.coach || '—')}</span>
       <span class="editor-team-field">${esc(fieldName)}</span>
@@ -1843,8 +1849,8 @@ function buildTeamEditorRow(team, fieldOptions) {
           </label>
           <span class="editor-hint" style="text-align:right;max-width:160px">Unchecked teams are excluded from scheduling (still counts as registered)</span>
           <div class="editor-form-actions">
-            <button class="btn btn-secondary" onclick="toggleTeamForm(${JSON.stringify(id)})">Cancel</button>
-            <button class="btn btn-primary" onclick="saveTeamForm(${JSON.stringify(id)})">Save</button>
+            <button class="btn btn-secondary" onclick="toggleTeamForm(${idAttr})">Cancel</button>
+            <button class="btn btn-primary" onclick="saveTeamForm(${idAttr})">Save</button>
           </div>
           <div id="ef-status-${id}" class="editor-status"></div>
         </div>

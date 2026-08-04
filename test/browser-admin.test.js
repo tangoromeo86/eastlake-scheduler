@@ -221,7 +221,14 @@ async function verifyPage(page, email, srv) {
       await p.waitForTimeout(400);
       const firstTeamId = await p.evaluate(() => document.querySelector('.editor-team')?.id.replace('editor-team-', ''));
       if (firstTeamId) {
-        await p.evaluate(id => window.toggleTeamForm(id), firstTeamId);
+        // A real click on the row, not a direct window.toggleTeamForm(id)
+        // call — the row's onclick attribute embeds the team id via
+        // JSON.stringify() inside a double-quoted HTML attribute, which
+        // silently breaks for any string id (e.g. "team-1", not just a bare
+        // number) because JSON.stringify's own quote characters terminate
+        // the attribute early. Calling the function directly bypasses
+        // exactly that bug and would never have caught it.
+        await p.locator('.editor-team-row').first().click();
         await p.waitForTimeout(400);
         const gridRows = await p.locator(`#ef-availability-${firstTeamId} select.av-pat`).count();
         gridRows > 0
