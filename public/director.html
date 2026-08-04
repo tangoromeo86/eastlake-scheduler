@@ -120,9 +120,54 @@
       <div id="director-avail-cal" class="av-cal-wrapper"></div>
     </div>
 
-    <h3 class="section-gap">&#9917; Games</h3>
+    <div class="changes-toolbar section-gap">
+      <span class="changes-toolbar-title">&#9917; Games</span>
+      <button id="btn-add-game" class="btn btn-primary">+ Add Game</button>
+    </div>
     <div id="games-list"></div>
 
+  </div>
+
+  <!-- Director's manual game editor — Ted: directors (and admin) can force a
+       game past the back-to-back/weekly-cap rules when there's a real reason
+       to, with the violation shown plainly; coaches never get this. Scoped
+       server-side to games touching at least one of the director's own
+       program's teams. -->
+  <div id="dge-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="dge-title">Add Game</h3>
+        <button id="dge-close" class="modal-close">&times;</button>
+      </div>
+      <div id="dge-body-fields" class="modal-body">
+        <div class="modal-row" id="dge-division-row">
+          <label>Division<select id="dge-division"></select></label>
+        </div>
+        <div class="modal-row">
+          <label>Date
+            <div class="date-suggest-row">
+              <select id="dge-date"></select>
+              <button id="dge-suggest-btn" class="btn-suggest-dates hidden" title="Find available dates for both teams">&#128197; Suggest</button>
+            </div>
+          </label>
+          <label>Time<input id="dge-time" type="text" placeholder="HH:MM"></label>
+        </div>
+        <div class="modal-row">
+          <label>Field<select id="dge-field"></select></label>
+        </div>
+        <div class="modal-row">
+          <label>Home Team<select id="dge-home"></select></label>
+          <label>Away Team<select id="dge-away"></select></label>
+        </div>
+      </div>
+      <div id="dge-suggest-panel" class="suggest-panel hidden"></div>
+      <div id="dge-violations" class="edit-violations hidden"></div>
+      <div class="modal-footer">
+        <button id="dge-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="dge-save" class="btn btn-primary">Save</button>
+        <button id="dge-force" class="btn btn-warn hidden">Save Anyway</button>
+      </div>
+    </div>
   </div>
 
   <script src="availability-editor.js"></script>

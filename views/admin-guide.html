@@ -94,11 +94,14 @@
       automatically first, so this is always reversible.</p>
     <p>The scheduler will:</p>
     <ul>
-      <li>Put games on <strong>Saturdays wherever possible</strong> — a weekday is only ever used when no Saturday
-        slot could take that matchup</li>
+      <li>Put games on <strong>Saturdays wherever possible</strong> — a weekday (Monday through Friday) is only
+        ever used when no Saturday slot could take that matchup</li>
       <li>Give every team its requested number of games</li>
       <li>Keep home and away <strong>within one of each other</strong> for every team</li>
       <li>Respect every team's and field's availability, including single-date exceptions</li>
+      <li>Cap every team at <strong>2 games in any single week</strong>, and never schedule two games on
+        consecutive calendar days for the same team — <strong>except Friday into Saturday</strong>, which is
+        allowed, since a Friday game doesn't close off that Saturday the way any other adjacent pair would</li>
       <li>Balance <strong>travel miles</strong> as far as geography allows</li>
     </ul>
     <p>Any matchup it couldn't place is reported at the top of the page. It will still schedule everything else —
@@ -121,6 +124,14 @@
       it later, same as any other. The <strong>Availability</strong> tab gives you the league-wide picture on a
       calendar, filterable by division, and switchable between team and field availability — useful when a
       division looks stuck and you want to see whose availability is actually the bottleneck.</p>
+
+    <div class="callout warn">
+      <p><strong>Directors can now force a game past the rules — coaches can't.</strong> Directors have their own
+        manual game editor (mirroring yours), scoped to games touching at least one of their own program's teams.
+        If a real-world reason means a team genuinely needs a back-to-back or a 3rd game in a week, the director
+        (or you) can save it anyway — the violation is shown plainly first, so it's never silent. Coaches stay
+        entirely on the negotiated Request Change / Rain Out path, which never offers this override.</p>
+    </div>
 
     <h3 id="a5b">Rain outs and scores</h3>
     <p><strong>Rain outs are coach-driven</strong> — either coach reports one from their own game (or their

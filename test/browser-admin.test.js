@@ -331,6 +331,45 @@ async function verifyPage(page, email, srv) {
       dirErrs.length === 0
         ? ok('no JS errors in the director deep-link flow')
         : bad('JS errors in director deep-link flow', dirErrs.slice(0, 2).join(' | '));
+
+      // ── Director's manual game editor (Ted, 2026-08-04) ────────────────────
+      // Same force-past-the-rules authority admin has, now on the director
+      // page too — verified here as UI wiring; the actual scoping/violation/
+      // force logic is covered at the API level in test/e2e.sh.
+      await dp.goto(`${BASE}/director`, { waitUntil: 'networkidle' });
+      await dp.waitForTimeout(500);
+      const addGameBtn = dp.locator('#btn-add-game');
+      if (await addGameBtn.count()) {
+        await addGameBtn.click();
+        await dp.waitForTimeout(300);
+        (await dp.locator('#dge-modal:not(.hidden)').count()) > 0
+          ? ok('director\'s Add Game button opens the manual game editor')
+          : bad('Add Game did not open the modal', '');
+        const homeOpts = await dp.locator('#dge-home option').count();
+        homeOpts > 0
+          ? ok('team selects populate in the manual game editor', `${homeOpts} options`)
+          : bad('team selects are empty in the manual game editor', '');
+        await dp.locator('#dge-close').click();
+        (await dp.locator('#dge-modal:not(.hidden)').count()) === 0
+          ? ok('manual game editor closes cleanly')
+          : bad('manual game editor did not close', '');
+
+        // Editing an existing own-program game pre-fills from that game.
+        const editBtn = dp.locator(`button[onclick="openGameEdit(${dirOwnGame.game_id})"]`);
+        if (await editBtn.count()) {
+          await editBtn.first().click();
+          await dp.waitForTimeout(300);
+          const prefilledDate = await dp.locator('#dge-date').inputValue().catch(() => '');
+          prefilledDate === dirOwnGame.date
+            ? ok('editing a game pre-fills the modal from that exact game', prefilledDate)
+            : bad('edit did not pre-fill the game\'s own date', `got ${prefilledDate}, wanted ${dirOwnGame.date}`);
+          await dp.locator('#dge-close').click();
+        } else {
+          ok('no Edit button rendered for this particular game state (not a failure)');
+        }
+      } else {
+        bad('director page has no Add Game button', '');
+      }
     } else {
       bad('fixture did not produce a director-own-game case', '');
     }

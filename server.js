@@ -9,7 +9,8 @@ const { Resend } = require('resend');
 const { scheduleAll, validateGameEdit, dayName, teamName,
         resolveTeamAvailability, resolveFieldAvailability, nearestSaturdaySlot,
         SATURDAY_SLOTS, SATURDAY_SLOT_TIMES, WEEKDAY_TIME, TIME_BOUNDS, isValidGameTime, allowedTimes,
-        buildSeasonWeeks, weekdayStartTimeForField, allowedWeekdayTimesForField } = require('./lib/scheduler');
+        buildSeasonWeeks, weekdayStartTimeForField, allowedWeekdayTimesForField,
+        isExemptBackToBack, MAX_GAMES_PER_WEEK } = require('./lib/scheduler');
 
 const app = express();
 const PORT = process.env.PORT || 3010;
@@ -708,6 +709,18 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
     .filter(g => g.home_team_id === home_team_id || g.away_team_id === home_team_id).map(g => g.date));
   const awayDates = new Set(otherGames
     .filter(g => g.home_team_id === away_team_id || g.away_team_id === away_team_id).map(g => g.date));
+  // Per-week game counts, for the same MAX_GAMES_PER_WEEK cap the scheduler
+  // itself enforces — a coach negotiating a change should never land on a
+  // week that's already full, same as the initial auto-schedule never would.
+  const weekCountsFor = teamId => {
+    const counts = {};
+    for (const g of otherGames) {
+      if (g.home_team_id === teamId || g.away_team_id === teamId) counts[g.week] = (counts[g.week] || 0) + 1;
+    }
+    return counts;
+  };
+  const homeWeekCounts = weekCountsFor(home_team_id);
+  const awayWeekCounts = weekCountsFor(away_team_id);
 
   const homeFieldId = homeTeam?.home_field_id ?? null;
   const homeFieldObj = homeFieldId ? fields.find(f => f.id === homeFieldId) : null;
@@ -743,10 +756,18 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
       // A team can't play twice in a day even across Saturday slots.
       if (homeDates.has(date) || awayDates.has(date)) continue;
 
+      // Consecutive-day check — Friday->Saturday is exempt (Ted, 2026-08-04):
+      // a Friday game no longer closes off the Saturday right after it.
       const prevDay = adjacentDateStr(date, -1);
       const nextDay = adjacentDateStr(date, +1);
-      if (homeDates.has(prevDay) || homeDates.has(nextDay)) continue;
-      if (awayDates.has(prevDay) || awayDates.has(nextDay)) continue;
+      const prevExempt = isExemptBackToBack(date, prevDay);
+      const nextExempt = isExemptBackToBack(date, nextDay);
+      if ((homeDates.has(prevDay) && !prevExempt) || (homeDates.has(nextDay) && !nextExempt)) continue;
+      if ((awayDates.has(prevDay) && !prevExempt) || (awayDates.has(nextDay) && !nextExempt)) continue;
+
+      // Weekly cap — same MAX_GAMES_PER_WEEK the scheduler itself enforces.
+      if ((homeWeekCounts[wk.week] || 0) >= MAX_GAMES_PER_WEEK) continue;
+      if ((awayWeekCounts[wk.week] || 0) >= MAX_GAMES_PER_WEEK) continue;
 
       // Availability resolved against this concrete date, not the weekday pattern.
       if (homeTeam && awayTeam) {
@@ -777,7 +798,8 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
   return { slots: slotsOut, home_field_name: homeFieldName };
 }
 
-app.get('/api/game/:id/suggest-dates', requireAdmin, (req, res) => {
+app.get('/api/game/:id/suggest-dates', requireDirector, (req, res) => {
+  const s = getSession(req);
   const gameId = parseInt(req.params.id, 10);
 
   let schedData, seasonData;
@@ -788,6 +810,14 @@ app.get('/api/game/:id/suggest-dates', requireAdmin, (req, res) => {
 
   const game = schedData.games.find(g => g.game_id === gameId);
   if (!game) return res.status(404).json({ error: `Game ${gameId} not found` });
+
+  if (s.role === 'director') {
+    const teams = seasonData.teams || [];
+    const homeT = teams.find(t => t.id === game.home_team_id);
+    const awayT = teams.find(t => t.id === game.away_team_id);
+    const owns = (homeT && canManageProgram(s, homeT.program_id)) || (awayT && canManageProgram(s, awayT.program_id));
+    if (!owns) return res.status(403).json({ error: 'You can only get suggestions for games involving one of your own program\'s teams' });
+  }
 
   // The editor may have changed the teams before clicking Suggest.
   const rawHomeId = req.query.home_team_id;
@@ -894,7 +924,13 @@ app.post('/api/upload-season', requireAdmin, (req, res) => {
   });
 });
 
-app.post('/api/game', requireAdmin, (req, res) => {
+// Directors get the same manual create/edit/force authority as admin here —
+// Ted was explicit that this is a director+admin thing, "but, crucially, not
+// coaches" (coaches stay entirely on the negotiated Request Change/Rain Out
+// path, which hard-enforces every rule with no force option). Scoped below
+// to games touching at least one of the director's own program's teams.
+app.post('/api/game', requireDirector, (req, res) => {
+  const s = getSession(req);
   const { division_id, date, time, field_id, home_team_id, away_team_id, force } = req.body;
   if (!division_id || !date || !time || !field_id || home_team_id == null || away_team_id == null)
     return res.status(400).json({ error: 'division_id, date, time, field_id, home_team_id, and away_team_id are required' });
@@ -908,6 +944,14 @@ app.post('/api/game', requireAdmin, (req, res) => {
   const home_team_id_p = isNaN(parseInt(home_team_id, 10)) ? home_team_id : parseInt(home_team_id, 10);
   const away_team_id_p = isNaN(parseInt(away_team_id, 10)) ? away_team_id : parseInt(away_team_id, 10);
   const field_id_p = isNaN(parseInt(field_id, 10)) ? field_id : parseInt(field_id, 10);
+
+  if (s.role === 'director') {
+    const teams = seasonData.teams || [];
+    const homeT = teams.find(t => t.id === home_team_id_p);
+    const awayT = teams.find(t => t.id === away_team_id_p);
+    const owns = (homeT && canManageProgram(s, homeT.program_id)) || (awayT && canManageProgram(s, awayT.program_id));
+    if (!owns) return res.status(403).json({ error: 'You can only schedule games involving one of your own program\'s teams' });
+  }
 
   const gameId = Math.max(0, ...schedData.games.map(g => g.game_id || 0)) + 1;
 
@@ -976,7 +1020,8 @@ app.post('/api/game', requireAdmin, (req, res) => {
   res.json({ ok: true, game: newGame, violations, change: changeRecord });
 });
 
-app.put('/api/game/:id', requireAdmin, (req, res) => {
+app.put('/api/game/:id', requireDirector, (req, res) => {
+  const s = getSession(req);
   const gameId = parseInt(req.params.id, 10);
   const { date, time, field_id, home_team_id, away_team_id, force } = req.body;
 
@@ -992,6 +1037,15 @@ app.put('/api/game/:id', requireAdmin, (req, res) => {
   if (gameIdx === -1) return res.status(404).json({ error: `Game ${gameId} not found` });
 
   const existingGame = schedData.games[gameIdx];
+
+  if (s.role === 'director') {
+    const teams = seasonData.teams || [];
+    const homeT = teams.find(t => t.id === existingGame.home_team_id);
+    const awayT = teams.find(t => t.id === existingGame.away_team_id);
+    const owns = (homeT && canManageProgram(s, homeT.program_id)) || (awayT && canManageProgram(s, awayT.program_id));
+    if (!owns) return res.status(403).json({ error: 'You can only edit games involving one of your own program\'s teams' });
+  }
+
   const beforeSnap = {
     date: existingGame.date, day: existingGame.day, time: existingGame.time,
     field_id: existingGame.field_id, field_name: existingGame.field_name,

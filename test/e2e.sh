@@ -643,6 +643,73 @@ ADMINSUB=$(curl -s -b admin.txt -X POST "$BASE/api/games/$SGID/result" -H "$J" -
 
 echo
 echo "=============================================="
+echo "STEP 9d — Director's manual game editor: scoped force authority"
+echo "=============================================="
+# Ted, 2026-08-04: directors (and admin) can force a game past the rules a
+# coach can never bypass — scoped to games touching one of their own
+# program's teams. dana directs Chardon (T1, T3); mike directs Munson (T2).
+# Prefer a T1-vs-T3 game specifically (both dana's), so the outsider-403
+# check below actually has an outsider to test against rather than being
+# skipped depending on which untouched game happens to come up first.
+EGID=$(python3 -c "
+import json
+d=json.load(open('$SCHED'))
+used={$GID,$RGID,$SGID}
+cands=[g for g in d['games'] if g['game_id'] not in used and g['status']!='cancelled']
+t1t3=[g for g in cands if '$T2' not in (str(g['home_team_id']), str(g['away_team_id']))]
+pick=(t1t3 or cands)
+print(pick[0]['game_id'] if pick else '')
+")
+if [ -n "$EGID" ]; then
+  EHOME=$(python3 -c "import json;d=json.load(open('$SCHED'));print([x for x in d['games'] if x['game_id']==$EGID][0]['home_team_id'])")
+  EAWAY=$(python3 -c "import json;d=json.load(open('$SCHED'));print([x for x in d['games'] if x['game_id']==$EGID][0]['away_team_id'])")
+  EDIV=$(python3 -c "import json;d=json.load(open('$SCHED'));print([x for x in d['games'] if x['game_id']==$EGID][0]['division_id'])")
+  # With only 2 directors and 3 teams (T1+T3 = dana, T2 = mike), a T1-vs-T2
+  # or T2-vs-T3 game legitimately involves BOTH directors — there's no
+  # outsider to test against unless this happens to be a T1-vs-T3 game
+  # (both dana's), where mike genuinely has no stake in it.
+  OWNER="dana.txt"
+  T1T3_ONLY=$([ "$EHOME" != "$T2" ] && [ "$EAWAY" != "$T2" ] && echo yes || echo no)
+
+  # Coaches never get this at all, regardless of which game.
+  COACHTRY=$(curl -s -o /dev/null -w "%{http_code}" -b coacha.txt -X PUT "$BASE/api/game/$EGID" -H "$J" -d "{\"date\":\"2026-09-01\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\"}")
+  [ "$COACHTRY" = "403" ] && pass "a coach session cannot touch the manual game editor at all (403)" || fail "expected 403 for a coach, got $COACHTRY"
+
+  if [ "$T1T3_ONLY" = "yes" ]; then
+    OUTTRY=$(curl -s -o /dev/null -w "%{http_code}" -b mike.txt -X PUT "$BASE/api/game/$EGID" -H "$J" -d "{\"date\":\"2026-09-01\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\"}")
+    [ "$OUTTRY" = "403" ] && pass "a director with no stake in this game is refused (403)" || fail "expected 403 for an unrelated director, got $OUTTRY"
+  else
+    echo "  (skipped outsider-director check: this game involves T2, so both fixture directors legitimately have a stake in it)"
+  fi
+
+  # Force flow: violate the weekly cap on purpose (same date as an already-
+  # recorded game for this team forces a same-day/consecutive-day violation),
+  # confirm it's refused without force, then forced through with a clear
+  # violation list.
+  CONFLICT_DATE=$(python3 -c "
+import json
+d=json.load(open('$SCHED'))
+g=[x for x in d['games'] if x['home_team_id'] in ('$EHOME','$EAWAY') or x['away_team_id'] in ('$EHOME','$EAWAY')]
+g=[x for x in g if x['game_id']!=$EGID]
+print(g[0]['date'] if g else '')")
+  if [ -n "$CONFLICT_DATE" ]; then
+    NOFORCE=$(curl -s -w "|%{http_code}" -b "$OWNER" -X PUT "$BASE/api/game/$EGID" -H "$J" -d "{\"date\":\"$CONFLICT_DATE\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\"}")
+    NOFORCE_CODE=$(echo "$NOFORCE" | sed 's/.*|//')
+    NOFORCE_BODY=$(echo "$NOFORCE" | sed 's/|[0-9]*$//')
+    HASVIOL=$(echo "$NOFORCE_BODY" | python3 -c "import sys,json;print(len(json.load(sys.stdin).get('violations',[]))>0)" 2>/dev/null)
+    [ "$NOFORCE_CODE" = "409" ] && [ "$HASVIOL" = "True" ] && pass "director's edit is refused with a clear violation list, not silently allowed" || fail "expected 409+violations, got $NOFORCE_CODE: $NOFORCE_BODY"
+
+    FORCED=$(curl -s -b "$OWNER" -X PUT "$BASE/api/game/$EGID" -H "$J" -d "{\"date\":\"$CONFLICT_DATE\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\",\"force\":true}" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('ok'), d.get('change',{}).get('forced'))")
+    [ "$FORCED" = "True True" ] && pass "the owning director can force it through anyway, and it's recorded as forced" || fail "force flow = $FORCED"
+  else
+    echo "  (skipped force-flow check: no second game found for this team to create a real conflict)"
+  fi
+else
+  echo "  (skipped STEP 9d: no untouched game left in this fixture — not a failure)"
+fi
+
+echo
+echo "=============================================="
 echo "STEP 10 — Escalation when nobody responds"
 echo "=============================================="
 python3 - <<'PYEOF'

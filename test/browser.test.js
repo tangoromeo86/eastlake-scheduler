@@ -789,6 +789,15 @@ async function loginAs(page, email, password) {
       ? ok('coach page renders the availability editor')
       : bad('coach availability editor missing', 'no #mte-availability');
 
+    // Ted, 2026-08-04: Friday is now a real configurable day (other programs
+    // wanted it as an option), not just "always available" with no UI.
+    await cpage.locator('#mte-avail-details summary').first().click();
+    await cpage.waitForTimeout(200);
+    const availText = await cpage.locator('#mte-availability').innerText().catch(() => '');
+    availText.includes('Friday')
+      ? ok('Friday now has its own row in the weekly availability grid')
+      : bad('Friday is missing from the availability grid', availText.slice(0, 300));
+
     // Ted's three small asks: the game id visible, an American MM-DD-YYYY
     // date, and "vs X" / "@ X" instead of a separate Home/Away label. Casey
     // coaches Wildcats (team-1), home in game #1 vs Rockets.

@@ -145,6 +145,9 @@ function dirGameRowCtx(g) {
     // A director can confirm on a coach's behalf — Ted: "either nudge them
     // offline, or confirm them on the coach's behalf."
     canConfirm: (status === 'scheduled' || status === 'pending') && !confirmations[mySide],
+    // Manual edit (with the force-past-the-rules authority coaches don't
+    // get) — same "nothing left to touch" exclusion as Rain Out/Report Score.
+    canEdit: status !== 'cancelled',
   };
 }
 
@@ -155,6 +158,7 @@ function dirGameActionButtons(ctx) {
     ctx.canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id},'${tid}')">Request Change</button>` : '',
     ctx.canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id},'${tid}')">Rain Out</button>` : '',
     ctx.canScore ? `<button class="btn btn-secondary btn-sm" onclick="openScore(${g.game_id},'${tid}')">${g.result ? 'Edit Score' : 'Report Score'}</button>` : '',
+    ctx.canEdit ? `<button class="btn btn-secondary btn-sm" onclick="openGameEdit(${g.game_id})">Edit</button>` : '',
     `<button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>`,
   ].join('');
 }
@@ -246,6 +250,201 @@ function openScore(gameId, teamId) {
     refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
   });
 }
+
+// ── Manual game editor (director's own force authority) ─────────────────────
+// Mirrors the shape of admin's Add/Edit Game panel, trimmed to just what
+// this needs (no delete/rainout/score/notify-email — those already exist as
+// their own actions). The scoping to "at least one of my program's teams"
+// is enforced server-side; this UI doesn't try to duplicate that check, it
+// just surfaces whatever the server says.
+let dgeGameId = null;   // null while adding, the game id while editing
+let dgeAdding = false;
+
+function closeGameEditModal() {
+  document.getElementById('dge-modal').classList.add('hidden');
+  document.getElementById('dge-violations').classList.add('hidden');
+  document.getElementById('dge-violations').innerHTML = '';
+  document.getElementById('dge-force').classList.add('hidden');
+  document.getElementById('dge-suggest-panel').classList.add('hidden');
+  dgeGameId = null;
+  dgeAdding = false;
+}
+
+function dgePopulateDivisionsAndTeams(selectedDivId) {
+  const divSelect = document.getElementById('dge-division');
+  divSelect.innerHTML = '';
+  for (const d of (seasonData?.divisions || [])) {
+    const opt = document.createElement('option');
+    opt.value = d.id; opt.textContent = d.name || d.label || d.id;
+    if (d.id === selectedDivId) opt.selected = true;
+    divSelect.appendChild(opt);
+  }
+  dgePopulateTeams(divSelect.value);
+}
+
+function dgePopulateTeams(divId) {
+  const divTeams = (seasonData?.teams || [])
+    .filter(t => t.division_id === divId && t.confirmed !== false)
+    .sort((a, b) => teamLabel(a).localeCompare(teamLabel(b)));
+  const homeSelect = document.getElementById('dge-home');
+  const awaySelect = document.getElementById('dge-away');
+  homeSelect.innerHTML = ''; awaySelect.innerHTML = '';
+  for (const t of divTeams) {
+    const label = teamLabel(t);
+    const optH = document.createElement('option'); optH.value = t.id; optH.textContent = label;
+    homeSelect.appendChild(optH);
+    const optA = document.createElement('option'); optA.value = t.id; optA.textContent = label;
+    awaySelect.appendChild(optA);
+  }
+}
+
+function dgePopulateDates(selectedDate) {
+  const dateSelect = document.getElementById('dge-date');
+  dateSelect.innerHTML = '';
+  for (const wk of (seasonSlots || [])) {
+    const grp = document.createElement('optgroup');
+    grp.label = `Week ${wk.week}`;
+    for (const slot of wk.dates) {
+      const opt = document.createElement('option');
+      opt.value = slot.date;
+      opt.textContent = `${slot.day} ${formatDateUS(slot.date)}`;
+      if (slot.date === selectedDate) opt.selected = true;
+      grp.appendChild(opt);
+    }
+    dateSelect.appendChild(grp);
+  }
+}
+
+function dgePopulateFields(selectedFieldId) {
+  const fields = [...(seasonData?.fields || [])].sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
+  const fieldSelect = document.getElementById('dge-field');
+  fieldSelect.innerHTML = '';
+  for (const f of fields) {
+    const opt = document.createElement('option');
+    opt.value = f.id; opt.textContent = fieldDisplayName(f);
+    if (f.id === selectedFieldId) opt.selected = true;
+    fieldSelect.appendChild(opt);
+  }
+}
+
+function openGameAdd() {
+  if (!requireVerifiedToEdit()) return;
+  if (!seasonSlots || !seasonData) return;
+  dgeAdding = true; dgeGameId = null;
+
+  document.getElementById('dge-division-row').classList.remove('hidden');
+  dgePopulateDivisionsAndTeams((seasonData.divisions || [])[0]?.id);
+  dgePopulateDates(null);
+  document.getElementById('dge-time').value = '';
+  dgePopulateFields(null);
+  document.getElementById('dge-suggest-btn').classList.add('hidden');
+
+  document.getElementById('dge-title').textContent = 'Add Game';
+  document.getElementById('dge-save').textContent = 'Add Game';
+  document.getElementById('dge-violations').classList.add('hidden');
+  document.getElementById('dge-violations').innerHTML = '';
+  document.getElementById('dge-force').classList.add('hidden');
+  document.getElementById('dge-modal').classList.remove('hidden');
+}
+
+function openGameEdit(gameId) {
+  if (!requireVerifiedToEdit()) return;
+  const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
+  if (!game || !seasonSlots) return;
+  dgeAdding = false; dgeGameId = gameId;
+
+  document.getElementById('dge-division-row').classList.add('hidden');
+  dgePopulateTeams(game.division_id);
+  document.getElementById('dge-home').value = String(game.home_team_id);
+  document.getElementById('dge-away').value = String(game.away_team_id);
+  dgePopulateDates(game.date);
+  document.getElementById('dge-time').value = game.time || '';
+  dgePopulateFields(game.field_id);
+  document.getElementById('dge-suggest-btn').classList.remove('hidden');
+
+  document.getElementById('dge-title').textContent = `Edit Game #${game.game_id}`;
+  document.getElementById('dge-save').textContent = 'Save Changes';
+  document.getElementById('dge-violations').classList.add('hidden');
+  document.getElementById('dge-violations').innerHTML = '';
+  document.getElementById('dge-force').classList.add('hidden');
+  document.getElementById('dge-modal').classList.remove('hidden');
+}
+
+function dgeShowViolations(violations) {
+  const div = document.getElementById('dge-violations');
+  div.innerHTML = '<strong>Constraint violations:</strong><ul>' +
+    violations.map(v => `<li>${esc(v)}</li>`).join('') + '</ul>';
+  div.classList.remove('hidden');
+  document.getElementById('dge-force').classList.remove('hidden');
+}
+
+async function dgeSuggestDates() {
+  if (dgeAdding || dgeGameId === null) return;
+  const panel = document.getElementById('dge-suggest-panel');
+  panel.classList.remove('hidden');
+  panel.innerHTML = '<p class="muted">Finding dates that work for both teams…</p>';
+  try {
+    const home = document.getElementById('dge-home').value;
+    const away = document.getElementById('dge-away').value;
+    const params = new URLSearchParams({ home_team_id: home, away_team_id: away });
+    const data = await fetchJSON(`api/game/${dgeGameId}/suggest-dates?${params}`);
+    const slots = data.suggestions || [];
+    if (!slots.length) { panel.innerHTML = '<p class="danger-text">No open date/time works for both teams right now.</p>'; return; }
+    panel.innerHTML = `<div class="suggest-panel-header"><strong>${slots.length} option(s)</strong>${data.home_field_name ? ` <span>at ${esc(data.home_field_name)}</span>` : ''}</div>` +
+      slots.slice(0, 12).map(s => `<button type="button" class="btn btn-secondary btn-sm" data-date="${s.date}" data-time="${s.time}" style="margin:3px">${s.day} ${formatDateUS(s.date)} ${s.time}</button>`).join('');
+    panel.querySelectorAll('button[data-date]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('dge-date').value = btn.dataset.date;
+        document.getElementById('dge-time').value = btn.dataset.time;
+      });
+    });
+  } catch (e) { panel.innerHTML = `<p class="danger-text">Could not load suggestions: ${esc(e.message)}</p>`; }
+}
+
+async function dgeSave(force) {
+  const date = document.getElementById('dge-date').value;
+  const time = document.getElementById('dge-time').value.trim();
+  const field_id_raw = document.getElementById('dge-field').value;
+  const home_raw = document.getElementById('dge-home').value;
+  const away_raw = document.getElementById('dge-away').value;
+  const field_id = isNaN(parseInt(field_id_raw, 10)) ? field_id_raw : parseInt(field_id_raw, 10);
+  const home_team_id = isNaN(parseInt(home_raw, 10)) ? home_raw : parseInt(home_raw, 10);
+  const away_team_id = isNaN(parseInt(away_raw, 10)) ? away_raw : parseInt(away_raw, 10);
+
+  if (home_team_id === away_team_id) { dgeShowViolations(['Home team and away team cannot be the same.']); return; }
+
+  try {
+    let res, data;
+    if (dgeAdding) {
+      const division_id = document.getElementById('dge-division').value;
+      res = await fetch('api/game', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ division_id, date, time, field_id, home_team_id, away_team_id, force: !!force }),
+      });
+    } else {
+      res = await fetch(`api/game/${dgeGameId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, time, field_id, home_team_id, away_team_id, force: !!force }),
+      });
+    }
+    data = await res.json();
+    if (res.status === 409) { dgeShowViolations(data.violations || ['Unknown conflict.']); return; }
+    if (!res.ok) { toast(data.error || 'Save failed.', 'bad'); return; }
+    scheduleData = await fetchJSON('api/schedule');
+    renderGamesList();
+    closeGameEditModal();
+    toast(force ? 'Saved — rules were forced through.' : 'Game saved.', 'good');
+  } catch (e) { toast('Network error. Try again.', 'bad'); }
+}
+
+document.getElementById('btn-add-game').addEventListener('click', openGameAdd);
+document.getElementById('dge-close').addEventListener('click', closeGameEditModal);
+document.getElementById('dge-cancel').addEventListener('click', closeGameEditModal);
+document.getElementById('dge-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeGameEditModal(); });
+document.getElementById('dge-save').addEventListener('click', () => dgeSave(false));
+document.getElementById('dge-force').addEventListener('click', () => dgeSave(true));
+document.getElementById('dge-suggest-btn').addEventListener('click', dgeSuggestDates);
+document.getElementById('dge-division').addEventListener('change', e => { if (dgeAdding) dgePopulateTeams(e.target.value); });
 
 function myProgramFields() {
   return (seasonData?.fields || []).filter(f => f.program_id === session.program_id);

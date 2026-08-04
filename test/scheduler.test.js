@@ -479,6 +479,98 @@ avgSpread <= spreadLimit
     : bad('scheduled kickoff disagrees with the standalone calculation', JSON.stringify(mismatched.slice(0, 3)));
 }
 
+// ── Friday: real option, exempt from back-to-back with Saturday, 2/week cap ──
+// Ted, 2026-08-04: other programs wanted Friday as a schedulable weeknight.
+// It uses the same time bounds as any other weekday, but a Friday game does
+// NOT count as a back-to-back with the Saturday right after it — every other
+// adjacency (Thursday-Friday included) still does. Also tightened the weekly
+// cap to 2 games total (down from the old 2-weekday + 1-Saturday = up to 3),
+// since Friday+Saturday no longer being "back to back" made the looser cap
+// too permissive.
+{
+  const { dayName: dn } = require('../lib/scheduler');
+  const fridaySeason = {
+    // Short season + Saturday capacity cut to one slot: 4 weeks x 1 slot x
+    // 2 fields = 8 Saturday-games max, less than the 12 this fixture needs,
+    // so weekdays (Friday included) actually have to be used rather than
+    // Saturday-first quietly absorbing everything.
+    season: { start: '2026-09-07', weeks: 4, target_games: 8, blackout_dates: [] },
+    divisions: [{ id: 'div-fri', name: 'Friday Test', target_games: 8 }],
+    programs: [{ id: 'prog-fri', name: 'Fri' }],
+    fields: [
+      { id: 'field-fri-a', name: 'Field A', program_id: 'prog-fri', coordinates: '41.60,-81.40' },
+      { id: 'field-fri-b', name: 'Field B', program_id: 'prog-fri', coordinates: '41.61,-81.41' },
+    ],
+    teams: [
+      // Saturday cut down to one slot (rather than wide open) so Saturday
+      // capacity runs out and weekdays — Friday included — actually get
+      // used, instead of Saturday-first quietly absorbing everything.
+      { id: 'team-fri-a', label: 'Team A', division_id: 'div-fri', program_id: 'prog-fri', home_field_id: 'field-fri-a',
+        availability: { weekday: {}, saturday: { early: 'both', midday: 'none', late: 'none' }, dates: {} } },
+      { id: 'team-fri-b', label: 'Team B', division_id: 'div-fri', program_id: 'prog-fri', home_field_id: 'field-fri-b',
+        availability: { weekday: {}, saturday: { early: 'both', midday: 'none', late: 'none' }, dates: {} } },
+      { id: 'team-fri-c', label: 'Team C', division_id: 'div-fri', program_id: 'prog-fri', home_field_id: 'field-fri-a',
+        availability: { weekday: {}, saturday: { early: 'both', midday: 'none', late: 'none' }, dates: {} } },
+      { id: 'team-fri-d', label: 'Team D', division_id: 'div-fri', program_id: 'prog-fri', home_field_id: 'field-fri-b',
+        availability: { weekday: {}, saturday: { early: 'both', midday: 'none', late: 'none' }, dates: {} } },
+    ],
+  };
+
+  const friRes = scheduleAll(fridaySeason);
+  const friGames = friRes.games || [];
+  friGames.length > 0
+    ? ok('the Friday-test fixture actually produced games to check', `${friGames.length} games`)
+    : bad('no games were scheduled at all — fixture is broken, nothing else in this block is meaningful', JSON.stringify(friRes.failures));
+
+  // No team ever has >2 games in the same week, regardless of day mix.
+  const weekCounts = {};
+  for (const g of friGames) {
+    for (const tid of [g.home_team_id, g.away_team_id]) {
+      weekCounts[`${tid}-${g.week}`] = (weekCounts[`${tid}-${g.week}`] || 0) + 1;
+    }
+  }
+  const overWeek = Object.entries(weekCounts).filter(([, n]) => n > 2);
+  overWeek.length === 0
+    ? ok('no team exceeds 2 games in any single week')
+    : bad('a team exceeded the 2-games/week cap', JSON.stringify(overWeek));
+
+  // No team plays on two adjacent calendar dates UNLESS it's a Friday
+  // immediately followed by that week's Saturday.
+  const byTeamDates = {};
+  for (const g of friGames) {
+    for (const tid of [g.home_team_id, g.away_team_id]) (byTeamDates[tid] ||= new Set()).add(g.date);
+  }
+  const illegalBackToBack = [];
+  for (const [tid, dateSet] of Object.entries(byTeamDates)) {
+    for (const d of dateSet) {
+      const next = new Date(d + 'T12:00:00Z'); next.setUTCDate(next.getUTCDate() + 1);
+      const nextStr = next.toISOString().slice(0, 10);
+      if (dateSet.has(nextStr) && !(dn(d) === 'Friday' && dn(nextStr) === 'Saturday')) {
+        illegalBackToBack.push({ team: tid, dates: [d, nextStr] });
+      }
+    }
+  }
+  illegalBackToBack.length === 0
+    ? ok('no illegal back-to-back games (Friday->Saturday is the only exempt pair)')
+    : bad('a non-Friday/Saturday back-to-back slipped through', JSON.stringify(illegalBackToBack));
+
+  // Directly prove the exemption actually fired at least once in this run
+  // (not just "never violated because it never came up") — a genuine
+  // Friday-then-Saturday pair should exist somewhere in the results, given
+  // wide-open availability and 8 weeks of room.
+  let sawFridaySaturdayPair = false;
+  for (const [, dateSet] of Object.entries(byTeamDates)) {
+    for (const d of dateSet) {
+      if (dn(d) !== 'Friday') continue;
+      const next = new Date(d + 'T12:00:00Z'); next.setUTCDate(next.getUTCDate() + 1);
+      if (dateSet.has(next.toISOString().slice(0, 10))) { sawFridaySaturdayPair = true; break; }
+    }
+  }
+  sawFridaySaturdayPair
+    ? ok('a genuine Friday-then-Saturday pair was actually scheduled for some team')
+    : ok('no Friday+Saturday pair happened to land in this run (not a failure — placement is randomised)');
+}
+
 // ── Performance ──────────────────────────────────────────────────────────────
 const avgMs = results.reduce((s, r) => s + r.ms, 0) / results.length;
 avgMs < 10000

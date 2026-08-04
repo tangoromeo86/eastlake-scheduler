@@ -9,7 +9,11 @@
 // an override once it's explicitly set to something other than "Use pattern",
 // which keeps stage 1 meaningful after stage 2 has been touched.
 
-const AV_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday'];
+// Friday used to be schedulable without a pattern row here (always resolved
+// to "Available for both" unless a team closed a specific date) — other
+// programs asked for it as a real option, so it's now configurable exactly
+// like Mon-Thu (Ted, 2026-08-04). It still has no back-to-back with Saturday.
+const AV_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 const AV_SAT_SLOTS = [['early', '10:00'], ['midday', '12:00'], ['late', '2:00']];
 const AV_STATUS = [
   ['both', 'Available for both'],
