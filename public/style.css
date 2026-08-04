@@ -256,6 +256,11 @@ header h1 {
 /* Rematch rows */
 .rematch-row td { background: #fefce8; }
 .rematch-row:hover td { background: #fef9c3 !important; }
+
+/* Cancelled (rained out) rows */
+.cancelled-row td { background: #f8fafc; color: #94a3b8; text-decoration: line-through; }
+.cancelled-row:hover td { background: #f1f5f9 !important; }
+.cancelled-row td:last-child { text-decoration: none; }
 .game-id-cell { color: #6b7280; font-size: 12px; font-weight: 600; white-space: nowrap; }
 
 .no-games {
@@ -782,6 +787,7 @@ header h1 {
 }
 .suggest-slot:last-child { border-bottom: none; }
 .suggest-slot:hover { background: #dbeafe; }
+.suggest-slot.selected { background: #bfdbfe; box-shadow: inset 3px 0 0 #2563eb; }
 .suggest-slot-date { font-weight: 600; white-space: nowrap; min-width: 110px; }
 .suggest-field-free { color: #15803d; font-size: 11px; }
 .suggest-field-busy { color: #92400e; font-size: 11px; }

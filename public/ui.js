@@ -708,6 +708,7 @@ async function submitCrmManualOverride() {
 // admin, the public viewer) for a neutral "Pending" with no assumed side.
 function gameStatusBadge(status, confirmations, mySide) {
   confirmations = confirmations || {};
+  if (status === 'cancelled')   return '<span class="pill pill-bad">Rained Out</span>';
   if (status === 'negotiating') return '<span class="unconfirmed-badge">Negotiating</span>';
   if (status === 'confirmed')   return '<span class="confirmed-badge">Confirmed</span>';
   if (status === 'pending') {

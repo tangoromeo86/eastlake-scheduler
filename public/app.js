@@ -11,6 +11,8 @@ let seasonSlots = null;
 let editingGameId = null;
 let isAddingGame = false;
 let session = null;
+let rainoutGameId = null;
+let rainoutSelectedSlot = null;
 
 // ── Top-level page switching ──────────────────────────────────────────────────
 document.querySelectorAll('.top-nav-btn').forEach(btn => {
@@ -633,7 +635,7 @@ function renderGames(divGames) {
   noMsg.classList.add('hidden');
 
   tbody.innerHTML = sorted.map(g => `
-    <tr class="game-row${g.is_rematch ? ' rematch-row' : ''}" data-game-id="${g.game_id}">
+    <tr class="game-row${g.is_rematch ? ' rematch-row' : ''}${g.status === 'cancelled' ? ' cancelled-row' : ''}" data-game-id="${g.game_id}">
       <td class="center game-id-cell">#${g.game_id}</td>
       <td class="center">W${g.week}</td>
       <td>${formatDate(g.date)}</td>
@@ -643,7 +645,7 @@ function renderGames(divGames) {
       <td class="team-cell away">${esc(g.away_team_name)}</td>
       <td>${esc(g.field_name)}</td>
       <td class="address">${esc(g.field_address)}</td>
-      <td>${gameStatusBadge(g.status || 'scheduled', g.confirmations)}</td>
+      <td>${gameStatusBadge(g.status || 'scheduled', g.confirmations)}${g.is_makeup ? ' <span class="pill pill-good">Makeup of #' + g.rescheduled_from_game_id + '</span>' : ''}${g.rescheduled_to_game_id ? ' <span class="pill pill-neutral">&rarr; #' + g.rescheduled_to_game_id + '</span>' : ''}</td>
     </tr>
   `).join('');
 }
@@ -913,6 +915,9 @@ async function openEditModal(gameId) {
   document.getElementById('edit-delete').classList.remove('hidden');
   document.getElementById('btn-suggest-dates').classList.remove('hidden');
   document.getElementById('edit-save').textContent = 'Save Changes';
+  // A cancelled game has already been rained out and replaced by its makeup —
+  // there's nothing left to rain out again.
+  document.getElementById('edit-rainout').classList.toggle('hidden', game.status === 'cancelled');
 
   // Fetch slots once
   if (!seasonSlots) {
@@ -1078,8 +1083,9 @@ async function openAddModal() {
   // Teams for selected division
   populateAddModalTeams(divSelect.value);
 
-  // Hide delete and suggest (N/A when adding)
+  // Hide delete, rain out, and suggest (N/A when adding)
   document.getElementById('edit-delete').classList.add('hidden');
+  document.getElementById('edit-rainout').classList.add('hidden');
   document.getElementById('btn-suggest-dates').classList.add('hidden');
 
   document.getElementById('modal-title').textContent = 'Add Game';
@@ -1350,6 +1356,219 @@ function renderSuggestions(suggestions, homeFieldName) {
     });
   });
 }
+
+// ── Rain Out ──────────────────────────────────────────────────────────────────
+// Cancels the currently-edited game and reschedules it as a linked makeup —
+// distinct from a plain edit/move because the original stays in the schedule
+// as history (status 'cancelled') rather than just changing date in place.
+async function openRainoutModal() {
+  if (editingGameId === null) return;
+  const game = scheduleData?.games.find(g => g.game_id === editingGameId);
+  if (!game) return;
+
+  rainoutGameId = editingGameId;
+  rainoutSelectedSlot = null;
+  closeEditModal();
+
+  document.getElementById('rainout-modal-title').textContent =
+    `Rain Out Game #${game.game_id} — ${esc(game.home_team_name)} vs ${esc(game.away_team_name)}`;
+  document.getElementById('rainout-reason').value = 'Rain out';
+  document.getElementById('rainout-body').classList.remove('hidden');
+  document.getElementById('rainout-violations').classList.add('hidden');
+  document.getElementById('rainout-violations').innerHTML = '';
+  document.getElementById('rainout-selected').classList.add('hidden');
+  document.getElementById('rainout-notify-panel').classList.add('hidden');
+  document.getElementById('rainout-cancel').classList.remove('hidden');
+  document.getElementById('rainout-confirm').classList.add('hidden');
+  document.getElementById('rainout-force').classList.add('hidden');
+  document.getElementById('rainout-done-btn').classList.add('hidden');
+  document.getElementById('rainout-email-btn').classList.add('hidden');
+
+  const panel = document.getElementById('rainout-suggest-panel');
+  panel.innerHTML = '<p class="suggest-loading">Finding makeup dates&hellip;</p>';
+  document.getElementById('rainout-modal').classList.remove('hidden');
+
+  try {
+    const params = new URLSearchParams({ home_team_id: game.home_team_id, away_team_id: game.away_team_id });
+    const data = await fetchJSON(`api/game/${game.game_id}/suggest-dates?${params}`);
+    // The game's own original date is technically "free" (it excludes
+    // itself), but offering to reschedule a rainout back onto the very day
+    // it rained out is never what anyone wants.
+    const suggestions = data.suggestions.filter(s => s.date !== game.date);
+    renderRainoutSuggestions(suggestions, data.home_field_name, game.field_id);
+  } catch (e) {
+    panel.innerHTML = `<p class="suggest-empty">Error: ${esc(e.message)}</p>`;
+  }
+}
+
+function renderRainoutSuggestions(suggestions, homeFieldName, fieldId) {
+  const panel = document.getElementById('rainout-suggest-panel');
+
+  if (!suggestions.length) {
+    panel.innerHTML = `<p class="suggest-empty">No available makeup dates found for these two teams for the rest of the season.</p>`;
+    return;
+  }
+
+  const headerNote = homeFieldName ? ` &middot; ${esc(homeFieldName)} field usage shown` : '';
+  let html = `<div class="suggest-panel-header">
+    <span>${suggestions.length} available makeup date${suggestions.length !== 1 ? 's' : ''}${headerNote}</span>
+  </div><div class="suggest-slots">`;
+
+  let lastWeek = null;
+  for (const s of suggestions) {
+    if (s.week !== lastWeek) {
+      html += `<div class="suggest-week-label">Week ${s.week}</div>`;
+      lastWeek = s.week;
+    }
+    let fieldHtml = '';
+    if (homeFieldName) {
+      if (s.field_games.length === 0) {
+        fieldHtml = `<span class="suggest-field-free">Field open</span>`;
+      } else {
+        const gameList = s.field_games.map(g =>
+          `${g.time ? formatTime12h(g.time) + ' ' : ''}${esc(g.home)} vs ${esc(g.away)}`
+        ).join(', ');
+        fieldHtml = `<span class="suggest-field-busy">${s.field_games.length} game${s.field_games.length !== 1 ? 's' : ''}: ${gameList}</span>`;
+      }
+    }
+    html += `<button class="suggest-slot" data-date="${s.date}" data-time="${s.time}">
+      <span class="suggest-slot-date">${esc(s.day)} ${formatDate(s.date)} &middot; ${formatTime12h(s.time)}</span>
+      ${fieldHtml}
+    </button>`;
+  }
+
+  html += '</div>';
+  panel.innerHTML = html;
+
+  panel.querySelectorAll('.suggest-slot').forEach(btn => {
+    btn.addEventListener('click', () => {
+      panel.querySelectorAll('.suggest-slot').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      rainoutSelectedSlot = { date: btn.dataset.date, time: btn.dataset.time, field_id: fieldId };
+      document.getElementById('rainout-selected-msg').textContent =
+        `Reschedule to ${btn.querySelector('.suggest-slot-date').textContent}.`;
+      document.getElementById('rainout-selected').classList.remove('hidden');
+      document.getElementById('rainout-confirm').classList.remove('hidden');
+      document.getElementById('rainout-force').classList.add('hidden');
+      document.getElementById('rainout-violations').classList.add('hidden');
+    });
+  });
+}
+
+async function confirmRainout(force) {
+  if (rainoutGameId === null || !rainoutSelectedSlot) return;
+  const reason = document.getElementById('rainout-reason').value.trim() || 'Rain out';
+
+  const btn = force ? document.getElementById('rainout-force') : document.getElementById('rainout-confirm');
+  btn.disabled = true;
+
+  try {
+    const res = await fetch(`api/game/${rainoutGameId}/rainout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason, date: rainoutSelectedSlot.date, time: rainoutSelectedSlot.time, field_id: rainoutSelectedSlot.field_id, force: !!force }),
+    });
+    const data = await res.json();
+
+    if (res.status === 409) {
+      const div = document.getElementById('rainout-violations');
+      div.innerHTML = '<strong>Constraint violations:</strong><ul>' +
+        (data.violations || ['Unknown conflict.']).map(v => `<li>${esc(v)}</li>`).join('') + '</ul>';
+      div.classList.remove('hidden');
+      document.getElementById('rainout-force').classList.remove('hidden');
+      return;
+    }
+    if (!res.ok) { showBanner(data.error || 'Rain out failed.', 'error'); return; }
+
+    // Update in-memory schedule: original cancelled, new makeup game added.
+    if (scheduleData) {
+      const idx = scheduleData.games.findIndex(g => g.game_id === data.cancelled_game.game_id);
+      if (idx !== -1) scheduleData.games[idx] = data.cancelled_game;
+      scheduleData.games.push(data.makeup_game);
+      scheduleData.games.sort((a, b) => (a.date > b.date ? 1 : a.date < b.date ? -1 : 0));
+      scheduleData.total_games = scheduleData.games.length;
+    }
+    renderCurrentView();
+    updateChangesBadge();
+    showRainoutResultPanel(data.change);
+  } catch (err) {
+    showBanner('Rain out error: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function showRainoutResultPanel(change) {
+  document.getElementById('rainout-body').classList.add('hidden');
+  document.getElementById('rainout-cancel').classList.add('hidden');
+  document.getElementById('rainout-confirm').classList.add('hidden');
+  document.getElementById('rainout-force').classList.add('hidden');
+
+  document.getElementById('rainout-notify-banner').innerHTML =
+    `&#127783; Game #${change.game_id} rained out — makeup is Game #${change.makeup_game_id}`;
+
+  const before = change.before || {};
+  const after = change.after || {};
+  document.getElementById('rainout-notify-details').innerHTML = `
+    <div class="notify-change-row"><span class="notify-change-field">Original</span><span style="color:#94a3b8;text-decoration:line-through">${esc(formatDate(before.date) || '—')} ${esc(formatTime12h(before.time) || '')}</span></div>
+    <div class="notify-change-row"><span class="notify-change-field">Makeup</span><span style="color:#166534;font-weight:600">${esc(formatDate(after.date) || '—')} ${esc(formatTime12h(after.time) || '')} &middot; ${esc(after.field_name || '')}</span></div>`;
+
+  const cards = [
+    { role: 'Home Team', t: change.home_team },
+    { role: 'Away Team', t: change.away_team },
+  ].map(({ role, t }) => {
+    if (!t) return `<div class="notify-team-card"><div class="notify-team-role">${role}</div><div class="notify-no-contact">No contact info</div></div>`;
+    return `<div class="notify-team-card">
+      <div class="notify-team-role">${role}</div>
+      <div class="notify-team-name">${esc(t.name)}</div>
+      <div class="notify-team-contact">
+        ${t.coach ? `<span>&#128100; ${esc(t.coach)}</span>` : ''}
+        ${t.email ? `<span>&#9993; <a href="mailto:${esc(t.email)}">${esc(t.email)}</a></span>` : '<span style="color:#94a3b8">No email on file</span>'}
+        ${t.phone ? `<span>&#128222; ${esc(t.phone)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('rainout-notify-team-cards').innerHTML = cards;
+
+  const emails = [change.home_team?.email, change.away_team?.email].filter(Boolean);
+  const emailBtn = document.getElementById('rainout-email-btn');
+  emailBtn.innerHTML = '&#9993; Email Both Coaches';
+  emailBtn.style.pointerEvents = '';
+  emailBtn.style.background = '';
+  if (emails.length) {
+    emailBtn.onclick = async (e) => {
+      e.preventDefault();
+      emailBtn.textContent = 'Sending…';
+      emailBtn.style.pointerEvents = 'none';
+      try {
+        const r = await fetch('api/notify-rainout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ change_id: change.id }) });
+        const d = await r.json();
+        if (d.ok) { emailBtn.textContent = '✓ Sent'; emailBtn.style.background = '#16a34a'; }
+        else { emailBtn.textContent = '✗ Failed — ' + (d.error || 'error'); emailBtn.style.pointerEvents = ''; }
+      } catch { emailBtn.textContent = '✗ Network error'; emailBtn.style.pointerEvents = ''; }
+    };
+    emailBtn.classList.remove('hidden');
+  }
+
+  document.getElementById('rainout-notify-panel').classList.remove('hidden');
+  document.getElementById('rainout-done-btn').classList.remove('hidden');
+}
+
+function closeRainoutModal() {
+  document.getElementById('rainout-modal').classList.add('hidden');
+  rainoutGameId = null;
+  rainoutSelectedSlot = null;
+}
+
+document.getElementById('edit-rainout').addEventListener('click', openRainoutModal);
+document.getElementById('rainout-modal-close').addEventListener('click', closeRainoutModal);
+document.getElementById('rainout-cancel').addEventListener('click', closeRainoutModal);
+document.getElementById('rainout-done-btn').addEventListener('click', closeRainoutModal);
+document.getElementById('rainout-confirm').addEventListener('click', () => confirmRainout(false));
+document.getElementById('rainout-force').addEventListener('click', () => confirmRainout(true));
+document.getElementById('rainout-modal').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('rainout-modal')) closeRainoutModal();
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function formatDate(d) {

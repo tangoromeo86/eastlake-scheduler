@@ -700,7 +700,9 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
   const homeBlackouts = new Set(homeTeam?.blackout_dates || []);
   const awayBlackouts = new Set(awayTeam?.blackout_dates || []);
 
-  const otherGames = schedData.games.filter(g => g.game_id !== game.game_id);
+  // Cancelled games don't occupy their old slot — a rained-out game shouldn't
+  // block anyone (including its own makeup) from reusing that date/field.
+  const otherGames = schedData.games.filter(g => g.game_id !== game.game_id && g.status !== 'cancelled');
   const homeDates = new Set(otherGames
     .filter(g => g.home_team_id === home_team_id || g.away_team_id === home_team_id).map(g => g.date));
   const awayDates = new Set(otherGames
@@ -1057,6 +1059,146 @@ app.put('/api/game/:id', requireAdmin, (req, res) => {
   try { fs.writeFileSync(CHANGES_FILE, JSON.stringify(allChanges, null, 2)); } catch {}
 
   res.json({ ok: true, game: updatedGame, violations, change: changeRecord });
+});
+
+// Rain-out reschedule: cancels the original game in place (kept in
+// schedule.json as history — status 'cancelled' — rather than deleted, so
+// there's a record of what was originally on the calendar) and creates a
+// new linked "makeup" game at the chosen date/time/field. The two records
+// point at each other (rescheduled_to_game_id / rescheduled_from_game_id) so
+// either can be traced from the other.
+app.post('/api/game/:id/rainout', requireAdmin, (req, res) => {
+  const gameId = parseInt(req.params.id, 10);
+  const { reason, date, time, field_id, force } = req.body;
+  if (!date || !time) return res.status(400).json({ error: 'date and time are required' });
+
+  let schedData, seasonData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` }); }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
+
+  const gameIdx = schedData.games.findIndex(g => g.game_id === gameId);
+  if (gameIdx === -1) return res.status(404).json({ error: `Game ${gameId} not found` });
+
+  const original = schedData.games[gameIdx];
+  if (original.status === 'cancelled')
+    return res.status(400).json({ error: `Game ${gameId} has already been rained out.` });
+
+  const field_id_p = field_id != null ? (isNaN(parseInt(field_id, 10)) ? field_id : parseInt(field_id, 10)) : original.field_id;
+
+  const editedGame = {
+    id: gameId, date, time, field_id: field_id_p,
+    home_team_id: original.home_team_id, away_team_id: original.away_team_id,
+    division_id: original.division_id, week: original.week,
+  };
+  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [] };
+  const violations = validateGameEdit(editedGame, schedData.games, seasonForValidation);
+  if (violations.length && !force) return res.status(409).json({ violations });
+
+  let newWeek = null;
+  for (const wk of buildSeasonWeeks(seasonData.season)) {
+    if (wk.weekdays.includes(date) || wk.saturday === date) { newWeek = wk.week; break; }
+  }
+
+  const fieldObj = (seasonData.fields || []).find(f => f.id === field_id_p);
+  const resolvedFieldName    = fieldObj ? (fieldObj.sub_field ? `${fieldObj.name} – ${fieldObj.sub_field}` : (fieldObj.name || field_id_p)) : original.field_name;
+  const resolvedFieldAddress = fieldObj ? (fieldObj.address || '') : original.field_address;
+
+  const homeTeam = (seasonData.teams || []).find(t => t.id === original.home_team_id);
+  const awayTeam = (seasonData.teams || []).find(t => t.id === original.away_team_id);
+
+  const makeupId = Math.max(0, ...schedData.games.map(g => g.game_id || 0)) + 1;
+  const makeupGame = {
+    game_id: makeupId, status: 'scheduled', division_id: original.division_id, week: newWeek,
+    date, day: dayName(date), time,
+    field_id: field_id_p, field_name: resolvedFieldName, field_address: resolvedFieldAddress,
+    home_team_id: original.home_team_id, home_team_name: original.home_team_name,
+    away_team_id: original.away_team_id, away_team_name: original.away_team_name,
+    is_rematch: !!original.is_rematch,
+    is_makeup: true,
+    rescheduled_from_game_id: gameId,
+  };
+
+  const cancelledAt = new Date().toISOString();
+  const cancelledOriginal = {
+    ...original,
+    status: 'cancelled',
+    cancelled_reason: reason || 'Rain out',
+    cancelled_at: cancelledAt,
+    rescheduled_to_game_id: makeupId,
+  };
+  schedData.games[gameIdx] = cancelledOriginal;
+  schedData.games.push(makeupGame);
+  schedData.games.sort((a, b) => (a.date > b.date ? 1 : a.date < b.date ? -1 : 0));
+  schedData.total_games = schedData.games.length;
+  schedData.generated_at = cancelledAt;
+
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
+
+  function teamContact(t) {
+    if (!t) return null;
+    return { id: t.id, name: teamName(t), coach: t.coach || '', email: t.email || '', phone: t.phone || '' };
+  }
+
+  const changeRecord = {
+    id: Date.now(),
+    timestamp: cancelledAt,
+    type: 'rainout',
+    game_id: gameId,
+    makeup_game_id: makeupId,
+    division_id: original.division_id,
+    division_name: (() => {
+      const d = (seasonData.divisions || []).find(d => d.id === original.division_id);
+      return d ? (d.name || d.label || d.id) : original.division_id;
+    })(),
+    before: { date: original.date, day: original.day, time: original.time, field_name: original.field_name },
+    after: { ...makeupGame },
+    changed_fields: [],
+    reason: cancelledOriginal.cancelled_reason,
+    home_team: teamContact(homeTeam),
+    away_team: teamContact(awayTeam),
+    forced: !!force,
+  };
+
+  let allChanges = [];
+  try { if (fs.existsSync(CHANGES_FILE)) allChanges = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
+  allChanges.push(changeRecord);
+  try { fs.writeFileSync(CHANGES_FILE, JSON.stringify(allChanges, null, 2)); } catch {}
+
+  res.json({ ok: true, cancelled_game: cancelledOriginal, makeup_game: makeupGame, violations, change: changeRecord });
+});
+
+app.post('/api/notify-rainout', requireAdmin, async (req, res) => {
+  const { change_id } = req.body;
+  let changes = [];
+  try { changes = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
+  const change = changes.find(c => c.id === change_id);
+  if (!change) return res.status(404).json({ error: 'Change not found' });
+
+  const emails = [change.home_team?.email, change.away_team?.email].filter(Boolean);
+  if (!emails.length) return res.status(400).json({ error: 'No email on file for either team' });
+
+  const divName = change.division_name || change.division_id;
+  const before = change.before || {};
+  const after = change.after || {};
+  const lines = [
+    'Hi coaches,', '',
+    `Game #${change.game_id} — ${divName} was rained out and has been rescheduled:`, '',
+    `${change.home_team?.name || 'Home'} (H) vs ${change.away_team?.name || 'Away'} (A)`, '',
+    `Reason: ${change.reason || 'Rain out'}`, '',
+    `Original date: ${before.day || ''} ${before.date || ''} — cancelled`, '',
+    'New makeup game:',
+    `  Date: ${after.day || ''} ${after.date || ''}`,
+    `  Time: ${after.time || ''}`,
+    `  Field: ${after.field_name || ''}`,
+    `  Address: ${after.field_address || ''}`,
+    '', 'Please update your calendars accordingly.', '', '— Eastlake League Admin',
+  ];
+  const result = await sendEmail({ to: emails, subject: `Rained Out & Rescheduled: Game #${change.game_id} — ${divName}`, text: lines.join('\n') });
+  if (!result.ok) return res.status(500).json({ error: result.reason });
+  res.json({ ok: true, sent_to: emails });
 });
 
 app.delete('/api/game/:id', requireAdmin, (req, res) => {
