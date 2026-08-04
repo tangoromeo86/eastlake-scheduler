@@ -737,6 +737,28 @@ async function loginAs(page, email, password) {
     wrapped ? ok('every table sits in a scrollable wrapper')
             : bad('an unwrapped table can break the layout', 'table outside .table-wrap');
 
+    // The games table itself: Ted found this by hand — a Score column plus up
+    // to 5 action buttons crammed into one <td> made rows balloon to ~200px
+    // of mostly dead space on a phone. Below 640px it should switch to one
+    // card per game instead of trying to force the table to fit.
+    const gamesLayout = await mpage.evaluate(() => {
+      const table = document.querySelector('#games-list .mg-table-wrap');
+      const cards = document.querySelector('#games-list .mg-cards');
+      const cardEls = [...document.querySelectorAll('#games-list .mg-card')];
+      return {
+        tableHidden: table ? table.offsetParent === null : null,
+        cardsVisible: cards ? cards.offsetParent !== null : null,
+        cardCount: cardEls.length,
+        tallestCard: Math.max(0, ...cardEls.map(c => c.getBoundingClientRect().height)),
+      };
+    });
+    gamesLayout.tableHidden === true && gamesLayout.cardsVisible === true && gamesLayout.cardCount > 0
+      ? ok('games list switches to cards on mobile, not a squeezed table', `${gamesLayout.cardCount} cards`)
+      : bad('games list did not switch to the mobile card layout', JSON.stringify(gamesLayout));
+    gamesLayout.tallestCard > 0 && gamesLayout.tallestCard < 320
+      ? ok('game cards stay a reasonable height, not ~200px of dead space per row', `${Math.round(gamesLayout.tallestCard)}px`)
+      : bad('a game card is unreasonably tall', `${Math.round(gamesLayout.tallestCard)}px`);
+
     // Touch targets — the coarse-pointer rule should give real height.
     const smallTargets = await mpage.evaluate(() =>
       [...document.querySelectorAll('.btn')]

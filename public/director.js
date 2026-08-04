@@ -123,6 +123,42 @@ function liveStatusHtml(active) {
     ${bits.join(' · ')}${flags.length ? ` <em>(${flags.join(', ')})</em>` : ''}</div>`;
 }
 
+// Computes everything both the table row and the mobile card need for one
+// game, once, so the two render paths can't quietly drift apart from
+// each other.
+function dirGameRowCtx(g) {
+  const status = g.status || 'scheduled';
+  // Whichever of our program's teams is involved is who we'd act on behalf of.
+  const myTeamId = [g.home_team_id, g.away_team_id].find(id => myProgramTeams().some(t => String(t.id) === String(id)));
+  const mySide = String(myTeamId) === String(g.home_team_id) ? 'home' : 'away';
+  const confirmations = g.confirmations || {};
+  return {
+    g, myTeamId, status,
+    statusBadge: gameStatusBadge(status, confirmations, mySide),
+    canRequest: status !== 'negotiating',
+    // TODO: once tested, gate this to the day before the game through 2
+    // weeks after it — for now it's shown on every eligible game per Ted.
+    canRainout: status !== 'negotiating' && status !== 'cancelled',
+    // TODO: once tested, only show this once the game's kickoff has passed
+    // — for now it's shown on every eligible game per Ted, same as rainout.
+    canScore: status !== 'cancelled',
+    // A director can confirm on a coach's behalf — Ted: "either nudge them
+    // offline, or confirm them on the coach's behalf."
+    canConfirm: (status === 'scheduled' || status === 'pending') && !confirmations[mySide],
+  };
+}
+
+function dirGameActionButtons(ctx) {
+  const g = ctx.g, tid = String(ctx.myTeamId);
+  return [
+    ctx.canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id},'${tid}')">Confirm</button>` : '',
+    ctx.canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id},'${tid}')">Request Change</button>` : '',
+    ctx.canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id},'${tid}')">Rain Out</button>` : '',
+    ctx.canScore ? `<button class="btn btn-secondary btn-sm" onclick="openScore(${g.game_id},'${tid}')">${g.result ? 'Edit Score' : 'Report Score'}</button>` : '',
+    `<button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>`,
+  ].join('');
+}
+
 function renderGamesList() {
   const games = myProgramGames();
   const list = document.getElementById('games-list');
@@ -130,43 +166,34 @@ function renderGamesList() {
     list.innerHTML = '<p class="empty-note">No games scheduled yet.</p>';
     return;
   }
-  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
+  const rows = games.map(dirGameRowCtx);
+
+  const table = `<div class="mg-table-wrap table-wrap"><table class="fields-table">
     <thead><tr><th>Date</th><th>Home</th><th>Away</th><th>Status</th><th>Score</th><th></th></tr></thead>
     <tbody>
-    ${games.map(g => {
-      const status = g.status || 'scheduled';
-      // Whichever of our program's teams is involved is who we'd act on behalf of.
-      const myTeamId = [g.home_team_id, g.away_team_id].find(id => myProgramTeams().some(t => String(t.id) === String(id)));
-      const mySide = String(myTeamId) === String(g.home_team_id) ? 'home' : 'away';
-      const confirmations = g.confirmations || {};
-      const statusBadge = gameStatusBadge(status, confirmations, mySide);
-      const canRequest = status !== 'negotiating';
-      // TODO: once tested, gate this to the day before the game through 2
-      // weeks after it — for now it's shown on every eligible game per Ted.
-      const canRainout = status !== 'negotiating' && status !== 'cancelled';
-      // TODO: once tested, only show this once the game's kickoff has passed
-      // — for now it's shown on every eligible game per Ted, same as rainout.
-      const canScore = status !== 'cancelled';
-      // A director can confirm on a coach's behalf — Ted: "either nudge them
-      // offline, or confirm them on the coach's behalf."
-      const canConfirm = (status === 'scheduled' || status === 'pending') && !confirmations[mySide];
-      return `<tr>
-        <td>${esc(g.day)} ${esc(g.date)} ${esc(g.time)}</td>
-        <td>${esc(g.home_team_name)}</td>
-        <td>${esc(g.away_team_name)}</td>
-        <td>${statusBadge}${liveStatusHtml(activeByGame[g.game_id])}</td>
-        <td>${resultBadge(g)}</td>
-        <td><div class="row-actions">
-          ${canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id},'${String(myTeamId)}')">Confirm</button>` : ''}
-          ${canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id},'${String(myTeamId)}')">Request Change</button>` : ''}
-          ${canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id},'${String(myTeamId)}')">Rain Out</button>` : ''}
-          ${canScore ? `<button class="btn btn-secondary btn-sm" onclick="openScore(${g.game_id},'${String(myTeamId)}')">${g.result ? 'Edit Score' : 'Report Score'}</button>` : ''}
-          <button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>
-        </div></td>
-      </tr>`;
-    }).join('')}
+    ${rows.map(ctx => `<tr>
+        <td>${esc(ctx.g.day)} ${esc(ctx.g.date)} ${esc(ctx.g.time)}</td>
+        <td>${esc(ctx.g.home_team_name)}</td>
+        <td>${esc(ctx.g.away_team_name)}</td>
+        <td>${ctx.statusBadge}${liveStatusHtml(activeByGame[ctx.g.game_id])}</td>
+        <td>${resultBadge(ctx.g)}</td>
+        <td><div class="row-actions">${dirGameActionButtons(ctx)}</div></td>
+      </tr>`).join('')}
     </tbody>
   </table></div>`;
+
+  const cards = `<div class="mg-cards">
+    ${rows.map(ctx => `<div class="mg-card">
+        <div class="mg-card-top">
+          <span>${esc(ctx.g.day)} ${esc(ctx.g.date)} ${esc(ctx.g.time)}</span>
+        </div>
+        <div class="mg-card-matchup">${esc(ctx.g.home_team_name)} <span class="mg-ha">vs</span> ${esc(ctx.g.away_team_name)}</div>
+        <div class="mg-card-badges">${ctx.statusBadge}${liveStatusHtml(activeByGame[ctx.g.game_id])} ${resultBadge(ctx.g)}</div>
+        <div class="mg-card-actions">${dirGameActionButtons(ctx)}</div>
+      </div>`).join('')}
+  </div>`;
+
+  list.innerHTML = table + cards;
 }
 
 // Confirm on behalf of whichever of the director's own teams is in this game.

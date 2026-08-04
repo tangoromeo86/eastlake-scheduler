@@ -105,6 +105,43 @@ function liveStatusHtml(active) {
     ${bits.join(' · ')}${flags.length ? ` <em>(${flags.join(', ')})</em>` : ''}</div>`;
 }
 
+// Computes everything both the table row and the mobile card need for one
+// game, once, so the two render paths can't quietly drift apart from
+// each other.
+function myGameRowCtx(g) {
+  const isHome = g.home_team_id === myTeam.id;
+  const mySide = isHome ? 'home' : 'away';
+  const opp = opponentTeam(g);
+  const status = g.status || 'scheduled';
+  const confirmations = g.confirmations || {};
+  const iConfirmed = !!confirmations[mySide];
+  return {
+    g, isHome, opp, status,
+    statusBadge: gameStatusBadge(status, confirmations, mySide),
+    canRequest: status !== 'negotiating',
+    // TODO: once tested, gate this to the day before the game through 2
+    // weeks after it — for now it's shown on every eligible game per Ted.
+    canRainout: status !== 'negotiating' && status !== 'cancelled',
+    // TODO: once tested, only show this once the game's kickoff has passed
+    // — for now it's shown on every eligible game per Ted, same as rainout.
+    canScore: status !== 'cancelled',
+    // Scheduled/Pending-and-not-yet-my-turn both mean "I haven't confirmed
+    // this game as-is yet" — Confirmed and Negotiating never show the button.
+    canConfirm: (status === 'scheduled' || status === 'pending') && !iConfirmed,
+  };
+}
+
+function myGameActionButtons(ctx) {
+  const g = ctx.g;
+  return [
+    ctx.canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id})">Confirm</button>` : '',
+    ctx.canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id})">Request Change</button>` : '',
+    ctx.canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id})">Rain Out</button>` : '',
+    ctx.canScore ? `<button class="btn btn-secondary btn-sm" onclick="openScore(${g.game_id})">${g.result ? 'Edit Score' : 'Report Score'}</button>` : '',
+    `<button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>`,
+  ].join('');
+}
+
 function renderGamesList() {
   const games = myGames();
   const list = document.getElementById('games-list');
@@ -112,44 +149,35 @@ function renderGamesList() {
     list.innerHTML = '<p class="empty-note">No games scheduled yet.</p>';
     return;
   }
-  list.innerHTML = `<div class="table-wrap"><table class="fields-table">
+  const rows = games.map(myGameRowCtx);
+
+  const table = `<div class="mg-table-wrap table-wrap"><table class="fields-table">
     <thead><tr><th>Date</th><th>Opponent</th><th>H/A</th><th>Status</th><th>Score</th><th></th></tr></thead>
     <tbody>
-    ${games.map(g => {
-      const isHome = g.home_team_id === myTeam.id;
-      const mySide = isHome ? 'home' : 'away';
-      const opp = opponentTeam(g);
-      const status = g.status || 'scheduled';
-      const confirmations = g.confirmations || {};
-      const iConfirmed = !!confirmations[mySide];
-      const statusBadge = gameStatusBadge(status, confirmations, mySide);
-      const canRequest = status !== 'negotiating';
-      // TODO: once tested, gate this to the day before the game through 2
-      // weeks after it — for now it's shown on every eligible game per Ted.
-      const canRainout = status !== 'negotiating' && status !== 'cancelled';
-      // TODO: once tested, only show this once the game's kickoff has passed
-      // — for now it's shown on every eligible game per Ted, same as rainout.
-      const canScore = status !== 'cancelled';
-      // Scheduled/Pending-and-not-yet-my-turn both mean "I haven't confirmed
-      // this game as-is yet" — Confirmed and Negotiating never show the button.
-      const canConfirm = (status === 'scheduled' || status === 'pending') && !iConfirmed;
-      return `<tr>
-        <td>${esc(g.day)} ${esc(g.date)} ${esc(g.time)}</td>
-        <td>${esc(opp ? (opp.label || opp.name) : '—')}</td>
-        <td>${isHome ? 'Home' : 'Away'}</td>
-        <td>${statusBadge}</td>
-        <td>${resultBadge(g)}</td>
-        <td><div class="row-actions">
-          ${canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id})">Confirm</button>` : ''}
-          ${canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id})">Request Change</button>` : ''}
-          ${canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id})">Rain Out</button>` : ''}
-          ${canScore ? `<button class="btn btn-secondary btn-sm" onclick="openScore(${g.game_id})">${g.result ? 'Edit Score' : 'Report Score'}</button>` : ''}
-          <button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>
-        </div></td>
-      </tr>`;
-    }).join('')}
+    ${rows.map(ctx => `<tr>
+        <td>${esc(ctx.g.day)} ${esc(ctx.g.date)} ${esc(ctx.g.time)}</td>
+        <td>${esc(ctx.opp ? (ctx.opp.label || ctx.opp.name) : '—')}</td>
+        <td>${ctx.isHome ? 'Home' : 'Away'}</td>
+        <td>${ctx.statusBadge}</td>
+        <td>${resultBadge(ctx.g)}</td>
+        <td><div class="row-actions">${myGameActionButtons(ctx)}</div></td>
+      </tr>`).join('')}
     </tbody>
   </table></div>`;
+
+  const cards = `<div class="mg-cards">
+    ${rows.map(ctx => `<div class="mg-card">
+        <div class="mg-card-top">
+          <span>${esc(ctx.g.day)} ${esc(ctx.g.date)} ${esc(ctx.g.time)}</span>
+          <span class="mg-ha">${ctx.isHome ? 'Home' : 'Away'}</span>
+        </div>
+        <div class="mg-card-matchup">vs ${esc(ctx.opp ? (ctx.opp.label || ctx.opp.name) : '—')}</div>
+        <div class="mg-card-badges">${ctx.statusBadge} ${resultBadge(ctx.g)}</div>
+        <div class="mg-card-actions">${myGameActionButtons(ctx)}</div>
+      </div>`).join('')}
+  </div>`;
+
+  list.innerHTML = table + cards;
 }
 
 // Every write action below hits a requireVerified route — gating here means
