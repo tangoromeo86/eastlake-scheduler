@@ -223,6 +223,10 @@ async function verifyPage(page, email, srv) {
     await cp.fill('#email-input', someTeam.email);
     await cp.click('#continue-btn');
     await cp.waitForTimeout(600);
+    // Request Change (and Rain Out, and Report Score) all now gate on a
+    // verified session before opening — an unverified click here would
+    // correctly refuse, which isn't what this section is testing.
+    await verifyPage(cp, someTeam.email, srv);
     await cp.goto(`${BASE}/my-team`, { waitUntil: 'networkidle' });
     await cp.waitForTimeout(500);
     const reqBtn = cp.locator('button:has-text("Request Change")').first();
@@ -302,6 +306,9 @@ async function verifyPage(page, email, srv) {
       await dp.fill('#email-input', someDirector.email);
       await dp.click('#continue-btn');
       await dp.waitForTimeout(600);
+      // Same gating as the coach case above — the deep-linked form won't
+      // auto-open for an unverified session.
+      await verifyPage(dp, someDirector.email, srv);
       await dp.goto(`${BASE}/`, { waitUntil: 'networkidle' });
       await dp.waitForTimeout(600); // the auto-shown first-login help modal appears 400ms after load
       const helpClose = dp.locator('#help-close');
@@ -330,8 +337,10 @@ async function verifyPage(page, email, srv) {
 
     // ── Confirmation lifecycle: Scheduled -> Pending -> Confirmed, badges ────
     // Confirm and change-request submission both require a verified session —
-    // verify once via `cp`; `lp` below is a new page in the same context
-    // (coachCtx), so the cookie carries over.
+    // `cp` was already verified above for the Request Change gating check;
+    // re-verifying here is harmless and keeps this block independently
+    // runnable if the earlier one is ever removed. `lp` below is a new page
+    // in the same context (coachCtx), so the cookie carries over either way.
     const verified = await verifyPage(cp, someTeam.email, srv);
     verified ? ok('coach session verified for the lifecycle test') : bad('could not verify coach session', '');
 

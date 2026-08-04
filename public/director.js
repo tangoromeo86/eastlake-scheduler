@@ -171,6 +171,7 @@ function renderGamesList() {
 
 // Confirm on behalf of whichever of the director's own teams is in this game.
 async function confirmGame(gameId, teamId) {
+  if (!requireVerifiedToEdit()) return;
   try {
     const res = await fetch(`api/games/${gameId}/confirm`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ team_id: teamId }),
@@ -184,6 +185,7 @@ async function confirmGame(gameId, teamId) {
 }
 
 function openChangeRequest(gameId, teamId) {
+  if (!requireVerifiedToEdit()) return;
   const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
   if (!game) return;
   crTeamId = teamId;
@@ -195,6 +197,7 @@ function openChangeRequest(gameId, teamId) {
 }
 
 function openRainout(gameId, teamId) {
+  if (!requireVerifiedToEdit()) return;
   const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
   if (!game) return;
   crTeamId = teamId;
@@ -207,6 +210,7 @@ function openRainout(gameId, teamId) {
 }
 
 function openScore(gameId, teamId) {
+  if (!requireVerifiedToEdit()) return;
   const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
   if (!game) return;
   openScoreModal({

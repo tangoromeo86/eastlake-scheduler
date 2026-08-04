@@ -21,24 +21,31 @@
 
     <div class="field-editor-form">
       <div class="field-form-inner" id="mte-form">
-        <div class="field-form-row">
-          <label>Team Name *<input id="mte-label" type="text" placeholder="e.g. Wildcats U10"></label>
-        </div>
-        <div class="field-form-row">
-          <label>Coach Name<input id="mte-coach" type="text" placeholder="e.g. Jane Smith"></label>
-          <label>Home Field<select id="mte-field"><option value="">— None yet —</option></select></label>
-        </div>
-        <div class="field-form-row">
-          <label>Coach Email<input id="mte-email" type="email" inputmode="email" autocomplete="email" spellcheck="false" placeholder="jane@example.com"></label>
-          <label>Coach Phone<input id="mte-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 555-5555"></label>
-          <label>Games this season <span class="field-form-hint">(blank = league default)</span><input id="mte-target" type="number" min="1" max="20"></label>
-        </div>
-        <div class="field-form-row">
-          <label>First available day <span class="field-form-hint">(blank = whole season — your director sets this if your team starts later than everyone else)</span><input id="mte-earliest" type="date"></label>
-        </div>
-        <h3 style="margin-top:20px">Weekly Availability</h3>
-        <p class="field-form-hint" style="margin-bottom:10px">When can this team play? Fields left blank default to "Available for both."</p>
-        <div id="mte-availability"></div>
+        <details id="mte-info-details" class="av-group">
+          <summary id="mte-info-summary">Team Info</summary>
+          <div class="field-form-row" style="margin-top:12px">
+            <label>Team Name *<input id="mte-label" type="text" placeholder="e.g. Wildcats U10"></label>
+          </div>
+          <div class="field-form-row">
+            <label>Coach Name<input id="mte-coach" type="text" placeholder="e.g. Jane Smith"></label>
+            <label>Home Field<select id="mte-field"><option value="">— None yet —</option></select></label>
+          </div>
+          <div class="field-form-row">
+            <label>Coach Email<input id="mte-email" type="email" inputmode="email" autocomplete="email" spellcheck="false" placeholder="jane@example.com"></label>
+            <label>Coach Phone<input id="mte-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 555-5555"></label>
+            <label>Games this season <span class="field-form-hint">(blank = league default)</span><input id="mte-target" type="number" min="1" max="20"></label>
+          </div>
+          <div class="field-form-row">
+            <label>First available day <span class="field-form-hint">(blank = whole season — your director sets this if your team starts later than everyone else)</span><input id="mte-earliest" type="date"></label>
+          </div>
+        </details>
+
+        <details id="mte-avail-details" class="av-group" style="margin-top:12px">
+          <summary>Weekly Availability</summary>
+          <p class="field-form-hint" style="margin:10px 0">When can this team play? Fields left blank default to "Available for both."</p>
+          <div id="mte-availability"></div>
+        </details>
+
         <div class="field-form-actions">
           <button id="mte-save" class="btn btn-primary">Save Changes</button>
         </div>
@@ -47,13 +54,11 @@
       </div>
     </div>
 
-    <div class="field-editor-form section-gap">
-      <div class="field-form-inner">
-        <h3>Availability Calendar</h3>
-        <p class="field-form-hint" style="margin-bottom:0">How your saved availability above looks across the season.</p>
-      </div>
+    <details id="mte-cal-details" class="av-group section-gap">
+      <summary>Availability Calendar</summary>
+      <p class="field-form-hint" style="margin:10px 0 0">How your saved availability above looks across the season.</p>
       <div id="mte-avail-cal" class="av-cal-wrapper"></div>
-    </div>
+    </details>
 
     <h3 class="section-gap">Upcoming Games</h3>
     <div id="games-list"></div>

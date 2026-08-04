@@ -536,6 +536,19 @@ async function openChangeRequestModal({ game, teamId, otherTeam, fields, refresh
     if (teamId) params.set('team_id', teamId);
     const res = await fetch('api/change-requests/options?' + params.toString());
     const data = await res.json();
+    // A non-2xx (unverified session, not logged in at all, server error) is
+    // NOT the same thing as "the API ran fine and found zero slots" — this
+    // used to fall through into the empty-slots branch below either way,
+    // which misreported "verify your email" or "please log in" as "no time
+    // works for both teams," sending a coach to blame their director for
+    // something a click on the verify banner would have fixed.
+    if (!res.ok) {
+      document.getElementById('crm-body').innerHTML =
+        `<p class="danger-text">${uiEsc(data.error || `Could not load available times (${res.status}).`)}</p>`;
+      document.getElementById('crm-footer').innerHTML = `<button id="crm-cancel-btn" class="btn btn-secondary" type="button">Close</button>`;
+      document.getElementById('crm-cancel-btn').addEventListener('click', closeChangeModal);
+      return;
+    }
     crmSlots = data.slots || [];
     crmDaysMap = new Map();
     for (const s of crmSlots) if (!crmDaysMap.has(s.date)) crmDaysMap.set(s.date, s);

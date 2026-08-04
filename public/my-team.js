@@ -50,6 +50,15 @@ async function init() {
   renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots);
   renderMyAvailabilityCalendar();
 
+  // Info this once-per-season and rarely revisited — collapsed once it's
+  // actually filled in, so the page opens on what's used every week (games)
+  // instead of a wall of settings. Team Info still opens itself if it's
+  // genuinely incomplete, since that's the one thing worth prompting for.
+  document.getElementById('mte-info-details').open = !myTeam.label;
+  document.getElementById('mte-info-summary').innerHTML = myTeam.label
+    ? `Team Info <span class="field-form-hint">— ${esc(myTeam.label)}${myTeam.coach ? ` · Coach ${esc(myTeam.coach)}` : ''}</span>`
+    : 'Team Info';
+
   try { scheduleData = await fetchJSON('api/schedule'); } catch { scheduleData = { games: [] }; }
   renderGamesList();
 
@@ -143,10 +152,22 @@ function renderGamesList() {
   </table></div>`;
 }
 
+// Every write action below hits a requireVerified route — gating here means
+// the failure is an immediate, clear toast on the click, not a modal that
+// opens fine and then silently fails (or worse, misreports itself as "no
+// time works" — see openChangeRequestModal in ui.js) once you try to submit.
+function requireVerifiedToEdit() {
+  if (session?.verified) return true;
+  toast('Verify your email first — send the link or enter the code in the banner above.', 'bad');
+  document.getElementById('verify-banner')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  return false;
+}
+
 // Confirm the game as scheduled/agreed — the first lifecycle step, distinct
 // from and unrelated to requesting a change. POSTs directly rather than
 // opening a form, since there's nothing to fill in.
 async function confirmGame(gameId) {
+  if (!requireVerifiedToEdit()) return;
   try {
     const res = await fetch(`api/games/${gameId}/confirm`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
@@ -160,6 +181,7 @@ async function confirmGame(gameId) {
 }
 
 function openChangeRequest(gameId) {
+  if (!requireVerifiedToEdit()) return;
   const game = myGames().find(g => g.game_id === gameId);
   if (!game) return;
   openChangeRequestModal({
@@ -170,6 +192,7 @@ function openChangeRequest(gameId) {
 }
 
 function openRainout(gameId) {
+  if (!requireVerifiedToEdit()) return;
   const game = myGames().find(g => g.game_id === gameId);
   if (!game) return;
   openChangeRequestModal({
@@ -181,6 +204,7 @@ function openRainout(gameId) {
 }
 
 function openScore(gameId) {
+  if (!requireVerifiedToEdit()) return;
   const game = myGames().find(g => g.game_id === gameId);
   if (!game) return;
   openScoreModal({

@@ -667,6 +667,53 @@ async function loginAs(page, email, password) {
       ? ok('no JS errors on the standings view')
       : bad('JS errors on standings view', serr.slice(0, 2).join(' | '));
 
+    // ── Unverified session: gate the click, don't misreport the failure ─────
+    // Ted found this by hand: an unverified session hitting Request Change or
+    // Rain Out got "No time works for both teams right now" — the options
+    // fetch 403'd, but the modal treated an error response the same as a
+    // real empty-slots response. Report Score didn't even try to fetch
+    // anything on open, so it opened fine and just failed silently at Save.
+    // Fresh, unverified context — this dana session hasn't gone through the
+    // verify-code flow the way the Request Change test's session did.
+    const uctx = await browser.newContext();
+    const upage = await uctx.newPage();
+    await loginAs(upage, 'dana@example.com');
+    await upage.goto(`${BASE}/director`, { waitUntil: 'networkidle' });
+    await upage.waitForTimeout(400);
+
+    await upage.click('button:has-text("Request Change")');
+    await upage.waitForTimeout(300);
+    (await upage.locator('#crm-overlay:not(.hidden)').count()) === 0
+      ? ok('Request Change refuses to open for an unverified session')
+      : bad('Request Change modal opened while unverified', '');
+    (await upage.locator('.toast').count()) > 0
+      ? ok('a toast explains why, instead of a misleading "no time works" message')
+      : bad('no feedback shown when Request Change is gated', '');
+
+    await upage.click('button:has-text("Rain Out")');
+    await upage.waitForTimeout(300);
+    (await upage.locator('#crm-overlay:not(.hidden)').count()) === 0
+      ? ok('Rain Out also refuses to open for an unverified session')
+      : bad('Rain Out modal opened while unverified', '');
+
+    // This game already has a score from the earlier test block, so the
+    // button reads "Edit Score" now — same gate, same code path either way.
+    await upage.click('button:has-text("Edit Score"), button:has-text("Report Score")');
+    await upage.waitForTimeout(300);
+    (await upage.locator('#srm-overlay:not(.hidden)').count()) === 0
+      ? ok('Report/Edit Score is gated at the button, not left to fail silently at Save')
+      : bad('Score modal opened while unverified', '');
+
+    // Defense in depth: even if a gate is ever bypassed, the options endpoint
+    // itself must still refuse and say why — never silently return zero slots.
+    const rawOptionsStatus = await upage.evaluate(async () => {
+      const res = await fetch('api/change-requests/options?game_id=1');
+      return { status: res.status, error: (await res.json()).error };
+    });
+    rawOptionsStatus.status === 403 && rawOptionsStatus.error
+      ? ok('server refuses an unverified options request with a real error message', `${rawOptionsStatus.status}: ${rawOptionsStatus.error}`)
+      : bad('unverified options request did not refuse as expected', JSON.stringify(rawOptionsStatus));
+
     // ── Mobile layout ────────────────────────────────────────────────────────
     // The specific failure this guards against: a wide table pushing the whole
     // page sideways on a phone, which is where coaches actually are.
