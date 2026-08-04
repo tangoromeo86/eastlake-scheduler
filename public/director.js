@@ -131,7 +131,7 @@ function renderGamesList() {
     return;
   }
   list.innerHTML = `<div class="table-wrap"><table class="fields-table">
-    <thead><tr><th>Date</th><th>Home</th><th>Away</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Date</th><th>Home</th><th>Away</th><th>Status</th><th>Score</th><th></th></tr></thead>
     <tbody>
     ${games.map(g => {
       const status = g.status || 'scheduled';
@@ -144,6 +144,9 @@ function renderGamesList() {
       // TODO: once tested, gate this to the day before the game through 2
       // weeks after it — for now it's shown on every eligible game per Ted.
       const canRainout = status !== 'negotiating' && status !== 'cancelled';
+      // TODO: once tested, only show this once the game's kickoff has passed
+      // — for now it's shown on every eligible game per Ted, same as rainout.
+      const canScore = status !== 'cancelled';
       // A director can confirm on a coach's behalf — Ted: "either nudge them
       // offline, or confirm them on the coach's behalf."
       const canConfirm = (status === 'scheduled' || status === 'pending') && !confirmations[mySide];
@@ -152,10 +155,12 @@ function renderGamesList() {
         <td>${esc(g.home_team_name)}</td>
         <td>${esc(g.away_team_name)}</td>
         <td>${statusBadge}${liveStatusHtml(activeByGame[g.game_id])}</td>
+        <td>${resultBadge(g)}</td>
         <td><div class="row-actions">
           ${canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id},'${String(myTeamId)}')">Confirm</button>` : ''}
           ${canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id},'${String(myTeamId)}')">Request Change</button>` : ''}
           ${canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id},'${String(myTeamId)}')">Rain Out</button>` : ''}
+          ${canScore ? `<button class="btn btn-secondary btn-sm" onclick="openScore(${g.game_id},'${String(myTeamId)}')">${g.result ? 'Edit Score' : 'Report Score'}</button>` : ''}
           <button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>
         </div></td>
       </tr>`;
@@ -198,6 +203,15 @@ function openRainout(gameId, teamId) {
     game, teamId, otherTeam: teamById(otherId), fields: seasonData?.fields || [],
     refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
     mode: 'rainout',
+  });
+}
+
+function openScore(gameId, teamId) {
+  const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
+  if (!game) return;
+  openScoreModal({
+    game, teamId,
+    refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
   });
 }
 

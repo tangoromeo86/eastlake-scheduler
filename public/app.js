@@ -645,7 +645,7 @@ function renderGames(divGames) {
       <td class="team-cell away">${esc(g.away_team_name)}</td>
       <td>${esc(g.field_name)}</td>
       <td class="address">${esc(g.field_address)}</td>
-      <td>${gameStatusBadge(g.status || 'scheduled', g.confirmations)}${g.is_makeup ? ' <span class="pill pill-good">Makeup of #' + g.rescheduled_from_game_id + '</span>' : ''}${g.rescheduled_to_game_id ? ' <span class="pill pill-neutral">&rarr; #' + g.rescheduled_to_game_id + '</span>' : ''}</td>
+      <td>${gameStatusBadge(g.status || 'scheduled', g.confirmations)}${g.is_makeup ? ' <span class="pill pill-good">Makeup of #' + g.rescheduled_from_game_id + '</span>' : ''}${g.rescheduled_to_game_id ? ' <span class="pill pill-neutral">&rarr; #' + g.rescheduled_to_game_id + '</span>' : ''} ${resultBadge(g)}</td>
     </tr>
   `).join('');
 }
@@ -918,6 +918,8 @@ async function openEditModal(gameId) {
   // A cancelled game has already been rained out and replaced by its makeup —
   // there's nothing left to rain out again.
   document.getElementById('edit-rainout').classList.toggle('hidden', game.status === 'cancelled');
+  document.getElementById('edit-score').classList.toggle('hidden', game.status === 'cancelled');
+  document.getElementById('edit-score').textContent = game.result ? '⚽ Edit Score' : '⚽ Report Score';
 
   // Fetch slots once
   if (!seasonSlots) {
@@ -1083,9 +1085,10 @@ async function openAddModal() {
   // Teams for selected division
   populateAddModalTeams(divSelect.value);
 
-  // Hide delete, rain out, and suggest (N/A when adding)
+  // Hide delete, rain out, score, and suggest (N/A when adding)
   document.getElementById('edit-delete').classList.add('hidden');
   document.getElementById('edit-rainout').classList.add('hidden');
+  document.getElementById('edit-score').classList.add('hidden');
   document.getElementById('btn-suggest-dates').classList.add('hidden');
 
   document.getElementById('modal-title').textContent = 'Add Game';
@@ -1562,6 +1565,21 @@ function closeRainoutModal() {
 
 document.getElementById('edit-rainout').addEventListener('click', openRainoutModal);
 document.getElementById('rainout-modal-close').addEventListener('click', closeRainoutModal);
+
+// Admin can report/correct a score on any game, same permission model as
+// everywhere else (resolveRequestingTeam lets admin act on behalf of either
+// team) — team_id here is just a nominal "acting as," it doesn't change who
+// the score belongs to.
+document.getElementById('edit-score').addEventListener('click', () => {
+  if (editingGameId === null) return;
+  const game = scheduleData?.games.find(g => g.game_id === editingGameId);
+  if (!game) return;
+  closeEditModal();
+  openScoreModal({
+    game, teamId: game.home_team_id,
+    refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderCurrentView(); },
+  });
+});
 document.getElementById('rainout-cancel').addEventListener('click', closeRainoutModal);
 document.getElementById('rainout-done-btn').addEventListener('click', closeRainoutModal);
 document.getElementById('rainout-confirm').addEventListener('click', () => confirmRainout(false));

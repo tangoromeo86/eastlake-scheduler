@@ -601,6 +601,72 @@ async function loginAs(page, email, password) {
       ? ok('no JS errors in the Request Change modal')
       : bad('JS errors in the Request Change modal', rerr.slice(0, 2).join(' | '));
 
+    // ── Score reporting + standings ──────────────────────────────────────────
+    // Casual, not a negotiation — no approve/counter round-trip, just enter
+    // it, and the other side (or a director) can correct it later.
+    await rpage.reload({ waitUntil: 'networkidle' });
+    await rpage.waitForTimeout(400);
+    await rpage.click('button:has-text("Report Score")');
+    await rpage.waitForTimeout(300);
+    (await rpage.locator('#srm-overlay:not(.hidden)').count()) > 0
+      ? ok('Report Score opens a real modal')
+      : bad('score modal did not open', '');
+    await rpage.fill('#srm-home', '3');
+    await rpage.fill('#srm-away', '1');
+    await rpage.click('#srm-submit-btn');
+    await rpage.waitForTimeout(400);
+    (await rpage.locator('#srm-overlay:not(.hidden)').count()) === 0
+      ? ok('submitting a score closes the modal')
+      : bad('score modal stayed open after a successful submit', '');
+    const scoredGame = JSON.parse(fs.readFileSync(path.join(ROOT, 'schedule.json'), 'utf8')).games.find(g => g.game_id === 1);
+    scoredGame?.result?.home_score === 3 && scoredGame?.result?.away_score === 1
+      ? ok('the score was actually recorded on the game, not just the UI closing')
+      : bad('no result found on the game after submit', JSON.stringify(scoredGame?.result));
+    const scoreBadgeText = await rpage.locator('button:has-text("Edit Score")').count();
+    scoreBadgeText > 0
+      ? ok('button relabels to "Edit Score" once a result exists')
+      : bad('button still reads "Report Score" after a result was recorded', '');
+
+    // Editing an existing result without a note should be rejected.
+    await rpage.click('button:has-text("Edit Score")');
+    await rpage.waitForTimeout(300);
+    await rpage.fill('#srm-home', '4');
+    await rpage.click('#srm-submit-btn');
+    await rpage.waitForTimeout(300);
+    const noteErr = await rpage.locator('#srm-error:not(.hidden)').textContent().catch(() => '');
+    noteErr && noteErr.length > 0
+      ? ok('editing an existing score without a note is rejected in the UI too')
+      : bad('no error shown for a note-less correction', '');
+    await rpage.fill('#srm-note', 'Scorer miscounted');
+    await rpage.click('#srm-submit-btn');
+    await rpage.waitForTimeout(400);
+    const correctedGame = JSON.parse(fs.readFileSync(path.join(ROOT, 'schedule.json'), 'utf8')).games.find(g => g.game_id === 1);
+    correctedGame?.result?.home_score === 4 && correctedGame?.result?.history?.length === 2
+      ? ok('the correction updated the score and kept the prior entry in history')
+      : bad('correction did not apply as expected', JSON.stringify(correctedGame?.result));
+
+    // Standings should now reflect the reported result on the public viewer.
+    const spage = await rctx.newPage();
+    const serr = [];
+    spage.on('pageerror', e => serr.push(e.message));
+    // The first-login auto-help modal fires 400ms after header render and
+    // would otherwise intercept the click below — pre-seed the "seen" flag
+    // it checks so it never opens on this page.
+    await spage.addInitScript(() => localStorage.setItem('el_help_seen_v1', '1'));
+    await spage.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+    await spage.click('button[data-view="standings"]');
+    await spage.waitForTimeout(400);
+    const standingsText = await spage.locator('#standings-wrapper').textContent().catch(() => '');
+    standingsText.includes('Wildcats') && standingsText.includes('Rockets')
+      ? ok('standings tab lists both teams from the scored game')
+      : bad('standings did not render the teams', standingsText);
+    /GP.*W.*D.*L/.test(standingsText.replace(/\s+/g, ' '))
+      ? ok('standings table has the expected W/D/L columns')
+      : bad('standings table is missing expected columns', standingsText);
+    serr.length === 0
+      ? ok('no JS errors on the standings view')
+      : bad('JS errors on standings view', serr.slice(0, 2).join(' | '));
+
     // ── Mobile layout ────────────────────────────────────────────────────────
     // The specific failure this guards against: a wide table pushing the whole
     // page sideways on a phone, which is where coaches actually are.

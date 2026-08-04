@@ -104,7 +104,7 @@ function renderGamesList() {
     return;
   }
   list.innerHTML = `<div class="table-wrap"><table class="fields-table">
-    <thead><tr><th>Date</th><th>Opponent</th><th>H/A</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Date</th><th>Opponent</th><th>H/A</th><th>Status</th><th>Score</th><th></th></tr></thead>
     <tbody>
     ${games.map(g => {
       const isHome = g.home_team_id === myTeam.id;
@@ -118,6 +118,9 @@ function renderGamesList() {
       // TODO: once tested, gate this to the day before the game through 2
       // weeks after it — for now it's shown on every eligible game per Ted.
       const canRainout = status !== 'negotiating' && status !== 'cancelled';
+      // TODO: once tested, only show this once the game's kickoff has passed
+      // — for now it's shown on every eligible game per Ted, same as rainout.
+      const canScore = status !== 'cancelled';
       // Scheduled/Pending-and-not-yet-my-turn both mean "I haven't confirmed
       // this game as-is yet" — Confirmed and Negotiating never show the button.
       const canConfirm = (status === 'scheduled' || status === 'pending') && !iConfirmed;
@@ -126,10 +129,12 @@ function renderGamesList() {
         <td>${esc(opp ? (opp.label || opp.name) : '—')}</td>
         <td>${isHome ? 'Home' : 'Away'}</td>
         <td>${statusBadge}</td>
+        <td>${resultBadge(g)}</td>
         <td><div class="row-actions">
           ${canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id})">Confirm</button>` : ''}
           ${canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id})">Request Change</button>` : ''}
           ${canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id})">Rain Out</button>` : ''}
+          ${canScore ? `<button class="btn btn-secondary btn-sm" onclick="openScore(${g.game_id})">${g.result ? 'Edit Score' : 'Report Score'}</button>` : ''}
           <button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>
         </div></td>
       </tr>`;
@@ -172,6 +177,15 @@ function openRainout(gameId) {
     noPhoneText: '(no phone on file — contact your director)',
     refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
     mode: 'rainout',
+  });
+}
+
+function openScore(gameId) {
+  const game = myGames().find(g => g.game_id === gameId);
+  if (!game) return;
+  openScoreModal({
+    game, teamId: myTeam.id,
+    refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
   });
 }
 

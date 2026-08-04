@@ -743,6 +743,114 @@ function gameStatusBadge(status, confirmations, mySide) {
   return '<span class="pill pill-neutral">Scheduled</span>';
 }
 
+// A game's score, once reported — separate from gameStatusBadge because a
+// game can be Confirmed AND have a score; the two badges sit side by side.
+function resultBadge(game) {
+  const r = game.result;
+  if (!r) return '';
+  const isFinal = resultIsFinal(r);
+  return `<span class="pill ${isFinal ? 'pill-good' : 'pill-wait'}" title="${isFinal ? 'Final' : 'Reported — editable for a bit longer'}">${r.home_score}–${r.away_score}${isFinal ? '' : ' *'}</span>`;
+}
+const RESULT_EDIT_WINDOW_DAYS = 7; // mirrors server.js's RESULT_EDIT_WINDOW_DAYS
+function resultIsFinal(result) {
+  if (!result?.history?.length) return false;
+  const last = result.history[result.history.length - 1];
+  return (Date.now() - new Date(last.at).getTime()) / 86400000 >= RESULT_EDIT_WINDOW_DAYS;
+}
+
+// ── Score reporting modal ────────────────────────────────────────────────────
+// Deliberately separate from the change-request modal — this isn't a
+// negotiation, just "whoever gets there first enters it, the other side can
+// correct it." No approve/counter round-trip.
+let srmGame = null, srmTeamId = null, srmRefresh = null;
+
+function ensureScoreModal() {
+  if (document.getElementById('srm-overlay')) return;
+  const el = document.createElement('div');
+  el.id = 'srm-overlay';
+  el.className = 'modal-overlay hidden';
+  el.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h3 id="srm-title">Report Score</h3>
+          <p id="srm-subtitle" class="field-form-hint" style="margin-top:2px"></p>
+        </div>
+        <button id="srm-close" class="modal-close" type="button">&times;</button>
+      </div>
+      <div id="srm-body" class="modal-body"></div>
+      <div id="srm-error" class="field-form-error hidden" style="margin:0 20px 14px"></div>
+      <div id="srm-footer" class="modal-footer"></div>
+    </div>`;
+  document.body.appendChild(el);
+  document.getElementById('srm-close').addEventListener('click', closeScoreModal);
+  el.addEventListener('click', e => { if (e.target === el) closeScoreModal(); });
+}
+
+function closeScoreModal() {
+  document.getElementById('srm-overlay')?.classList.add('hidden');
+}
+
+function srmErr(msg) {
+  const el = document.getElementById('srm-error');
+  if (!el) return;
+  if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+// { game, teamId, refresh } — teamId is the acting team (a director may act
+// on behalf of any of their own teams, same as everywhere else this pattern
+// is used); refresh re-renders the caller's own games list after a submit.
+function openScoreModal({ game, teamId, refresh }) {
+  ensureScoreModal();
+  srmGame = game; srmTeamId = teamId; srmRefresh = refresh;
+  srmErr(null);
+  const existing = game.result;
+  const isEdit = !!existing;
+
+  document.getElementById('srm-title').textContent = isEdit ? 'Edit Score' : 'Report Score';
+  document.getElementById('srm-subtitle').textContent = `${uiEsc(game.home_team_name)} vs ${uiEsc(game.away_team_name)} — ${crmGameLabel(game)}`;
+
+  const historyNote = isEdit
+    ? `<p class="field-form-hint">Last reported ${uiEsc(new Date(existing.history[existing.history.length - 1].at).toLocaleDateString())}${resultIsFinal(existing) ? ' — marked final, but can still be corrected' : ' — still open for correction'}.</p>`
+    : '';
+
+  document.getElementById('srm-body').innerHTML = `
+    ${historyNote}
+    <div class="field-form-row">
+      <label>${uiEsc(game.home_team_name)}<input id="srm-home" type="number" min="0" step="1" value="${isEdit ? existing.home_score : ''}" inputmode="numeric"></label>
+      <label>${uiEsc(game.away_team_name)}<input id="srm-away" type="number" min="0" step="1" value="${isEdit ? existing.away_score : ''}" inputmode="numeric"></label>
+    </div>
+    <label class="field-form-row" style="margin-top:4px;display:block">
+      <span class="field-form-hint" style="margin:0 0 4px;display:block">${isEdit ? 'Note explaining the change (required)' : 'Note (optional)'}</span>
+      <input id="srm-note" type="text" placeholder="${isEdit ? 'e.g. Scorekeeper miscounted' : 'e.g. Final whistle 3-1'}">
+    </label>`;
+  document.getElementById('srm-footer').innerHTML = `
+    <button id="srm-cancel-btn" class="btn btn-secondary" type="button">Cancel</button>
+    <button id="srm-submit-btn" class="btn btn-primary" type="button">${isEdit ? 'Save Correction' : 'Report Score'}</button>`;
+  document.getElementById('srm-cancel-btn').addEventListener('click', closeScoreModal);
+  document.getElementById('srm-submit-btn').addEventListener('click', submitScore);
+  document.getElementById('srm-overlay').classList.remove('hidden');
+}
+
+async function submitScore() {
+  srmErr(null);
+  const home_score = document.getElementById('srm-home').value;
+  const away_score = document.getElementById('srm-away').value;
+  const note = (document.getElementById('srm-note')?.value || '').trim();
+  if (home_score === '' || away_score === '') { srmErr('Enter both scores.'); return; }
+  const body = { team_id: srmTeamId, home_score: Number(home_score), away_score: Number(away_score), note };
+  try {
+    const res = await fetch(`api/games/${srmGame.game_id}/result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { srmErr(data.error || 'Could not save the score.'); return; }
+    closeScoreModal();
+    toast('Score saved.', 'good');
+    if (srmRefresh) srmRefresh();
+  } catch { srmErr('Network error. Try again.'); }
+}
+
 // ── Field availability summary ───────────────────────────────────────────────
 // Overview signal for a Fields table — before this, the only way to know a
 // field had any hosting restrictions at all was to open its edit form. Shared

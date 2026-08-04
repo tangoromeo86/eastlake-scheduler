@@ -558,6 +558,91 @@ RCRJ_TAIL=$(python3 -c "import json;print(json.load(open('$CRJ'))[-1]['status'],
 
 echo
 echo "=============================================="
+echo "STEP 9c — Score reporting is casual, not a negotiation"
+echo "=============================================="
+# Deliberately NOT the change-request pipeline: whoever gets there first
+# enters it, the other side (or a director/admin) can correct it, and it's
+# never blocked on a confirmation step.
+SGID=$(python3 -c "
+import json
+d=json.load(open('$SCHED'))
+used={$GID,$RGID}
+for g in d['games']:
+    if g['game_id'] not in used and g['status'] not in ('cancelled','negotiating'):
+        print(g['game_id']); break
+")
+[ -n "$SGID" ] && pass "found a game to score (#$SGID)" || fail "no untouched game found for score reporting"
+SHOME=$(python3 -c "import json;d=json.load(open('$SCHED'));g=[x for x in d['games'] if x['game_id']==$SGID][0];print(g['home_team_id'])")
+SAWAY=$(python3 -c "import json;d=json.load(open('$SCHED'));g=[x for x in d['games'] if x['game_id']==$SGID][0];print(g['away_team_id'])")
+# T1/T2 have real coach logins; a T3 game falls back to its director (dana owns T3).
+home_actor() {  # prints "cookie[:team_id-if-director]" for whichever team id is passed
+  case "$1" in
+    "$T1") echo "coacha.txt" ;;
+    "$T2") echo "coachb.txt" ;;
+    *) echo "dana.txt:$1" ;;
+  esac
+}
+submit_score() {  # submit_score <team-id> <home_score> <away_score> [note]
+  local actor tid cookie body
+  actor=$(home_actor "$1")
+  cookie=${actor%%:*}
+  if [[ "$actor" == *:* ]]; then tid=${actor#*:}; else tid=""; fi
+  body=$(python3 -c "import json,sys;print(json.dumps({k:v for k,v in {'team_id':sys.argv[1] or None,'home_score':int(sys.argv[2]),'away_score':int(sys.argv[3]),'note':sys.argv[4] or None}.items() if v is not None}))" "$tid" "$2" "$3" "${4:-}")
+  curl -s -b "$cookie" -X POST "$BASE/api/games/$SGID/result" -H "$J" -d "$body"
+}
+SUB1=$(submit_score "$SHOME" 3 1)
+SOK1=$(echo "$SUB1" | python3 -c "import sys,json;print(json.load(sys.stdin).get('ok'))")
+[ "$SOK1" = "True" ] && pass "home side reports the score" || fail "initial submit failed: $SUB1"
+STORED=$(python3 -c "
+import json; d=json.load(open('$SCHED'))
+g=[x for x in d['games'] if x['game_id']==$SGID][0]['result']
+print(g['home_score'], g['away_score'], len(g['history']))")
+[ "$STORED" = "3 1 1" ] && pass "score persisted on the game with a 1-entry history" || fail "stored = $STORED"
+
+HACTOR=$(home_actor "$SHOME"); HCOOKIE=${HACTOR%%:*}
+if [[ "$HACTOR" == *:* ]]; then HBODY="\"team_id\":\"${HACTOR#*:}\","; else HBODY=""; fi
+BADSCORE=$(curl -s -o /dev/null -w "%{http_code}" -b "$HCOOKIE" -X POST "$BASE/api/games/$SGID/result" -H "$J" -d "{${HBODY}\"home_score\":\"nope\",\"away_score\":1}")
+[ "$BADSCORE" = "400" ] && pass "non-numeric score rejected (400)" || fail "expected 400, got $BADSCORE"
+
+NOTELESS=$(curl -s -X POST "$BASE/api/games/$SGID/result" -b "$HCOOKIE" -H "$J" -d "{${HBODY}\"home_score\":3,\"away_score\":2}" | python3 -c "import sys,json;print(json.load(sys.stdin).get('error') is not None)")
+[ "$NOTELESS" = "True" ] && pass "editing an already-reported score without a note is rejected" || fail "note requirement not enforced"
+
+# The away side corrects it, with a note — this is the audit trail Ted asked for.
+SUB2=$(submit_score "$SAWAY" 3 2 "Ref corrected the final whistle count")
+SOK2=$(echo "$SUB2" | python3 -c "import sys,json;print(json.load(sys.stdin).get('ok'))")
+[ "$SOK2" = "True" ] && pass "away side corrects the score with an audit note" || fail "correction failed: $SUB2"
+HIST=$(python3 -c "
+import json; d=json.load(open('$SCHED'))
+r=[x for x in d['games'] if x['game_id']==$SGID][0]['result']
+print(r['home_score'], r['away_score'], len(r['history']), r['history'][-1]['note'])")
+[ "$HIST" = "3 2 2 Ref corrected the final whistle count" ] && pass "correction recorded, prior entry kept in history (not overwritten)" || fail "history = $HIST"
+
+STATUS=$(curl -s -b "$HCOOKIE" "$BASE/api/games/$SGID/result" -X POST -H "$J" -d "{${HBODY}\"home_score\":3,\"away_score\":2,\"note\":\"no-op check\"}" | python3 -c "import sys,json;print(json.load(sys.stdin)['status'])")
+[ "$STATUS" = "reported" ] && pass "freshly-entered score reads as 'reported', not yet 'final'" || fail "status = $STATUS"
+
+# Permission: a coach whose own team isn't in this game can't touch it — a
+# coach session only ever acts as session.team_id, regardless of what's in
+# the request body, so whichever of T1/T2 isn't playing is a guaranteed 403.
+UNINVOLVED=""
+if [ "$SHOME" != "$T1" ] && [ "$SAWAY" != "$T1" ]; then UNINVOLVED="coacha.txt"
+elif [ "$SHOME" != "$T2" ] && [ "$SAWAY" != "$T2" ]; then UNINVOLVED="coachb.txt"; fi
+if [ -n "$UNINVOLVED" ]; then
+  XPERM=$(curl -s -o /dev/null -w "%{http_code}" -b "$UNINVOLVED" -X POST "$BASE/api/games/$SGID/result" -H "$J" -d '{"home_score":9,"away_score":9}')
+  [ "$XPERM" = "403" ] && pass "an uninvolved coach cannot report a score for someone else's game (403)" || fail "expected 403, got $XPERM"
+else
+  echo "  (skipped uninvolved-coach check: this game is T1 vs T2, both fixture coaches are legitimately involved)"
+fi
+
+# A cancelled (rained-out) game has nothing to score.
+CANCFAIL=$(curl -s -o /dev/null -w "%{http_code}" -b coacha.txt -X POST "$BASE/api/games/$RGID/result" -H "$J" -d '{"home_score":1,"away_score":1}')
+[ "$CANCFAIL" = "400" ] && pass "cannot report a score on a cancelled/rained-out game (400)" || fail "expected 400, got $CANCFAIL"
+
+# Admin can always act, on behalf of any team.
+ADMINSUB=$(curl -s -b admin.txt -X POST "$BASE/api/games/$SGID/result" -H "$J" -d "{\"team_id\":\"$SHOME\",\"home_score\":4,\"away_score\":2,\"note\":\"Admin correction\"}" | python3 -c "import sys,json;print(json.load(sys.stdin).get('ok'))")
+[ "$ADMINSUB" = "True" ] && pass "admin can report/correct a score on any game" || fail "admin submit failed"
+
+echo
+echo "=============================================="
 echo "STEP 10 — Escalation when nobody responds"
 echo "=============================================="
 python3 - <<'PYEOF'

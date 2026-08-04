@@ -3247,6 +3247,60 @@ app.post('/api/games/:id/confirm', requireVerified, (req, res) => {
   res.json({ ok: true, status: newStatus, confirmations });
 });
 
+// ── Score reporting ──────────────────────────────────────────────────────────
+// Deliberately NOT a negotiation like change requests — whoever gets there
+// first enters it, the other side (or either director/admin) can correct it
+// any time, and it's marked "final" purely as a display label once
+// RESULT_EDIT_WINDOW_DAYS pass since the last edit with nothing more required
+// from anyone (Ted: "doesn't hang as pending confirmation or similar").
+// TODO: only show the entry button once the game's kickoff time has passed —
+// left ungated for now so the flow can be tested, same as rainout visibility.
+const RESULT_EDIT_WINDOW_DAYS = 7;
+
+function resultEffectiveStatus(result) {
+  if (!result || !result.history?.length) return null;
+  const last = result.history[result.history.length - 1];
+  return daysBetween(last.at, new Date().toISOString()) >= RESULT_EDIT_WINDOW_DAYS ? 'final' : 'reported';
+}
+
+app.post('/api/games/:id/result', requireVerified, (req, res) => {
+  const s = getSession(req);
+  const gameId = parseInt(req.params.id, 10);
+  const ctx = loadGameContext(req, gameId);
+  if (ctx.error) return res.status(ctx.status || 500).json({ error: ctx.error });
+  if (ctx.game.status === 'cancelled') {
+    return res.status(400).json({ error: 'This game was cancelled — nothing to score.' });
+  }
+
+  const myTeamId = resolveRequestingTeam(s, ctx.game, req.body?.team_id, ctx.teams);
+  if (!myTeamId) return res.status(403).json({ error: 'You can only report a score for your own game' });
+
+  const { home_score, away_score, note } = req.body || {};
+  const hs = parseInt(home_score, 10), as = parseInt(away_score, 10);
+  if (!Number.isInteger(hs) || !Number.isInteger(as) || hs < 0 || as < 0 ||
+      String(home_score).trim() === '' || String(away_score).trim() === '') {
+    return res.status(400).json({ error: 'Scores must be non-negative whole numbers' });
+  }
+  const trimmedNote = (note || '').trim();
+  const isEdit = !!ctx.game.result;
+  if (isEdit && !trimmedNote) {
+    return res.status(400).json({ error: 'A short note is required when changing an already-reported score' });
+  }
+
+  const now = new Date().toISOString();
+  const entry = { home_score: hs, away_score: as, note: trimmedNote, team_id: myTeamId, at: now };
+  const result = isEdit
+    ? { ...ctx.game.result, home_score: hs, away_score: as, note: trimmedNote, history: [...ctx.game.result.history, entry] }
+    : { home_score: hs, away_score: as, note: trimmedNote, reported_by_team_id: myTeamId, reported_at: now, history: [entry] };
+
+  const gameIdx = ctx.schedData.games.findIndex(g => g.game_id === gameId);
+  ctx.schedData.games[gameIdx] = { ...ctx.game, result };
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(ctx.schedData, null, 2)); }
+  catch { return res.status(500).json({ error: 'Could not write schedule.json' }); }
+
+  res.json({ ok: true, result, status: resultEffectiveStatus(result) });
+});
+
 app.listen(PORT, () => {
   console.log(`Eastlake League Scheduler running at http://localhost:${PORT}`);
 });

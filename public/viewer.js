@@ -221,7 +221,7 @@ function syncFilterVisibility() {
 
 function renderCurrentView() {
   const effectiveView = activeTopView || activeView;
-  ['games','teams','matrix','stats','calendar','fields','program'].forEach(v => {
+  ['games','teams','matrix','standings','stats','calendar','fields','program'].forEach(v => {
     document.getElementById('view-' + v).classList.toggle('hidden', v !== effectiveView);
   });
   if (!scheduleData) return;
@@ -230,11 +230,12 @@ function renderCurrentView() {
   if (!activeDivision) return;
   const divGames = (scheduleData.games || []).filter(g => g.division_id === activeDivision);
   const divTeams = getDivTeams(activeDivision);
-  if (activeView === 'games')    renderGames(divGames);
-  if (activeView === 'teams')    renderTeamsView(divGames, divTeams);
-  if (activeView === 'matrix')   renderMatrixView(divGames, divTeams);
-  if (activeView === 'stats')    renderStatsView(divGames, divTeams);
-  if (activeView === 'calendar') renderCalendarView(divGames, divTeams);
+  if (activeView === 'games')     renderGames(divGames);
+  if (activeView === 'teams')     renderTeamsView(divGames, divTeams);
+  if (activeView === 'matrix')    renderMatrixView(divGames, divTeams);
+  if (activeView === 'standings') renderStandingsView(divGames, divTeams);
+  if (activeView === 'stats')     renderStatsView(divGames, divTeams);
+  if (activeView === 'calendar')  renderCalendarView(divGames, divTeams);
 }
 
 function getDivTeams(divId) {
@@ -517,6 +518,56 @@ function renderStatsView(divGames, divTeams) {
   document.getElementById('stats-wrapper').innerHTML = `
     <div class="stats-scroll"><table class="stats-table"><thead>${header}</thead><tbody>${rows}</tbody></table></div>
     <p style="font-size:11px;color:#94a3b8;margin-top:8px">Orange = home/away imbalance &gt;1</p>`;
+}
+
+// ── STANDINGS VIEW ────────────────────────────────────────────────────────────
+// Purely derived from each game's result (see server.js's score-reporting
+// endpoint) — no separate standings storage. A game with no result yet just
+// doesn't count toward anyone's record. Standard 3/1/0 soccer scoring;
+// cancelled/rained-out games (their makeup carries the eventual result) never
+// count even if one happened to have a result left on it from before.
+function computeStandings(divGames, divTeams) {
+  const rows = new Map(divTeams.map(t => [t.id, { team: t, played: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0 }]));
+  divGames.forEach(g => {
+    if (!g.result || g.status === 'cancelled') return;
+    const home = rows.get(g.home_team_id), away = rows.get(g.away_team_id);
+    if (!home || !away) return;
+    const hs = g.result.home_score, as = g.result.away_score;
+    home.played++; away.played++;
+    home.gf += hs; home.ga += as;
+    away.gf += as; away.ga += hs;
+    if (hs > as) { home.w++; away.l++; }
+    else if (hs < as) { away.w++; home.l++; }
+    else { home.d++; away.d++; }
+  });
+  return [...rows.values()]
+    .map(r => ({ ...r, gd: r.gf - r.ga, pts: r.w * 3 + r.d }))
+    .sort((a, b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf || teamLabel(a.team).localeCompare(teamLabel(b.team)));
+}
+
+function renderStandingsView(divGames, divTeams) {
+  const wrapper = document.getElementById('standings-wrapper');
+  if (!divTeams.length) { wrapper.innerHTML = '<p class="empty-state">No teams found.</p>'; return; }
+  const rows = computeStandings(divGames, divTeams);
+  if (!rows.some(r => r.played > 0)) {
+    wrapper.innerHTML = '<p class="empty-state">No results reported yet this season.</p>';
+    return;
+  }
+  const header = '<tr><th>Team</th><th>GP</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th></tr>';
+  const body = rows.map(r => `<tr>
+    <td>${esc(teamLabel(r.team))}</td>
+    <td style="text-align:center">${r.played}</td>
+    <td style="text-align:center">${r.w}</td>
+    <td style="text-align:center">${r.d}</td>
+    <td style="text-align:center">${r.l}</td>
+    <td style="text-align:center">${r.gf}</td>
+    <td style="text-align:center">${r.ga}</td>
+    <td style="text-align:center">${r.gd > 0 ? '+' + r.gd : r.gd}</td>
+    <td style="text-align:center;font-weight:700">${r.pts}</td>
+  </tr>`).join('');
+  wrapper.innerHTML = `
+    <div class="stats-scroll"><table class="stats-table"><thead>${header}</thead><tbody>${body}</tbody></table></div>
+    <p style="font-size:11px;color:#94a3b8;margin-top:8px">3 pts win &middot; 1 pt draw &middot; ties broken by goal difference, then goals for.</p>`;
 }
 
 // ── CALENDAR VIEW ─────────────────────────────────────────────────────────────
