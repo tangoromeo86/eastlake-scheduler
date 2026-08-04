@@ -7,3 +7,4 @@ scripts/fuzz-output/
 *backup*.json
 *.bak
 .scratch/
+.claude/worktrees/
