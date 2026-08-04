@@ -48,74 +48,8 @@ const FIELDS = [
   { program: 'Painesville', name: 'Painesville Recreation Park',
     address: '1025 Hardy Rd, Painesville OH 44077', coordinates: '41.7667003,-81.2310896' },
 ];
-// Weighted-random availability. Two things Ted was explicit about after
-// seeing the first pass:
-//   1. Weekdays should be genuinely locked down; Saturdays should stay
-//      generally available, with only a few random segments restricted —
-//      not comparably restricted to weekdays.
-//   2. A team's own availability and its home field's availability are
-//      correlated in real life, not independent dice rolls — a director
-//      wouldn't have set that field as home if the two rarely lined up.
-//      "If the field is available, the team likely will be as well" (not
-//      100%, but close).
-// So availability is generated field-first, then team status is picked from
-// a distribution conditioned on whether the team's own field is open that
-// same slot, rather than two independent rolls that occasionally produce a
-// team that wants to host on a day its own field is closed.
-function weightedPick(weights) {
-  const total = weights.reduce((s, [, w]) => s + w, 0);
-  let r = Math.random() * total;
-  for (const [v, w] of weights) { if (r < w) return v; r -= w; }
-  return weights[weights.length - 1][0];
-}
-const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-const SAT_SLOTS = ['early', 'midday', 'late'];
-
-const FIELD_WEEKDAY_OPEN_WEIGHTS = [[true, 45], [false, 55]];
-const FIELD_SATURDAY_OPEN_WEIGHTS = [[true, 85], [false, 15]];
-
-// Weekday: locked down regardless of field, but a team is even less likely
-// to want to host specifically when its own field is closed that day.
-const WEEKDAY_TEAM_FIELD_OPEN   = [['none', 35], ['both', 30], ['host', 20], ['travel', 15]];
-const WEEKDAY_TEAM_FIELD_CLOSED = [['none', 45], ['travel', 35], ['both', 12], ['host', 8]];
-// Saturday: generally available (mostly 'both') when the field cooperates;
-// still not wide open, just clearly the default day rather than a coin flip.
-const SATURDAY_TEAM_FIELD_OPEN   = [['both', 75], ['host', 10], ['travel', 10], ['none', 5]];
-const SATURDAY_TEAM_FIELD_CLOSED = [['travel', 45], ['none', 35], ['both', 12], ['host', 8]];
-
-function randomFieldAvailability() {
-  const weekday = {};
-  for (const day of WEEKDAY_NAMES) weekday[day] = weightedPick(FIELD_WEEKDAY_OPEN_WEIGHTS);
-  const saturday = {};
-  for (const slot of SAT_SLOTS) saturday[slot] = weightedPick(FIELD_SATURDAY_OPEN_WEIGHTS);
-  return { weekday, saturday, dates: {} };
-}
-
-function randomTeamAvailabilityFor(fieldAvailability) {
-  const weekday = {};
-  for (const day of WEEKDAY_NAMES) {
-    const weights = fieldAvailability.weekday[day] ? WEEKDAY_TEAM_FIELD_OPEN : WEEKDAY_TEAM_FIELD_CLOSED;
-    weekday[day] = { status: weightedPick(weights) };
-  }
-  const saturday = {};
-  for (const slot of SAT_SLOTS) {
-    const weights = fieldAvailability.saturday[slot] ? SATURDAY_TEAM_FIELD_OPEN : SATURDAY_TEAM_FIELD_CLOSED;
-    saturday[slot] = weightedPick(weights);
-  }
-  return { weekday, saturday, dates: {} };
-}
-
-// Every Saturday in the season, for picking one-off date exceptions below.
-function seasonSaturdays(startStr, weeks) {
-  const start = new Date(startStr + 'T00:00:00Z');
-  const out = [];
-  for (let w = 0; w < weeks; w++) {
-    const d = new Date(start);
-    d.setUTCDate(d.getUTCDate() + w * 7 + 5); // Monday + 5 = Saturday
-    out.push(d.toISOString().slice(0, 10));
-  }
-  return out;
-}
+const { randomFieldAvailability, randomTeamAvailabilityFor, seasonSaturdays } =
+  require('./lib/random-availability');
 
 const DIVISIONS = ['U8 Coed', 'U10 Boys', 'U10 Girls', 'U12 Boys', 'U12 Girls'];
 

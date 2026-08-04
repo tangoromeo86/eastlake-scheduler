@@ -3,6 +3,7 @@ schedule.json
 season.json
 change_requests.json
 snapshots/
+scripts/fuzz-output/
 *backup*.json
 *.bak
 .scratch/
