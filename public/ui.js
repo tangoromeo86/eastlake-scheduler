@@ -330,11 +330,10 @@ function wireFieldGeocode() {
       }
       coordsEl.value = data.coordinates;
       fieldError('ffe-coords', null);
-      const mapUrl = data.map_url || `https://www.google.com/maps/search/?api=1&query=${data.coordinates}`;
+      window.syncFieldMap?.();
       showResult('good',
-        `Found it: ${uiEsc(data.display_name)}. ` +
-        `<a href="${mapUrl}" target="_blank" rel="noopener">Check it on the map</a> ` +
-        `— if that's the wrong spot, use the manual steps below instead.`);
+        `Found it: ${uiEsc(data.display_name)}. That's a good starting point — drag the pin on the map below to ` +
+        `the field's exact center.`);
     } catch {
       showResult('bad', 'Network error — try again, or use the manual steps below.');
     } finally {
@@ -355,10 +354,88 @@ function resetFieldGeocodeUI() {
     const q = (addressEl?.value || '').trim();
     mapsLink.href = q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : 'https://www.google.com/maps';
   }
+  // Called after ffe-coords is already set for whichever field is being
+  // opened (or cleared, for Add) — the map should match immediately, not
+  // wait for the coordinates box's own change event.
+  window.syncFieldMap?.();
 }
 
 document.addEventListener('DOMContentLoaded', wireFieldGeocode);
 if (document.readyState !== 'loading') wireFieldGeocode();
+
+// ── Field map picker ──────────────────────────────────────────────────────
+// Geocoding an address gets a field close, but "close" isn't good enough
+// when a park has several fields sharing one address — Ted wanted the pin
+// on the exact center of the actual field being scheduled, not just
+// somewhere on the property. Satellite imagery lets you see the field
+// shape and place it precisely; both tile sources here are free and need
+// no API key (Esri World Imagery, OpenStreetMap).
+let ffeMap = null, ffeMapMarker = null;
+
+function wireFieldMap() {
+  const coordsEl = document.getElementById('ffe-coords');
+  const mapWrap  = document.getElementById('ffe-map-wrap');
+  const mapEl    = document.getElementById('ffe-map');
+  if (!coordsEl || !mapWrap || !mapEl) return; // page has no field form
+  if (typeof L === 'undefined') return; // Leaflet didn't load (offline, CDN blocked) — the manual steps below still work
+
+  function currentLatLng() {
+    const parts = (coordsEl.value || '').split(',').map(s => parseFloat(s.trim()));
+    if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1])) return parts;
+    return null;
+  }
+
+  function ensureMap(lat, lng) {
+    if (ffeMap) return;
+    ffeMap = L.map(mapEl, { attributionControl: false }).setView([lat, lng], 17);
+    const satellite = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 21, attribution: 'Esri' }
+    ).addTo(ffeMap);
+    const streets = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: 'OpenStreetMap',
+    });
+    L.control.layers({ 'Satellite': satellite, 'Street map': streets }, {}, { position: 'topright' }).addTo(ffeMap);
+    ffeMapMarker = L.marker([lat, lng], { draggable: true }).addTo(ffeMap);
+    ffeMapMarker.on('dragend', () => {
+      const p = ffeMapMarker.getLatLng();
+      writeCoords(p.lat, p.lng);
+    });
+    ffeMap.on('click', e => {
+      ffeMapMarker.setLatLng(e.latlng);
+      writeCoords(e.latlng.lat, e.latlng.lng);
+    });
+  }
+
+  function writeCoords(lat, lng) {
+    coordsEl.value = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    fieldError('ffe-coords', null);
+  }
+
+  // Called on open (openFieldAdd/openFieldEdit), after a successful geocode,
+  // and whenever the coordinates box itself changes — the map always
+  // reflects whatever's currently in that field, from whichever source.
+  window.syncFieldMap = function syncFieldMap() {
+    const ll = currentLatLng();
+    if (!ll) { mapWrap.classList.add('hidden'); return; }
+    mapWrap.classList.remove('hidden');
+    if (!ffeMap) {
+      ensureMap(ll[0], ll[1]);
+    } else {
+      ffeMap.setView(ll, Math.max(ffeMap.getZoom(), 17));
+      ffeMapMarker.setLatLng(ll);
+    }
+    // Leaflet can't size itself correctly while its container was hidden
+    // (display:none) — this form only just became visible, so the map's
+    // internal size cache is stale until told otherwise.
+    setTimeout(() => ffeMap && ffeMap.invalidateSize(), 60);
+  };
+
+  coordsEl.addEventListener('change', () => window.syncFieldMap());
+}
+
+document.addEventListener('DOMContentLoaded', wireFieldMap);
+if (document.readyState !== 'loading') wireFieldMap();
 
 // ── Verify banner (link + code) ──────────────────────────────────────────────
 // Shared by director.js and my-team.js — was two near-identical copies. The

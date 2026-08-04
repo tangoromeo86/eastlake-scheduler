@@ -1529,6 +1529,13 @@ input.has-error:focus, select.has-error:focus {
   font-size: 12.5px;
 }
 
+.field-map-wrap { margin: 10px 0; }
+.field-map { height: 280px; border-radius: var(--radius-sm); border: 1px solid var(--line); }
+/* Leaflet's own CSS assumes it can size itself off visible ancestors — this
+   guards against a squashed/zero-height map on a mobile layout before the
+   first invalidateSize() call catches up. */
+.field-map .leaflet-container { height: 100%; width: 100%; background: var(--surface-2); }
+
 /* ── Verify banner ───────────────────────────────────────────────────────────
    Was inline-styled per page (two copies). Now shared, and holds a code-entry
    row that appears once a link/code has been sent — verifying without ever

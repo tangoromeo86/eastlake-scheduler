@@ -209,6 +209,48 @@ async function verifyPage(page, email, srv) {
       } else {
         bad('no availability pattern selects found in the admin field editor', '');
       }
+
+      // ── Interactive field-location map (Ted, 2026-08-04): geocoding gets
+      // close, but a park with several fields needs the pin on the exact
+      // one — satellite imagery + a draggable/clickable pin, no API key. ──
+      await p.waitForTimeout(800); // let Leaflet finish initializing + tiles settle before interacting
+      const mapVisibleOnEditWithCoords = await p.locator('#ffe-map-wrap:not(.hidden)').count();
+      mapVisibleOnEditWithCoords > 0
+        ? ok('the field map shows immediately when editing a field that already has coordinates')
+        : bad('field map did not appear for a field with existing coordinates', '');
+
+      const coordsBefore = await p.locator('#ffe-coords').inputValue();
+      const mapLocator = p.locator('#ffe-map');
+      await mapLocator.scrollIntoViewIfNeeded().catch(() => {});
+      const mapBox = await mapLocator.boundingBox().catch(() => null);
+      if (mapBox) {
+        // scrollIntoViewIfNeeded + a page-coordinate mouse.click can still miss
+        // (the box's own coords are captured post-scroll, but a locator click
+        // with a relative position is what actually guarantees the point is
+        // the one that got scrolled into view) — verified this was the real
+        // cause of an earlier "click does nothing" failure (target point fell
+        // below the 720px default viewport, mouse.click doesn't auto-scroll).
+        await mapLocator.click({ position: { x: mapBox.width * 0.3, y: mapBox.height * 0.3 } });
+        await p.waitForTimeout(300);
+        const coordsAfter = await p.locator('#ffe-coords').inputValue();
+        coordsAfter && coordsAfter !== coordsBefore
+          ? ok('clicking the map moves the pin and updates the coordinates field', `${coordsBefore} -> ${coordsAfter}`)
+          : bad('clicking the map did not update the coordinates field', `before=${coordsBefore} after=${coordsAfter}`);
+      } else {
+        bad('field map has no bounding box — did not render', '');
+      }
+
+      // Add Field (no coordinates yet) should keep the map hidden until
+      // there's something to show — an empty map is just confusing.
+      await p.locator('#ffe-cancel, #field-editor-form button:has-text("Cancel")').first().click().catch(() => {});
+      await p.waitForTimeout(200);
+      await p.click('#btn-add-field');
+      await p.waitForTimeout(300);
+      const mapHiddenOnFreshAdd = await p.locator('#ffe-map-wrap').evaluate(el => el.classList.contains('hidden')).catch(() => null);
+      mapHiddenOnFreshAdd === true
+        ? ok('the field map stays hidden on a fresh Add Field with no coordinates yet')
+        : bad('field map should be hidden until coordinates exist', `hidden=${mapHiddenOnFreshAdd}`);
+      await p.locator('#ffe-cancel, #field-editor-form button:has-text("Cancel")').first().click().catch(() => {});
     } else {
       bad('no field to edit in the admin Fields tab', '');
     }

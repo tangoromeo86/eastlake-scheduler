@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My Program — Eastlake League Scheduler</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
   <header>
@@ -81,8 +83,13 @@
           </label>
         </div>
         <div id="ffe-geocode-result" class="geocode-result hidden"></div>
+        <div id="ffe-map-wrap" class="field-map-wrap hidden">
+          <p class="field-form-hint" style="margin:0 0 6px">Drag the pin (or click the map) to the exact center of
+            the field — the address only gets you close, and won't tell fields apart when a park has several.</p>
+          <div id="ffe-map" class="field-map"></div>
+        </div>
         <details class="av-group">
-          <summary>Address didn't work, or need to place it exactly?</summary>
+          <summary>Prefer to do it by hand?</summary>
           <ol class="coords-manual">
             <li>Open <a id="ffe-maps-link" href="https://www.google.com/maps" target="_blank" rel="noopener">Google Maps</a> and find the field.</li>
             <li>Right-click the exact spot (press and hold on a phone).</li>
