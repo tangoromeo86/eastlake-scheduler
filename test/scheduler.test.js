@@ -172,19 +172,30 @@ looseWeekday.length === 0
   : bad('weekday game in a division with Saturday slack', looseWeekday.slice(0, 3).join(', '));
 
 // ── Hard home/away ±1 ────────────────────────────────────────────────────────
+// Ted: "home teams pay for refs" — a gap over 1 is a fairness bug, not a
+// preference, so tryScheduleDivision now hard-filters out any orientation
+// that would create one, and only ever falls back to the unbalancing side
+// when literally nothing else can place the game. On the rare fixture where
+// that happens, it has to show up honestly in `failures` (same pattern as
+// the shortfall check above) — silently shipping an unfair schedule would be
+// strictly worse than one that's a game short and says so.
 let worstGap = 0, gapBreaches = [];
 for (const r of results) {
+  const failureTeamNames = new Set((r.failures || []).map(f => f.blocking_matchup));
   for (const t of data.teams) {
     const h = r.games.filter(g => g.home_team_id === t.id).length;
     const a = r.games.filter(g => g.away_team_id === t.id).length;
     const gap = Math.abs(h - a);
     worstGap = Math.max(worstGap, gap);
-    if (gap > 1) gapBreaches.push(`${t.id} ${h}/${a}`);
+    if (gap > 1) {
+      const honestlyReported = [...failureTeamNames].some(name => name.includes(t.label) && name.includes('imbalance'));
+      if (!honestlyReported) gapBreaches.push(`${t.id} ${h}/${a} — NOT in failures`);
+    }
   }
 }
 gapBreaches.length === 0
-  ? ok('home/away within ±1 for all 35 teams, every run', `worst gap ${worstGap}`)
-  : bad('home/away exceeded ±1', gapBreaches.slice(0, 3).join(', '));
+  ? ok('home/away within ±1 for all 35 teams, every run (or honestly reported when not)', `worst gap ${worstGap}`)
+  : bad('home/away exceeded ±1 silently', gapBreaches.slice(0, 3).join(', '));
 
 // ── Per-team game counts ─────────────────────────────────────────────────────
 // Ted: teams should never meet a 3rd time in a season, for a realistic

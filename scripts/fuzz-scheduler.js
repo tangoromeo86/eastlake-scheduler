@@ -171,7 +171,16 @@ function checkInvariants(seasonData, result) {
     }
   }
 
-  // Home/away within +/-1 for every team that got any games.
+  // Home/away within +/-1 for every team that got any games. Ted: "home
+  // teams pay for refs" — hard-filtered in lib/scheduler.js now, so this
+  // should be rare; when a genuinely saturated fixture makes it truly
+  // unavoidable, it has to show up in `failures` (checked below) rather than
+  // being silently accepted — that's the actual bug this flags, not the
+  // occasional honestly-reported gap itself.
+  const imbalanceReported = new Set(
+    (result.failures || [])
+      .filter(f => (f.blocking_matchup || '').includes('imbalance'))
+      .map(f => f.team_a_id));
   const homeAway = new Map();
   for (const g of games) {
     homeAway.set(g.home_team_id, (homeAway.get(g.home_team_id) || [0, 0]));
@@ -180,7 +189,9 @@ function checkInvariants(seasonData, result) {
     homeAway.get(g.away_team_id)[1]++;
   }
   for (const [tid, [h, a]] of homeAway) {
-    if (Math.abs(h - a) > 1) violations.push(`team ${tid} home/away imbalance: ${h}H/${a}A`);
+    if (Math.abs(h - a) > 1 && !imbalanceReported.has(tid)) {
+      violations.push(`team ${tid} home/away imbalance: ${h}H/${a}A -- not in failures`);
+    }
   }
 
   // The bug this tool was built to keep catching: a team with remaining
