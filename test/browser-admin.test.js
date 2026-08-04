@@ -213,6 +213,44 @@ async function verifyPage(page, email, srv) {
       bad('no field to edit in the admin Fields tab', '');
     }
 
+    // ── Editor tab: clicking a team opens its full availability, not just
+    // contact info (Ted: "that team's page/preferences to look at") ────────
+    const editorTab = p.locator('button:has-text("Editor"), [data-page="editor"]').first();
+    if (await editorTab.count()) {
+      await editorTab.click();
+      await p.waitForTimeout(400);
+      const firstTeamId = await p.evaluate(() => document.querySelector('.editor-team')?.id.replace('editor-team-', ''));
+      if (firstTeamId) {
+        await p.evaluate(id => window.toggleTeamForm(id), firstTeamId);
+        await p.waitForTimeout(400);
+        const gridRows = await p.locator(`#ef-availability-${firstTeamId} select.av-pat`).count();
+        gridRows > 0
+          ? ok('clicking a team in the Editor tab shows its weekly availability grid', `${gridRows} rows`)
+          : bad('team availability grid did not render when the row opened', '');
+        const fridayRow = await p.locator(`#ef-availability-${firstTeamId}`).innerText().catch(() => '');
+        fridayRow.includes('Friday')
+          ? ok('Friday is included in the admin team availability grid too')
+          : bad('Friday row missing from admin team availability grid', fridayRow.slice(0, 200));
+      } else {
+        bad('no team found in the Editor tab to click', '');
+      }
+    } else {
+      bad('Editor tab not found', '');
+    }
+
+    // ── Teams tab: the unused Blackout Dates column is gone ──────────────────
+    const teamsTab = p.locator('button:has-text("Teams"), [data-page="teams"]').first();
+    if (await teamsTab.count()) {
+      await teamsTab.click();
+      await p.waitForTimeout(400);
+      const headerText = await p.locator('.teams-table thead').first().innerText().catch(() => '');
+      !headerText.includes('Blackout')
+        ? ok('Blackout Dates column removed from the Teams tab')
+        : bad('Blackout Dates column still present in the Teams tab', headerText);
+    } else {
+      bad('Teams tab not found', '');
+    }
+
     // ── Request Change no longer crashes on the coach page ──────────────────
     const coachCtx = await browser.newContext();
     const cp = await coachCtx.newPage();

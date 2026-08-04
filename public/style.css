@@ -614,12 +614,6 @@ header h1 {
   font-weight: 600;
 }
 
-.blackout-cell {
-  font-size: 11px;
-  color: #94a3b8;
-  max-width: 200px;
-}
-
 /* ── Game row interaction ─────────────────────────────────────────────────── */
 .game-row { cursor: pointer; }
 .game-row:hover td { background: #eff6ff !important; }

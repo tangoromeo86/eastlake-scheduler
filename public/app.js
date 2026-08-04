@@ -876,7 +876,6 @@ function renderTeamsPage() {
       const statusBadge = confirmed
         ? '<span class="confirmed-badge">Confirmed</span>'
         : '<span class="unconfirmed-badge">Unconfirmed</span>';
-      const blackouts = (t.blackout_dates || []).join(', ') || '—';
       return `<tr class="${confirmed ? '' : 'unconfirmed-row'}">
         <td class="teams-table-name">${esc(teamLabel(t))}</td>
         <td>${esc(t.coach || '—')}</td>
@@ -884,7 +883,6 @@ function renderTeamsPage() {
         <td>${esc(t.email || '—')}</td>
         <td>${esc(fieldName)}</td>
         <td>${statusBadge}</td>
-        <td class="blackout-cell">${esc(blackouts)}</td>
       </tr>`;
     }).join('');
 
@@ -893,7 +891,7 @@ function renderTeamsPage() {
       <div class="teams-division-header">${esc(divLabel)} <span class="teams-div-count">${divTeams.length} team${divTeams.length !== 1 ? 's' : ''}</span></div>
       <table class="teams-table">
         <thead><tr>
-          <th>Team</th><th>Coach</th><th>Phone</th><th>Email</th><th>Home Field</th><th>Status</th><th>Blackout Dates</th>
+          <th>Team</th><th>Coach</th><th>Phone</th><th>Email</th><th>Home Field</th><th>Status</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -1829,6 +1827,11 @@ function buildTeamEditorRow(team, fieldOptions) {
           <input type="date" id="ef-earliest-${id}" value="${esc(team.earliest_date || '')}">
         </label>
       </div>
+      <details id="ef-avail-details-${id}" class="av-group" style="margin:14px 0" open>
+        <summary>Weekly Availability</summary>
+        <p class="field-form-hint" style="margin:10px 0">When can this team play? Fields left blank default to "Available for both."</p>
+        <div id="ef-availability-${id}"></div>
+      </details>
       <div class="editor-form-bottom">
         <label class="editor-label editor-label-wide">Blackout Dates <span class="editor-hint">one per line, YYYY-MM-DD</span>
           <textarea id="ef-blackouts-${id}" rows="4" spellcheck="false">${esc(blackoutStr)}</textarea>
@@ -1850,7 +1853,7 @@ function buildTeamEditorRow(team, fieldOptions) {
   </div>`;
 }
 
-function toggleTeamForm(teamId) {
+async function toggleTeamForm(teamId) {
   if (editorOpenTeamId !== null && editorOpenTeamId !== teamId) {
     // Close currently open form
     const prev = document.getElementById(`editor-form-${editorOpenTeamId}`);
@@ -1874,6 +1877,14 @@ function toggleTeamForm(teamId) {
     if (team) {
       const fieldSel = document.getElementById(`ef-field-${teamId}`);
       if (fieldSel) fieldSel.value = team.home_field_id || '';
+
+      // Ted: clicking a team in the Editor should show its full page/
+      // preferences to look at, not just contact info — this was the one
+      // thing missing that director/coach editors already had.
+      if (!seasonSlots) {
+        try { seasonSlots = await fetchJSON('api/season/slots'); } catch { seasonSlots = []; }
+      }
+      renderAvailabilityGrid(`ef-availability-${teamId}`, team.availability, seasonSlots);
     }
   }
 }
@@ -1892,12 +1903,13 @@ async function saveTeamForm(teamId) {
   const earliest_date = document.getElementById(`ef-earliest-${teamId}`)?.value || '';
   const blackoutRaw = document.getElementById(`ef-blackouts-${teamId}`)?.value || '';
   const blackout_dates = blackoutRaw.split('\n').map(s => s.trim()).filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
+  const availability = readAvailabilityGrid(`ef-availability-${teamId}`);
 
   try {
     const res = await fetch(`api/team/${teamId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label, coach, phone, email, home_field_id, confirmed, earliest_date, blackout_dates }),
+      body: JSON.stringify({ label, coach, phone, email, home_field_id, confirmed, earliest_date, blackout_dates, availability }),
     });
     const data = await res.json();
     if (!res.ok) {
