@@ -1068,6 +1068,7 @@ app.put('/api/game/:id', requireAdmin, (req, res) => {
 // point at each other (rescheduled_to_game_id / rescheduled_from_game_id) so
 // either can be traced from the other.
 app.post('/api/game/:id/rainout', requireAdmin, (req, res) => {
+  createSnapshot('Before rain-out reschedule', 'auto');
   const gameId = parseInt(req.params.id, 10);
   const { reason, date, time, field_id, force } = req.body;
   if (!date || !time) return res.status(400).json({ error: 'date and time are required' });
