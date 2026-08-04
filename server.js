@@ -1097,43 +1097,11 @@ app.post('/api/game/:id/rainout', requireAdmin, (req, res) => {
   const violations = validateGameEdit(editedGame, schedData.games, seasonForValidation);
   if (violations.length && !force) return res.status(409).json({ violations });
 
-  let newWeek = null;
-  for (const wk of buildSeasonWeeks(seasonData.season)) {
-    if (wk.weekdays.includes(date) || wk.saturday === date) { newWeek = wk.week; break; }
-  }
-
-  const fieldObj = (seasonData.fields || []).find(f => f.id === field_id_p);
-  const resolvedFieldName    = fieldObj ? (fieldObj.sub_field ? `${fieldObj.name} – ${fieldObj.sub_field}` : (fieldObj.name || field_id_p)) : original.field_name;
-  const resolvedFieldAddress = fieldObj ? (fieldObj.address || '') : original.field_address;
-
   const homeTeam = (seasonData.teams || []).find(t => t.id === original.home_team_id);
   const awayTeam = (seasonData.teams || []).find(t => t.id === original.away_team_id);
 
-  const makeupId = Math.max(0, ...schedData.games.map(g => g.game_id || 0)) + 1;
-  const makeupGame = {
-    game_id: makeupId, status: 'scheduled', division_id: original.division_id, week: newWeek,
-    date, day: dayName(date), time,
-    field_id: field_id_p, field_name: resolvedFieldName, field_address: resolvedFieldAddress,
-    home_team_id: original.home_team_id, home_team_name: original.home_team_name,
-    away_team_id: original.away_team_id, away_team_name: original.away_team_name,
-    is_rematch: !!original.is_rematch,
-    is_makeup: true,
-    rescheduled_from_game_id: gameId,
-  };
-
-  const cancelledAt = new Date().toISOString();
-  const cancelledOriginal = {
-    ...original,
-    status: 'cancelled',
-    cancelled_reason: reason || 'Rain out',
-    cancelled_at: cancelledAt,
-    rescheduled_to_game_id: makeupId,
-  };
-  schedData.games[gameIdx] = cancelledOriginal;
-  schedData.games.push(makeupGame);
-  schedData.games.sort((a, b) => (a.date > b.date ? 1 : a.date < b.date ? -1 : 0));
-  schedData.total_games = schedData.games.length;
-  schedData.generated_at = cancelledAt;
+  const { cancelledGame, makeupGame } = applyRainoutToGame(
+    schedData, seasonData, gameIdx, { date, time, field_id: field_id_p, reason });
 
   try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
   catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
@@ -1145,10 +1113,10 @@ app.post('/api/game/:id/rainout', requireAdmin, (req, res) => {
 
   const changeRecord = {
     id: Date.now(),
-    timestamp: cancelledAt,
+    timestamp: cancelledGame.cancelled_at,
     type: 'rainout',
     game_id: gameId,
-    makeup_game_id: makeupId,
+    makeup_game_id: makeupGame.game_id,
     division_id: original.division_id,
     division_name: (() => {
       const d = (seasonData.divisions || []).find(d => d.id === original.division_id);
@@ -1157,7 +1125,7 @@ app.post('/api/game/:id/rainout', requireAdmin, (req, res) => {
     before: { date: original.date, day: original.day, time: original.time, field_name: original.field_name },
     after: { ...makeupGame },
     changed_fields: [],
-    reason: cancelledOriginal.cancelled_reason,
+    reason: cancelledGame.cancelled_reason,
     home_team: teamContact(homeTeam),
     away_team: teamContact(awayTeam),
     forced: !!force,
@@ -1168,7 +1136,7 @@ app.post('/api/game/:id/rainout', requireAdmin, (req, res) => {
   allChanges.push(changeRecord);
   try { fs.writeFileSync(CHANGES_FILE, JSON.stringify(allChanges, null, 2)); } catch {}
 
-  res.json({ ok: true, cancelled_game: cancelledOriginal, makeup_game: makeupGame, violations, change: changeRecord });
+  res.json({ ok: true, cancelled_game: cancelledGame, makeup_game: makeupGame, violations, change: changeRecord });
 });
 
 app.post('/api/notify-rainout', requireAdmin, async (req, res) => {
@@ -1584,15 +1552,17 @@ async function notifyTurn(req, cr, seasonData, game) {
   const isCounter = cr.round > 1;
   const proposerName = proposingTeam?.label || proposingTeam?.name || 'The other coach';
   const matchup = game ? `${game.home_team_name} vs ${game.away_team_name}` : `${proposerName} vs ${awaitingTeam.label || awaitingTeam.name || 'your team'}`;
-  const subject = `${matchup}: ${isCounter ? 'new time proposed' : 'change requested'} — your response needed`;
+  const subject = cr.is_rainout
+    ? `${matchup}: rained out — ${isCounter ? 'new makeup time proposed' : 'makeup time proposed'} — your response needed`
+    : `${matchup}: ${isCounter ? 'new time proposed' : 'change requested'} — your response needed`;
   const approveUrl = `${base}/approve?token=${cr.tokens.approve}`;
   const counterUrl = `${base}/counter?token=${cr.tokens.counter}`;
 
   const html = emailShell(`
     ${emailHeading(subject)}
-    ${emailP(`${emailEsc(proposerName)} ${isCounter ? 'has proposed a different time' : 'has requested a change'} for this game.`)}
-    ${game ? emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: 'Currently scheduled' }) : ''}
-    ${emailGameCard({ homeLabel: game?.home_team_name || 'Home', awayLabel: game?.away_team_name || 'Away', date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: 'Proposed instead' })}
+    ${emailP(`${emailEsc(proposerName)} ${cr.is_rainout ? (isCounter ? 'has proposed a different makeup time' : 'reported this game as rained out and proposed a makeup time') : (isCounter ? 'has proposed a different time' : 'has requested a change')} for this game.`)}
+    ${game ? emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Currently scheduled' }) : ''}
+    ${emailGameCard({ homeLabel: game?.home_team_name || 'Home', awayLabel: game?.away_team_name || 'Away', date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_rainout ? 'Proposed makeup' : 'Proposed instead' })}
     ${cr.reason ? emailP(`<strong>Note from ${emailEsc(proposerName)}:</strong> ${emailEsc(cr.reason)}`) : ''}
     ${emailContactCard(proposingTeam, `${proposerName} (proposing)`)}
     <div style="margin:18px 0 4px">${emailButton(approveUrl, 'Works for us — approve it')}${emailButton(counterUrl, 'Suggest another time', 'secondary')}</div>
@@ -1603,9 +1573,9 @@ async function notifyTurn(req, cr, seasonData, game) {
     to: awaitingTeam.email,
     subject,
     text: [
-      `${proposerName} ${isCounter ? 'has proposed a different time' : 'has requested a change'} for Game #${cr.game_id}.`,
+      `${proposerName} ${cr.is_rainout ? (isCounter ? 'has proposed a different makeup time' : 'reported this game as rained out and proposed a makeup time') : (isCounter ? 'has proposed a different time' : 'has requested a change')} for Game #${cr.game_id}.`,
       '',
-      game ? `Currently: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}` : null,
+      game ? `${cr.is_rainout ? 'Rained out — was' : 'Currently'}: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}` : null,
       `Proposed: ${describeSlot(cr.proposal, seasonData.fields)}`,
       cr.reason ? `Reason: ${cr.reason}` : null,
       '',
@@ -1689,7 +1659,7 @@ function resolveProposedSlot(slots, wanted, schedData, gameId) {
 
 app.post('/api/change-requests', requireVerified, async (req, res) => {
   const s = getSession(req);
-  const { game_id, team_id, reason, details, slot } = req.body;
+  const { game_id, team_id, reason, details, slot, is_rainout } = req.body;
   if (!game_id) return res.status(400).json({ error: 'game_id is required' });
 
   const ctx = loadGameContext(req, game_id);
@@ -1729,6 +1699,7 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
     requesting_team_id: requestingTeamId,   // kept for the manual-override record shape
     other_team_id: otherTeamId,
     reason: (reason || '').trim(), details: (details || '').trim(),
+    is_rainout: !!is_rainout,
     proposing_team_id: requestingTeamId,
     awaiting_team_id: null,                 // set once the initiator confirms
     proposal: { date: chosen.date, time: chosen.time, field_id: chosen.field_id },
@@ -1745,14 +1716,18 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
   writeChangeRequests(list);
 
   const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
-  const confirmSubject = `${game.home_team_name} vs ${game.away_team_name}: confirm your change request`;
+  const confirmSubject = cr.is_rainout
+    ? `${game.home_team_name} vs ${game.away_team_name}: confirm the rain-out reschedule`
+    : `${game.home_team_name} vs ${game.away_team_name}: confirm your change request`;
   const confirmUrl = `${base}/confirm?token=${cr.tokens.approve}`;
   const cancelUrl = `${base}/cancel?token=${cr.tokens.cancel}`;
   const confirmHtml = emailShell(`
     ${emailHeading(confirmSubject)}
-    ${emailP(`Did you mean to request a schedule change for this game? Nothing reaches ${emailEsc(otherTeam?.label || otherTeam?.name || 'the other coach')} until you confirm below.`)}
-    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: 'Currently scheduled' })}
-    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: 'You proposed' })}
+    ${cr.is_rainout
+      ? emailP(`Reporting this game as rained out and proposing a makeup below. Nothing reaches ${emailEsc(otherTeam?.label || otherTeam?.name || 'the other coach')} until you confirm.`)
+      : emailP(`Did you mean to request a schedule change for this game? Nothing reaches ${emailEsc(otherTeam?.label || otherTeam?.name || 'the other coach')} until you confirm below.`)}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Currently scheduled' })}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_rainout ? 'Proposed makeup' : 'You proposed' })}
     ${cr.reason ? emailP(`<strong>Your note:</strong> ${emailEsc(cr.reason)}`) : ''}
     <div style="margin:18px 0 4px">${emailButton(confirmUrl, 'Yes, send it to the other coach')}${emailButton(cancelUrl, 'No, cancel', 'secondary')}</div>
     ${emailP('If you ignore this, nothing happens — the request never reaches the other coach.')}
@@ -1890,6 +1865,60 @@ function applyChangeRequestToGame(cr, schedData, seasonData) {
   return updatedGame;
 }
 
+// A rain-out is never just "move the game" — the original stays in the
+// schedule as history (status 'cancelled') and a new linked "makeup" game
+// is created at the chosen slot, so there's a permanent record of what was
+// originally on the calendar and either record can trace to the other via
+// rescheduled_to_game_id / rescheduled_from_game_id. Shared by the admin's
+// direct rain-out action and the coach-negotiated one (applied once both
+// coaches have agreed via the same change-request flow as any other
+// reschedule) so the two paths can't quietly drift apart. Doesn't write the
+// file — same convention as applyChangeRequestToGame — the caller decides
+// when to persist.
+function applyRainoutToGame(schedData, seasonData, gameIdx, { date, time, field_id, reason }) {
+  const original = schedData.games[gameIdx];
+  const field_id_p = field_id != null
+    ? (isNaN(parseInt(field_id, 10)) ? field_id : parseInt(field_id, 10))
+    : original.field_id;
+
+  let newWeek = null;
+  for (const wk of buildSeasonWeeks(seasonData.season)) {
+    if (wk.weekdays.includes(date) || wk.saturday === date) { newWeek = wk.week; break; }
+  }
+
+  const fieldObj = (seasonData.fields || []).find(f => f.id === field_id_p);
+  const resolvedFieldName    = fieldObj ? (fieldObj.sub_field ? `${fieldObj.name} – ${fieldObj.sub_field}` : (fieldObj.name || field_id_p)) : original.field_name;
+  const resolvedFieldAddress = fieldObj ? (fieldObj.address || '') : original.field_address;
+
+  const makeupId = Math.max(0, ...schedData.games.map(g => g.game_id || 0)) + 1;
+  const makeupGame = {
+    game_id: makeupId, status: 'scheduled', division_id: original.division_id, week: newWeek,
+    date, day: dayName(date), time,
+    field_id: field_id_p, field_name: resolvedFieldName, field_address: resolvedFieldAddress,
+    home_team_id: original.home_team_id, home_team_name: original.home_team_name,
+    away_team_id: original.away_team_id, away_team_name: original.away_team_name,
+    is_rematch: !!original.is_rematch,
+    is_makeup: true,
+    rescheduled_from_game_id: original.game_id,
+  };
+
+  const cancelledAt = new Date().toISOString();
+  const cancelledGame = {
+    ...original,
+    status: 'cancelled',
+    cancelled_reason: reason || 'Rain out',
+    cancelled_at: cancelledAt,
+    rescheduled_to_game_id: makeupId,
+  };
+  schedData.games[gameIdx] = cancelledGame;
+  schedData.games.push(makeupGame);
+  schedData.games.sort((a, b) => (a.date > b.date ? 1 : a.date < b.date ? -1 : 0));
+  schedData.total_games = schedData.games.length;
+  schedData.generated_at = cancelledAt;
+
+  return { cancelledGame, makeupGame };
+}
+
 app.get('/api/change-requests/:id/approve', async (req, res) => {
   const found = findCrByToken(req.params.id, req.query.token, 'awaiting_response', 'approve');
   if (!found) return crAlreadyResolved(res);
@@ -1899,7 +1928,50 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [], fields: [] }; }
   try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
 
-  const updatedGame = applyChangeRequestToGame(cr, schedData, seasonData);
+  // A rain-out was never just "move the game" — both coaches agreeing on a
+  // makeup slot is the same negotiation as any other reschedule, but what
+  // happens on agreement is different: the original stays as cancelled
+  // history and a new linked makeup game gets created, exactly like the
+  // admin's direct rain-out action (applyRainoutToGame — shared with it so
+  // the two paths can't drift apart).
+  let updatedGame;
+  if (cr.is_rainout) {
+    const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
+    if (gameIdx !== -1) {
+      const { makeupGame } = applyRainoutToGame(schedData, seasonData, gameIdx, {
+        date: cr.proposal.date, time: cr.proposal.time, field_id: cr.proposal.field_id, reason: cr.reason,
+      });
+      updatedGame = makeupGame;
+
+      const teamsForContact = seasonData.teams || [];
+      const homeTeam = teamsForContact.find(t => t.id === makeupGame.home_team_id);
+      const awayTeam = teamsForContact.find(t => t.id === makeupGame.away_team_id);
+      const teamContact = (t) => t ? { id: t.id, name: teamName(t), coach: t.coach || '', email: t.email || '', phone: t.phone || '' } : null;
+      const divisionRec = (seasonData.divisions || []).find(d => d.id === cr.division_id);
+      const changeRecord = {
+        id: Date.now(),
+        timestamp: makeupGame ? schedData.generated_at : new Date().toISOString(),
+        type: 'rainout',
+        game_id: cr.game_id,
+        makeup_game_id: makeupGame.game_id,
+        division_id: cr.division_id,
+        division_name: divisionRec ? (divisionRec.name || divisionRec.label || divisionRec.id) : cr.division_id,
+        before: { date: schedData.games[gameIdx]?.date, day: schedData.games[gameIdx]?.day, time: schedData.games[gameIdx]?.time, field_name: schedData.games[gameIdx]?.field_name },
+        after: { ...makeupGame },
+        changed_fields: [],
+        reason: cr.reason || 'Rain out',
+        home_team: teamContact(homeTeam),
+        away_team: teamContact(awayTeam),
+        forced: false,
+      };
+      let allChanges = [];
+      try { if (fs.existsSync(CHANGES_FILE)) allChanges = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
+      allChanges.push(changeRecord);
+      try { fs.writeFileSync(CHANGES_FILE, JSON.stringify(allChanges, null, 2)); } catch {}
+    }
+  } else {
+    updatedGame = applyChangeRequestToGame(cr, schedData, seasonData);
+  }
   try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
 
   cr.status = 'confirmed';
@@ -1913,11 +1985,13 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   const otherOfPair = [cr.initiating_team_id, cr.other_team_id].find(id => String(id) !== String(cr.proposing_team_id));
   const otherTeamForProposer = teams.find(t => String(t.id) === String(otherOfPair));
   if (proposer?.email && updatedGame) {
-    const lockedSubject = `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: agreed — schedule updated`;
+    const lockedSubject = cr.is_rainout
+      ? `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: makeup game confirmed`
+      : `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: agreed — schedule updated`;
     const lockedHtml = emailShell(`
       ${emailHeading(lockedSubject)}
-      ${emailP('Your proposed time was accepted. The schedule has been updated.')}
-      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, caption: 'New date & time' })}
+      ${emailP(cr.is_rainout ? 'The makeup date was accepted. Game #' + cr.game_id + ' is cancelled and this is now on the schedule.' : 'Your proposed time was accepted. The schedule has been updated.')}
+      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, caption: cr.is_rainout ? 'Makeup game' : 'New date & time' })}
       ${emailContactCard(otherTeamForProposer, `${otherTeamForProposer?.label || otherTeamForProposer?.name || 'The other coach'} (in case anything else needs sorting out)`)}
     `);
     await sendEmail({
@@ -1934,7 +2008,10 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
     });
   }
 
-  res.send(crActionPage('Locked in', `Game #${cr.game_id} has been moved to ${describeSlot(cr.proposal, seasonData.fields)}. Both coaches have been notified.`));
+  res.send(crActionPage('Locked in',
+    cr.is_rainout
+      ? `Game #${cr.game_id} was rained out and rescheduled to ${describeSlot(cr.proposal, seasonData.fields)}. Both coaches have been notified.`
+      : `Game #${cr.game_id} has been moved to ${describeSlot(cr.proposal, seasonData.fields)}. Both coaches have been notified.`));
 });
 
 // "This doesn't work" — instead of ending the thread, hand this coach the same
@@ -2034,7 +2111,7 @@ app.post('/api/change-requests/:id/counter', express.urlencoded({ extended: fals
 app.post('/api/change-requests/:game_id/manual-override', requireVerified, async (req, res) => {
   const s = getSession(req);
   const gameId = parseInt(req.params.game_id, 10);
-  const { team_id, date, time, field_id, who_spoke_to, how_connected } = req.body;
+  const { team_id, date, time, field_id, who_spoke_to, how_connected, is_rainout } = req.body;
   if (!who_spoke_to?.trim() || !how_connected?.trim()) {
     return res.status(400).json({ error: 'who_spoke_to and how_connected are both required' });
   }
@@ -2045,7 +2122,8 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
 
-  const game = schedData.games.find(g => g.game_id === gameId);
+  const gameIdx = schedData.games.findIndex(g => g.game_id === gameId);
+  const game = gameIdx !== -1 ? schedData.games[gameIdx] : null;
   if (!game) return res.status(404).json({ error: 'Game not found' });
 
   const teams = seasonData.teams || [];
@@ -2059,7 +2137,8 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
     id: 'cr-' + Date.now(),
     game_id: gameId, division_id: game.division_id,
     requesting_team_id: requestingTeamId, other_team_id: otherTeamId,
-    reason: 'Manual override', details: '',
+    reason: is_rainout ? 'Rain out' : 'Manual override', details: '',
+    is_rainout: !!is_rainout,
     proposal: { date: date || '', time: time || '', field_id: field_id || '' },
     proposing_team_id: requestingTeamId, awaiting_team_id: null,
     round: 0, history: [],
@@ -2070,7 +2149,14 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
     manual_override: { who: who_spoke_to.trim(), how: how_connected.trim(), submitted_by_team_id: requestingTeamId, at: new Date().toISOString() },
   };
 
-  const updatedGame = applyChangeRequestToGame(cr, schedData, seasonData);
+  // Same "cancel + linked makeup" treatment as the negotiated rain-out path
+  // (applyRainoutToGame) rather than a plain move — a rainout discovered the
+  // morning of game day goes through Manual Override (inside the 7-day
+  // window), and it should behave the same way regardless of how close to
+  // game day it was reported.
+  const updatedGame = is_rainout
+    ? applyRainoutToGame(schedData, seasonData, gameIdx, { date, time, field_id, reason: 'Rain out' }).makeupGame
+    : applyChangeRequestToGame(cr, schedData, seasonData);
   if (!updatedGame) return res.status(404).json({ error: 'Game not found' });
   try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write schedule.json' }); }
@@ -2086,12 +2172,16 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
   const uniqueRecipients = [...new Set(recipients)];
   if (uniqueRecipients.length) {
     const requesterName = requestingTeam?.label || requestingTeam?.name || 'A coach';
-    const overrideSubject = `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: changed by manual override`;
+    const overrideSubject = is_rainout
+      ? `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: rained out — makeup confirmed`
+      : `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: changed by manual override`;
     const overrideHtml = emailShell(`
       ${emailHeading(overrideSubject)}
-      ${emailP(`${emailEsc(requesterName)} changed this game directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`)}
-      ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: 'Original' })}
-      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, caption: 'New' })}
+      ${emailP(is_rainout
+        ? `${emailEsc(requesterName)} reported this game rained out and arranged a makeup directly (inside the 7-day window, by phone/text).`
+        : `${emailEsc(requesterName)} changed this game directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`)}
+      ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: is_rainout ? 'Rained out — was scheduled' : 'Original' })}
+      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, caption: is_rainout ? 'Makeup game' : 'New' })}
       ${emailP(`<strong>Confirmed with:</strong> ${emailEsc(cr.manual_override.who)}<br><strong>How:</strong> ${emailEsc(cr.manual_override.how)}`)}
       ${emailContactCard(requestingTeam, `${requesterName} (made this change)`)}
     `);

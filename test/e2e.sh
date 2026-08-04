@@ -484,6 +484,80 @@ print(d.get('active') is None, 'requested' in kinds, kinds.count('proposed')>=3,
 
 echo
 echo "=============================================="
+echo "STEP 9b — Coach-driven rain out reuses the SAME negotiation pipeline"
+echo "=============================================="
+# Ted: coaches (not the admin) drive rainouts, and it has to go through the
+# identical propose -> confirm -> approve pipeline as a normal change
+# request — the only difference is what happens on agreement (cancel +
+# linked makeup game, instead of just moving the game in place).
+RGID=$(python3 -c "
+import json,datetime
+d=json.load(open('$SCHED')); today=datetime.date.today()
+for g in d['games']:
+    if g['game_id']!=$GID and g['status']=='scheduled' and (datetime.date.fromisoformat(g['date'])-today).days>=7:
+        print(g['game_id']); break
+")
+[ -n "$RGID" ] && pass "found a second untouched game to rain out (#$RGID)" || fail "no spare game found for the rainout test"
+RHOME=$(python3 -c "
+import json; d=json.load(open('$SCHED'))
+g=[x for x in d['games'] if x['game_id']==$RGID][0]; print(g['home_team_id'])")
+RORIGDATE=$(python3 -c "
+import json; d=json.load(open('$SCHED'))
+g=[x for x in d['games'] if x['game_id']==$RGID][0]; print(g['date'], g['time'])")
+RCOOKIE="coacha.txt"
+[ "$RHOME" != "$T1" ] && RCOOKIE="coachb.txt"
+ROPTS=$(curl -s -b "$RCOOKIE" "$BASE/api/change-requests/options?game_id=$RGID")
+RSLOT=$(echo "$ROPTS" | python3 -c "
+import sys,json; d=json.load(sys.stdin); s=d['slots'][0]; print(json.dumps({'date':s['date'],'time':s['time']}))")
+curl -s -b "$RCOOKIE" -X POST "$BASE/api/change-requests" -H "$J" \
+  -d "{\"game_id\":$RGID,\"reason\":\"Rain out\",\"slot\":$RSLOT,\"is_rainout\":true}" > /dev/null
+RCRID=$(python3 -c "import json;print(json.load(open('$CRJ'))[-1]['id'])")
+RISRO=$(python3 -c "import json;print(json.load(open('$CRJ'))[-1]['is_rainout'])")
+[ "$RISRO" = "True" ] && pass "the change request is flagged is_rainout" || fail "is_rainout not persisted on submit"
+RTOK=$(python3 -c "import json;print(json.load(open('$CRJ'))[-1]['tokens']['approve'])")
+# wait_for_log returns the LAST matching line at the time it's checked, which
+# by this point in the run already includes STEP 9's own "your response
+# needed" emails — poll for the line count to actually grow past what STEP
+# 9 left behind, so a stale match isn't mistaken for this request's email.
+RPRECOUNT=$(grep -c "DEBUG_EMAIL_HTML:.*your response needed" "$LOG" 2>/dev/null)
+curl -s "$BASE/api/change-requests/$RCRID/confirm?token=$RTOK" > /dev/null
+RTURN_HTML=''
+for _ in $(seq 1 20); do
+  RPOSTCOUNT=$(grep -c "DEBUG_EMAIL_HTML:.*your response needed" "$LOG" 2>/dev/null)
+  if [ "$RPOSTCOUNT" -gt "$RPRECOUNT" ]; then
+    RTURN_HTML=$(grep "DEBUG_EMAIL_HTML:.*your response needed" "$LOG" | tail -1)
+    break
+  fi
+  sleep 0.1
+done
+[[ "$RTURN_HTML" == *"Rained out"* ]] && pass "the other coach's email uses rain-out copy, not generic reschedule copy" || fail "response-needed email doesn't read as a rain-out: $RTURN_HTML"
+
+RATOK=$(python3 -c "import json;print(json.load(open('$CRJ'))[-1]['tokens']['approve'])")
+curl -s "$BASE/api/change-requests/$RCRID/approve?token=$RATOK" > /dev/null
+
+RRESULT=$(python3 -c "
+import json; d=json.load(open('$SCHED'))
+orig=[x for x in d['games'] if x['game_id']==$RGID][0]
+makeup=[x for x in d['games'] if x.get('rescheduled_from_game_id')==$RGID]
+makeup=makeup[0] if makeup else None
+print(orig['status'], orig.get('rescheduled_to_game_id')==(makeup['game_id'] if makeup else None), bool(makeup), makeup['status'] if makeup else None, makeup.get('is_makeup') if makeup else None)")
+[ "$RRESULT" = "cancelled True True scheduled True" ] && pass "agreement cancels the original and creates a linked makeup game (not a simple move)" || fail "rainout result = $RRESULT"
+
+RSTILL_HOME=$(python3 -c "
+import json; d=json.load(open('$SCHED'))
+makeup=[x for x in d['games'] if x.get('rescheduled_from_game_id')==$RGID][0]
+print(makeup['home_team_id'], makeup['away_team_id'])")
+RORIG_HOME=$(python3 -c "
+import json; d=json.load(open('$SCHED'))
+orig=[x for x in d['games'] if x['game_id']==$RGID][0]
+print(orig['home_team_id'], orig['away_team_id'])")
+[ "$RSTILL_HOME" = "$RORIG_HOME" ] && pass "makeup game keeps the same home/away assignment as the rained-out original" || fail "home/away drifted: $RORIG_HOME -> $RSTILL_HOME"
+
+RCRJ_TAIL=$(python3 -c "import json;print(json.load(open('$CRJ'))[-1]['status'], json.load(open('$CRJ'))[-1].get('is_rainout'))")
+[ "$RCRJ_TAIL" = "confirmed True" ] && pass "change request itself resolves to confirmed, is_rainout preserved through every round" || fail "cr tail state = $RCRJ_TAIL"
+
+echo
+echo "=============================================="
 echo "STEP 10 — Escalation when nobody responds"
 echo "=============================================="
 python3 - <<'PYEOF'

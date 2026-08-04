@@ -115,6 +115,9 @@ function renderGamesList() {
       const iConfirmed = !!confirmations[mySide];
       const statusBadge = gameStatusBadge(status, confirmations, mySide);
       const canRequest = status !== 'negotiating';
+      // TODO: once tested, gate this to the day before the game through 2
+      // weeks after it — for now it's shown on every eligible game per Ted.
+      const canRainout = status !== 'negotiating' && status !== 'cancelled';
       // Scheduled/Pending-and-not-yet-my-turn both mean "I haven't confirmed
       // this game as-is yet" — Confirmed and Negotiating never show the button.
       const canConfirm = (status === 'scheduled' || status === 'pending') && !iConfirmed;
@@ -126,6 +129,7 @@ function renderGamesList() {
         <td><div class="row-actions">
           ${canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id})">Confirm</button>` : ''}
           ${canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id})">Request Change</button>` : ''}
+          ${canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id})">Rain Out</button>` : ''}
           <button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>
         </div></td>
       </tr>`;
@@ -157,6 +161,17 @@ function openChangeRequest(gameId) {
     game, teamId: myTeam.id, otherTeam: opponentTeam(game), fields: seasonData?.fields || [],
     noPhoneText: '(no phone on file — contact your director)',
     refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
+  });
+}
+
+function openRainout(gameId) {
+  const game = myGames().find(g => g.game_id === gameId);
+  if (!game) return;
+  openChangeRequestModal({
+    game, teamId: myTeam.id, otherTeam: opponentTeam(game), fields: seasonData?.fields || [],
+    noPhoneText: '(no phone on file — contact your director)',
+    refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
+    mode: 'rainout',
   });
 }
 

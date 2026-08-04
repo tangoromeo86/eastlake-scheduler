@@ -141,6 +141,9 @@ function renderGamesList() {
       const confirmations = g.confirmations || {};
       const statusBadge = gameStatusBadge(status, confirmations, mySide);
       const canRequest = status !== 'negotiating';
+      // TODO: once tested, gate this to the day before the game through 2
+      // weeks after it — for now it's shown on every eligible game per Ted.
+      const canRainout = status !== 'negotiating' && status !== 'cancelled';
       // A director can confirm on a coach's behalf — Ted: "either nudge them
       // offline, or confirm them on the coach's behalf."
       const canConfirm = (status === 'scheduled' || status === 'pending') && !confirmations[mySide];
@@ -152,6 +155,7 @@ function renderGamesList() {
         <td><div class="row-actions">
           ${canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id},'${String(myTeamId)}')">Confirm</button>` : ''}
           ${canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id},'${String(myTeamId)}')">Request Change</button>` : ''}
+          ${canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id},'${String(myTeamId)}')">Rain Out</button>` : ''}
           <button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>
         </div></td>
       </tr>`;
@@ -182,6 +186,18 @@ function openChangeRequest(gameId, teamId) {
   openChangeRequestModal({
     game, teamId, otherTeam: teamById(otherId), fields: seasonData?.fields || [],
     refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
+  });
+}
+
+function openRainout(gameId, teamId) {
+  const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
+  if (!game) return;
+  crTeamId = teamId;
+  const otherId = String(game.home_team_id) === teamId ? game.away_team_id : game.home_team_id;
+  openChangeRequestModal({
+    game, teamId, otherTeam: teamById(otherId), fields: seasonData?.fields || [],
+    refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
+    mode: 'rainout',
   });
 }
 
