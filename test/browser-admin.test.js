@@ -91,6 +91,10 @@ async function verifyPage(page, email, srv) {
     const errs = [];
     p.on('pageerror', e => errs.push(e.message));
     p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
+    // The public viewer's first-login auto-help modal fires 400ms after
+    // header render and can intercept clicks on later navigations to '/' —
+    // pre-seed the "seen" flag so it never opens on this page.
+    await p.addInitScript(() => localStorage.setItem('el_help_seen_v1', '1'));
 
     await p.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
     await p.fill('#email-input', 'admin@example.com');
@@ -116,6 +120,28 @@ async function verifyPage(page, email, srv) {
         : bad('matrix cells are all identical (NaN pairKey bug)', `values: ${[...distinctValues].join(',')}`);
     } else {
       bad('matrix view button not found', '');
+    }
+
+    // ── The PUBLIC viewer has its own, separate Matrix implementation ───────
+    // (viewer.js, gated to admin sessions only, distinct from admin.html's
+    // app.js) — it had its own independent pairKey that used Math.min/max on
+    // team ids, which is NaN for the real string ids ("team-1", not 1) this
+    // fixture uses. The admin.html check above never exercised this second
+    // copy, so the fix there didn't catch this one drifting out of sync.
+    await p.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+    await p.waitForTimeout(500);
+    const publicMatrixBtn = p.locator('[data-view="matrix"]').first();
+    if (await publicMatrixBtn.count()) {
+      await publicMatrixBtn.click();
+      await p.waitForTimeout(500);
+      const pubCellTexts = await p.locator('.matrix-cell .matrix-count').allTextContents();
+      const pubNonZero = pubCellTexts.filter(t => t.trim() && t.trim() !== '0');
+      const pubDistinct = new Set(pubNonZero.map(t => t.trim()));
+      pubNonZero.length > 0 && pubDistinct.size > 1
+        ? ok('public viewer\'s matrix also shows real per-opponent counts', `${pubDistinct.size} distinct values across ${pubNonZero.length} cells`)
+        : bad('public viewer matrix cells are all identical (its own NaN pairKey bug)', `values: ${[...pubDistinct].join(',')}`);
+    } else {
+      bad('public viewer matrix button not found for an admin session', '');
     }
 
     // ── Calendar view: real season months, not hardcoded spring 2026 ────────

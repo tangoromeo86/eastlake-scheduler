@@ -457,7 +457,7 @@ function renderTeamsView(divGames, divTeams) {
 // ── MATRIX VIEW ───────────────────────────────────────────────────────────────
 function renderMatrixView(divGames, divTeams) {
   if (!divTeams.length) { document.getElementById('matrix-wrapper').innerHTML = '<p class="empty-state">No teams found.</p>'; return; }
-  const pairKey = (a, b) => Math.min(a,b) + '_' + Math.max(a,b);
+  const pairKey = (a, b) => [String(a), String(b)].sort().join('_');
   const counts = {}; const homeAway = {};
   divGames.forEach(g => {
     const k = pairKey(g.home_team_id, g.away_team_id);
