@@ -459,12 +459,48 @@
 
       <div class="modal-footer">
         <button id="edit-delete" class="btn btn-danger" style="margin-right:auto">&#128465; Delete Game</button>
+        <button id="edit-rainout" class="btn btn-secondary" style="margin-right:auto">&#127783; Rain Out</button>
         <button id="edit-cancel" class="btn btn-secondary">Cancel</button>
         <button id="edit-save" class="btn btn-primary">Save Changes</button>
         <button id="edit-force" class="btn btn-warn hidden">Save Anyway</button>
         <button id="confirm-delete-btn" class="btn btn-danger hidden">Confirm Delete</button>
         <a id="notify-email-btn" class="btn btn-primary hidden" href="#" target="_blank">&#9993; Email Both Coaches</a>
         <button id="notify-done-btn" class="btn btn-secondary hidden">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rain Out Modal -->
+  <div id="rainout-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="rainout-modal-title">Rain Out Game</h3>
+        <button id="rainout-modal-close" class="modal-close">&times;</button>
+      </div>
+      <div id="rainout-body" class="modal-body">
+        <div class="modal-row">
+          <label>Reason<input id="rainout-reason" type="text" placeholder="Rain out" value="Rain out"></label>
+        </div>
+        <div id="rainout-suggest-panel" class="suggest-panel"></div>
+        <div id="rainout-violations" class="edit-violations hidden"></div>
+        <div id="rainout-selected" class="delete-confirm-panel hidden">
+          <p id="rainout-selected-msg" class="delete-confirm-msg"></p>
+        </div>
+      </div>
+
+      <!-- Shown after a successful rainout -->
+      <div id="rainout-notify-panel" class="notify-panel hidden">
+        <div id="rainout-notify-banner" class="notify-saved-banner"></div>
+        <div id="rainout-notify-details" class="notify-changes-list"></div>
+        <div id="rainout-notify-team-cards" class="notify-team-cards"></div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="rainout-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="rainout-confirm" class="btn btn-danger hidden">Confirm Rain Out</button>
+        <button id="rainout-force" class="btn btn-warn hidden">Confirm Anyway</button>
+        <a id="rainout-email-btn" class="btn btn-primary hidden" href="#" target="_blank">&#9993; Email Both Coaches</a>
+        <button id="rainout-done-btn" class="btn btn-secondary hidden">Done</button>
       </div>
     </div>
   </div>
