@@ -72,7 +72,10 @@ t('plenty of daylight keeps the season default kickoff', weekdayStartTimeForFiel
 // but there's still a legal 60-minute window before it.
 const octStart = weekdayStartTimeForField('18:30', 60, field, '2026-10-15');
 ok('short daylight pulls the default kickoff earlier', octStart !== null && octStart < '18:30', `got ${octStart}`);
-ok('the adjusted kickoff still lands on the 30-minute grid', octStart === null || /:(00|30)$/.test(octStart), `got ${octStart}`);
+ok('the adjusted kickoff lands on the weekday 15-minute grid', octStart === null || /:(00|15|30|45)$/.test(octStart), `got ${octStart}`);
+// Oct 10 lands the adjustment exactly on a :15 boundary — proof the finer
+// weekday grid is actually active, not coincidentally landing on :00/:30.
+t('weekday snapping actually uses 15-minute increments, not 30', weekdayStartTimeForField('18:30', 60, field, '2026-10-10'), '18:15');
 
 // Early November (post-DST-fallback): dark by ~17:40 here, too early for a
 // 60-minute game to fit even at the earliest allowed 17:00 kickoff.

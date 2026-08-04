@@ -1112,9 +1112,9 @@ import subprocess,json
 print('   (checked via unit assertions in lib/scheduler.js exports)')"
 node -e "
 const s=require(process.env.REPO+'/lib/scheduler');
-const cases=[['18:30','weekday',true],['16:45','weekday',false],['19:45','weekday',false],['18:10','weekday',false],['09:00','saturday',true],['18:30','saturday',false]];
+const cases=[['18:30','weekday',true],['18:15','weekday',true],['16:45','weekday',false],['19:45','weekday',false],['18:10','weekday',false],['09:00','saturday',true],['09:15','saturday',false],['18:30','saturday',false]];
 let bad=cases.filter(([t,d,want])=>s.isValidGameTime(t,d)!==want);
-console.log(bad.length? '  ** FAIL: time validation '+JSON.stringify(bad) : '  PASS: kickoff times enforced (bounds + 30-min steps)');
+console.log(bad.length? '  ** FAIL: time validation '+JSON.stringify(bad) : '  PASS: kickoff times enforced (bounds + 15-min weekday / 30-min Saturday steps)');
 "
 
 
