@@ -1890,7 +1890,19 @@ async function toggleTeamForm(teamId) {
       if (!seasonSlots) {
         try { seasonSlots = await fetchJSON('api/season/slots'); } catch { seasonSlots = []; }
       }
-      renderAvailabilityGrid(`ef-availability-${teamId}`, team.availability, seasonSlots);
+      renderAvailabilityGrid(`ef-availability-${teamId}`, team.availability, seasonSlots, team.earliest_date);
+
+      // Live re-filter as admin edits the first-available-day field inline —
+      // matches director.js's own team editor, since this form has the same
+      // earliest-date input sitting next to the same availability grid.
+      const earliestInput = document.getElementById(`ef-earliest-${teamId}`);
+      if (earliestInput && !earliestInput.dataset.avWired) {
+        earliestInput.dataset.avWired = '1';
+        earliestInput.addEventListener('change', (e) => {
+          const current = readAvailabilityGrid(`ef-availability-${teamId}`);
+          renderAvailabilityGrid(`ef-availability-${teamId}`, current, seasonSlots, e.target.value);
+        });
+      }
     }
   }
 }

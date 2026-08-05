@@ -47,7 +47,7 @@ async function init() {
   document.getElementById('mte-target').value = myTeam.target_games || '';
   document.getElementById('mte-earliest').value = myTeam.earliest_date || '';
   populateFieldSelect();
-  renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots);
+  renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots, myTeam.earliest_date);
   renderMyAvailabilityCalendar();
 
   // Info this once-per-season and rarely revisited — collapsed once it's
@@ -262,6 +262,17 @@ function renderMyAvailabilityCalendar() {
   }, 'team');
 }
 
+// Re-filter the per-date list live as the coach adjusts the first-available-
+// day field, before saving — otherwise it only updates on the next full
+// render (page load or after Save), so a coach setting it for the first time
+// would still see the misleadingly-full date list right up until they save.
+// readAvailabilityGrid captures whatever's already been toggled so re-
+// rendering doesn't discard in-progress changes.
+document.getElementById('mte-earliest').addEventListener('change', (e) => {
+  const current = readAvailabilityGrid('mte-availability');
+  renderAvailabilityGrid('mte-availability', current, seasonSlots, e.target.value);
+});
+
 document.getElementById('mte-save').addEventListener('click', async () => {
   const errEl = document.getElementById('mte-error');
   const okEl  = document.getElementById('mte-success');
@@ -294,7 +305,7 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     }
     myTeam = data.team;
     document.getElementById('team-title').textContent = myTeam.label || 'My Team';
-    renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots);
+    renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots, myTeam.earliest_date);
     renderMyAvailabilityCalendar();
     if (data.email_change_pending) {
       okEl.textContent = data.email_change_sent

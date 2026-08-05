@@ -571,7 +571,7 @@ function openTeamAdd() {
   document.getElementById('tfe-earliest').value = '';
   populateDivisionSelect();
   populateFieldSelect();
-  renderAvailabilityGrid('tfe-availability', null, seasonSlots);
+  renderAvailabilityGrid('tfe-availability', null, seasonSlots, '');
   // Collapsed by default on Add — setting availability is the coach's job,
   // later. A director who genuinely needs to set it now can still open this.
   document.getElementById('tfe-availability-details').open = false;
@@ -596,7 +596,7 @@ function openTeamEdit(teamId) {
   populateFieldSelect();
   document.getElementById('tfe-division').value = String(team.division_id || '');
   document.getElementById('tfe-field').value = String(team.home_field_id || '');
-  renderAvailabilityGrid('tfe-availability', team.availability, seasonSlots);
+  renderAvailabilityGrid('tfe-availability', team.availability, seasonSlots, team.earliest_date);
   // Open on Edit — this is the director deliberately going looking for it.
   document.getElementById('tfe-availability-details').open = true;
   document.getElementById('tfe-error').classList.add('hidden');
@@ -607,6 +607,16 @@ function openTeamEdit(teamId) {
 document.getElementById('btn-add-team').addEventListener('click', openTeamAdd);
 document.getElementById('tfe-cancel').addEventListener('click', () => {
   document.getElementById('team-editor-form').classList.add('hidden');
+});
+
+// Re-filter the per-date list live as the first-available-day field changes
+// (shared by both Add and Edit) — otherwise it only updates on the next full
+// render, so a director setting it for a brand-new team wouldn't see it take
+// effect until after saving. readAvailabilityGrid captures whatever's
+// already been toggled so re-rendering doesn't discard in-progress changes.
+document.getElementById('tfe-earliest').addEventListener('change', (e) => {
+  const current = readAvailabilityGrid('tfe-availability');
+  renderAvailabilityGrid('tfe-availability', current, seasonSlots, e.target.value);
 });
 
 document.getElementById('tfe-save').addEventListener('click', async () => {

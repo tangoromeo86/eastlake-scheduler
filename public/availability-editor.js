@@ -45,7 +45,7 @@ function avSeasonDates(seasonSlots) {
 
 // ── Team availability (four-state) ───────────────────────────────────────────
 
-function renderAvailabilityGrid(containerId, availability, seasonSlots) {
+function renderAvailabilityGrid(containerId, availability, seasonSlots, earliestDate) {
   const a = availability || {};
   const pattern = a.weekday || {};
   const sat = a.saturday || {};
@@ -64,7 +64,14 @@ function renderAvailabilityGrid(containerId, availability, seasonSlots) {
     </tr>`).join('');
 
   // Stage 2 — group every season date under its weekday so the list is scannable.
-  const all = avSeasonDates(seasonSlots);
+  // Dates before this team's first available day are never actually offered
+  // to the scheduler (lib/scheduler.js forces them to "not available"
+  // unconditionally, ahead of any per-date exception set here) — showing
+  // them anyway invites a coach to toggle a date that then silently does
+  // nothing, so they're left out entirely rather than shown but pointless.
+  const allDates = avSeasonDates(seasonSlots);
+  const hiddenCount = earliestDate ? allDates.filter(d => d.date < earliestDate).length : 0;
+  const all = earliestDate ? allDates.filter(d => d.date >= earliestDate) : allDates;
   const groups = {};
   for (const d of all) (groups[d.type === 'saturday' ? 'Saturday' : d.day] ||= []).push(d);
 
@@ -87,10 +94,15 @@ function renderAvailabilityGrid(containerId, availability, seasonSlots) {
       <div class="table-wrap"><table class="fields-table"><thead>${head}</thead><tbody>${rows}</tbody></table></div></details>`;
   }).join('');
 
+  const earliestNote = hiddenCount > 0
+    ? `<p class="field-form-hint" style="margin-bottom:6px">${hiddenCount} date${hiddenCount === 1 ? '' : 's'} before this team's first available day (${avNiceDate(earliestDate)}) aren't shown — the scheduler never uses them regardless, so there's nothing to set.</p>`
+    : '';
+
   document.getElementById(containerId).innerHTML = `
     <table class="fields-table"><thead><tr><th>Day</th><th>Usual status</th></tr></thead><tbody>${patternRows}</tbody></table>
     <div style="margin-top:14px">
       <p class="field-form-hint" style="margin-bottom:6px">Need to change a specific week? Open a day below — every date starts on "Use pattern", so you only set the exceptions.</p>
+      ${earliestNote}
       ${groupHtml || '<p style="color:#94a3b8">Season dates appear here once a start date is set.</p>'}
     </div>`;
 }

@@ -798,6 +798,57 @@ async function loginAs(page, email, password) {
       ? ok('Friday now has its own row in the weekly availability grid')
       : bad('Friday is missing from the availability grid', availText.slice(0, 300));
 
+    // Ted, 2026-08-05: a team with a first-available-day set was still shown
+    // every date in the season to toggle in the per-date drill-down, even
+    // dates before it that the scheduler always ignores regardless (see
+    // resolveTeamAvailability in lib/scheduler.js) — misleading, since
+    // toggling one of those silently did nothing. Set it via a live PUT
+    // (not the shared static fixture — team-1's game #1 is hardcoded to
+    // seasonStart itself, so a fixture-level earliest_date past that date
+    // would make the earlier change-request-modal test's "same day" options
+    // vanish) then reload so myTeam/the grid pick up the new value the same
+    // way a coach's own save would.
+    const earliestDate = new Date(new Date(seasonStart).getTime() + 14 * 86400000).toISOString().slice(0, 10);
+    // The PUT requires a verified session (requireAuth + requireVerified) —
+    // this context logged in but never verified, same code-endpoint
+    // shortcut used elsewhere in this file since there's no live inbox here.
+    await cpage.evaluate(async () => {
+      await fetch('api/auth/request-verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    });
+    await cpage.waitForTimeout(200);
+    const ceCodeLine = (srv.__log || '').split('\n').reverse().find(l => l.includes('DEBUG_LOGIN_CODE:casey@example.com:'));
+    const ceCode = ceCodeLine ? ceCodeLine.split(':').pop().trim() : null;
+    await cpage.evaluate(async (c) => {
+      await fetch('api/auth/verify-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: c }) });
+    }, ceCode);
+    const putRes = await cpage.evaluate(async (ed) => {
+      const r = await fetch('api/teams/team-1', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: 'Wildcats', email: 'casey@example.com', earliest_date: ed }),
+      });
+      return r.status;
+    }, earliestDate);
+    putRes === 200
+      ? ok('setting a first-available-day saves cleanly')
+      : bad('saving the first-available-day failed', `status ${putRes}`);
+    await cpage.reload({ waitUntil: 'networkidle' });
+    await cpage.waitForTimeout(400);
+    await cpage.locator('#mte-avail-details summary').first().click();
+    await cpage.waitForTimeout(200);
+    await cpage.locator('#mte-availability .av-group summary').evaluateAll(els =>
+      els.forEach(el => el.closest('details').open = true));
+    const renderedDates = await cpage.locator('#mte-availability select.av-date').evaluateAll(
+      els => [...new Set(els.map(el => el.dataset.date))]);
+    const tooEarly = renderedDates.filter(d => d < earliestDate);
+    (renderedDates.length > 0 && tooEarly.length === 0)
+      ? ok('dates before the team\'s first available day are hidden from the per-date picker', `${renderedDates.length} dates shown, earliest ${renderedDates.sort()[0]}`)
+      : bad('a date before the first-available-day was still offered to toggle', JSON.stringify(tooEarly.slice(0, 5)));
+
+    const earliestNoteText = await cpage.locator('#mte-availability').innerText().catch(() => '');
+    /aren't shown/.test(earliestNoteText)
+      ? ok('the availability editor explains why earlier dates are missing')
+      : bad('no explanation shown for the hidden earlier dates', earliestNoteText.slice(0, 200));
+
     // Ted's three small asks: the game id visible, an American MM-DD-YYYY
     // date, and "vs X" / "@ X" instead of a separate Home/Away label. Casey
     // coaches Wildcats (team-1), home in game #1 vs Rockets.
