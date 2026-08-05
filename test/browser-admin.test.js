@@ -21,6 +21,22 @@ let pass = 0, fail = 0;
 const ok  = (n, x) => { pass++; console.log(`  PASS: ${n}${x ? ` (${x})` : ''}`); };
 const bad = (n, w) => { fail++; console.log(`  ** FAIL: ${n} — ${w}`); };
 
+// Chromium intermittently aborts a navigation issued right after the previous
+// one settles (net::ERR_ABORTED). It's a browser-side race, not an app bug —
+// but on the very first /admin navigation it used to throw out of the whole
+// run, reporting "0 passed, 1 failed" and giving no signal at all about the
+// ~40 real checks below. Measured at roughly 1 run in 3. Retrying clears it;
+// swallowing it with .catch(() => {}) does not, because the page is then left
+// on the wrong URL and every later assertion fails for an unrelated reason.
+async function gotoRetry(page, url, opts = {}, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try { return await page.goto(url, { waitUntil: 'domcontentloaded', ...opts }); }
+    catch (err) { lastErr = err; await page.waitForTimeout(250 * (i + 1)); }
+  }
+  throw lastErr;
+}
+
 // No real RESEND_API_KEY in this environment — a throwaway instrumented copy
 // logs the verification code to stdout so a session can be verified (Confirm
 // and change-request submission both require it), same technique as
@@ -104,7 +120,7 @@ async function verifyPage(page, email, srv) {
     await p.click('#signin-btn');
     await p.waitForLoadState('networkidle');
 
-    await p.goto(`${BASE}/admin`, { waitUntil: 'domcontentloaded' });
+    await gotoRetry(p, `${BASE}/admin`);
     await p.waitForTimeout(500);
 
     // ── Matrix view: cells must differ, not all show the division total ────
@@ -171,7 +187,7 @@ async function verifyPage(page, email, srv) {
     // Previously admin.html had no #ffe-availability markup at all — this was
     // structurally impossible before, not just missing from a list view.
     await p.waitForTimeout(300);
-    await p.goto(`${BASE}/admin`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await gotoRetry(p, `${BASE}/admin`);
     await p.waitForLoadState('domcontentloaded').catch(() => {});
     await p.waitForTimeout(500);
     const fieldsTab = p.locator('button:has-text("Fields"), [data-page="fields"]').first();
@@ -559,7 +575,7 @@ async function verifyPage(page, email, srv) {
     }
 
     // ── Availability calendar: admin (league-wide, filterable by division) ──
-    await p.goto(`${BASE}/admin`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await gotoRetry(p, `${BASE}/admin`);
     await p.waitForLoadState('domcontentloaded').catch(() => {});
     await p.waitForTimeout(500);
     const availTab = p.locator('button:has-text("Availability"), [data-page="availability"]').first();

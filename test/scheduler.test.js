@@ -479,6 +479,29 @@ avgSpread <= spreadLimit
     : bad('scheduled kickoff disagrees with the standalone calculation', JSON.stringify(mismatched.slice(0, 3)));
 }
 
+// ── timeRangesOverlap: the shared field-conflict chokepoint ──────────────────
+// Four separate places ask "is this field already busy?" — the auto-scheduler,
+// manual edits, the options offered to a coach, and the time a coach finally
+// picks. All four originally compared time STRINGS, which silently misses a
+// real collision whenever two games have different lengths. They now all route
+// through this one function, so it's worth pinning directly: if this is right,
+// all four are right, and a fifth caller can't reintroduce the old bug.
+{
+  const { timeRangesOverlap } = require('../lib/scheduler');
+  const cases = [
+    ['12:00', 80, '13:00', 50, true,  'different time strings, genuinely overlapping'],
+    ['17:45', 80, '18:00', 50, true,  'the sunset-adjusted weekday case this was found in'],
+    ['12:00', 60, '13:00', 50, false, 'exactly back-to-back is NOT an overlap'],
+    ['10:00', 60, '12:00', 60, false, 'normal Saturday slots stay clear'],
+    ['12:00', 90, '10:00', 60, false, 'earlier game already finished'],
+    ['12:00', null, '12:00', null, true, 'identical times overlap even with default lengths'],
+  ];
+  const wrong = cases.filter(([a, la, b, lb, expected]) => timeRangesOverlap(a, la, b, lb) !== expected);
+  wrong.length === 0
+    ? ok('timeRangesOverlap is correct across overlap/adjacent/clear cases', `${cases.length} cases`)
+    : bad('the shared field-conflict check got a case wrong', JSON.stringify(wrong.map(c => c[5])));
+}
+
 // ── validateGameEdit: same-day double-booking + field host-availability ──────
 // Same 2026-08-04 review: validateGameEdit (the manual-edit soft-violation
 // check shared by admin and director editors) is supposed to enforce exactly

@@ -13,10 +13,15 @@ const { scheduleAll, validateGameEdit, dayName, teamName,
         isExemptBackToBack, MAX_GAMES_PER_WEEK, DEFAULT_GAME_LENGTH_MINUTES, toMinutes } = require('./lib/scheduler');
 
 const app = express();
-// Deployed behind nginx — without this, req.ip is always nginx's own address,
-// which would turn the per-IP rate limits below into one shared global limit
-// for every real visitor instead of one per actual client.
-app.set('trust proxy', true);
+// Deployed behind exactly one nginx hop. This MUST be the hop count (1), not
+// `true`: nginx uses $proxy_add_x_forwarded_for, which APPENDS the real client
+// IP to whatever X-Forwarded-For the client already sent. With `true`, Express
+// trusts the whole chain and takes the left-most (client-supplied) entry, so
+// anyone could spoof a fresh X-Forwarded-For per request and walk straight
+// through the per-IP rate limits below — verified that this was exploitable
+// before pinning it to 1. With 1, req.ip is the entry nginx itself appended,
+// which a client cannot forge.
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3010;
 const BASE_PATH = process.env.BASE_PATH || '';
 
@@ -82,15 +87,35 @@ function secureEqual(a, b) {
 // being mail-bombed by anyone who knows their email (request-verify) — both
 // reachable without any prior authentication.
 const rateLimitHits = new Map(); // key -> [timestamps]
-function rateLimited(key, maxHits, windowMs) {
+
+function recentHits(key, windowMs) {
   const now = Date.now();
   const hits = (rateLimitHits.get(key) || []).filter(t => now - t < windowMs);
-  hits.push(now);
+  if (hits.length) rateLimitHits.set(key, hits); else rateLimitHits.delete(key);
+  return hits;
+}
+
+// Checking and recording are deliberately separate so a limit can count only
+// FAILED attempts. Counting successes too would let a busy legitimate user
+// (or Ted signing in repeatedly) burn their own budget and lock themselves
+// out, while doing nothing extra to slow an attacker down.
+function overLimit(key, maxHits, windowMs) {
+  return recentHits(key, windowMs).length >= maxHits;
+}
+
+function noteAttempt(key, windowMs) {
+  const hits = recentHits(key, windowMs);
+  hits.push(Date.now());
   rateLimitHits.set(key, hits);
+  const now = Date.now();
   if (rateLimitHits.size > 5000) {
     for (const [k, v] of rateLimitHits) if (!v.length || now - v[v.length - 1] > 60 * 60 * 1000) rateLimitHits.delete(k);
   }
-  return hits.length > maxHits;
+}
+
+function rateLimited(key, maxHits, windowMs) {
+  noteAttempt(key, windowMs);
+  return recentHits(key, windowMs).length > maxHits;
 }
 
 // ── Cookie & session helpers ──────────────────────────────────────────────────
@@ -570,12 +595,28 @@ app.post('/api/auth/login', (req, res) => {
   const next     =  req.body.next     || req.query.next || '';
   if (!email) return res.status(400).json({ error: 'Email required' });
 
-  if (rateLimited(`login:${req.ip}`, 10, 15 * 60 * 1000)) {
+  // A generous per-IP ceiling, purely an abuse guard. Deliberately loose:
+  // a coach/director login has no secret to guess (their email IS the
+  // credential, by design), so throttling it buys almost nothing, while
+  // whole schools and mobile carriers share one public IP — a tight limit
+  // here would lock out real people during registration week.
+  const LOGIN_WINDOW = 15 * 60 * 1000;
+  if (overLimit(`login:${req.ip}`, 60, LOGIN_WINDOW)) {
     return res.status(429).json({ error: 'Too many login attempts from this connection. Try again in a few minutes.' });
   }
+  noteAttempt(`login:${req.ip}`, LOGIN_WINDOW);
 
   if (ADMIN_EMAIL && email === ADMIN_EMAIL) {
-    if (!secureEqual(password, ADMIN_PASSWORD)) return res.status(401).json({ error: 'Incorrect password' });
+    // The admin password is the one real secret in the system, so it gets a
+    // tight budget — but only FAILURES count against it, so Ted signing in
+    // normally can never lock himself out.
+    if (overLimit(`admin-fail:${req.ip}`, 5, LOGIN_WINDOW)) {
+      return res.status(429).json({ error: 'Too many failed password attempts. Try again in a few minutes.' });
+    }
+    if (!secureEqual(password, ADMIN_PASSWORD)) {
+      noteAttempt(`admin-fail:${req.ip}`, LOGIN_WINDOW);
+      return res.status(401).json({ error: 'Incorrect password' });
+    }
     // Password already proves identity — no separate verify step needed.
     setSession(res, { email, role: 'admin', name: 'Admin', verified: true });
     return res.json({ ok: true, redirect: BASE_PATH + (next === 'admin' ? '/admin' : '/') });
@@ -840,17 +881,10 @@ function computeViableSlots(game, seasonData, schedData, opts = {}) {
       // the same field (e.g. an 80-min game at 17:45 running to 19:05
       // against a 50-min game starting 18:00) — checked as real intervals so
       // that case is actually caught instead of quietly offering it.
-      if (homeFieldId) {
-        const candStart = toMinutes(time);
-        const candEnd = candStart + (gameLengthMinutes || DEFAULT_GAME_LENGTH_MINUTES);
-        const clash = otherGames.some(g => {
-          if (g.field_id !== homeFieldId || g.date !== date || !g.time) return false;
-          const gStart = toMinutes(g.time);
-          const gEnd = gStart + gameLengthFor(g);
-          return candStart < gEnd && gStart < candEnd;
-        });
-        if (clash) continue;
-      }
+      if (homeFieldId && otherGames.some(g =>
+        g.field_id === homeFieldId && g.date === date && g.time &&
+        timeRangesOverlap(time, gameLengthMinutes, g.time, gameLengthFor(g))
+      )) continue;
 
       const fieldGames = homeFieldId
         ? otherGames.filter(g => g.field_id === homeFieldId && g.date === date)
@@ -952,7 +986,14 @@ app.post('/api/run', requireAdmin, (req, res) => {
   try { result = scheduleAll(seasonData); }
   catch (err) { return res.status(500).json({ error: `Scheduler error: ${err.message}` }); }
 
-  for (const g of result.games) delete g._fieldKey;
+  // Strip every scheduler-internal field (_fieldKey, _intervalStart,
+  // _intervalEnd, and anything added later) rather than naming them one by
+  // one — the previous enumerate-by-hand version silently started leaking
+  // two new underscore fields into schedule.json the moment the field-
+  // conflict check grew from a boolean to real time intervals.
+  for (const g of result.games) {
+    for (const k of Object.keys(g)) if (k.startsWith('_')) delete g[k];
+  }
   try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(result, null, 2)); }
   catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
   res.json(result);
@@ -1778,7 +1819,7 @@ async function notifyNoOptions(req, cr, seasonData, context, game) {
 // Resolves a client-picked slot against what's actually viable, allowing the
 // coaches to shift the kickoff within the legal window. Returns
 // { slot, time } or { error }. Never trusts the client's time.
-function resolveProposedSlot(slots, wanted, schedData, gameId) {
+function resolveProposedSlot(slots, wanted, schedData, gameId, seasonData) {
   if (!wanted || !wanted.date) return { error: 'Pick a proposed date' };
   const candidates = slots.filter(x => x.date === wanted.date &&
     (!wanted.slot_key || x.slot_key === wanted.slot_key));
@@ -1792,8 +1833,18 @@ function resolveProposedSlot(slots, wanted, schedData, gameId) {
     return { error: `Game time must be between ${lo} and ${hi}, on the half hour` };
   }
   // A shifted time could collide with another game already on that field.
+  // Compared as real time ranges, not matching time strings: coaches shift
+  // kickoffs freely within the legal window here, and two different-length
+  // games (or two divisions) can overlap without their times ever matching.
+  // Cancelled (rained-out) games are excluded, same as everywhere else —
+  // otherwise a rainout's own vacated slot would block its makeup.
+  const divisionLengths = new Map(((seasonData && seasonData.divisions) || []).map(d => [d.id, d.game_length_minutes]));
+  const thisGame = (schedData.games || []).find(g => g.game_id === gameId);
+  const thisLength = divisionLengths.get(thisGame && thisGame.division_id) || DEFAULT_GAME_LENGTH_MINUTES;
   const clash = (schedData.games || []).some(g =>
-    g.game_id !== gameId && g.field_id === slot.field_id && g.date === slot.date && g.time === time);
+    g.game_id !== gameId && g.status !== 'cancelled' &&
+    g.field_id === slot.field_id && g.date === slot.date && g.time &&
+    timeRangesOverlap(time, thisLength, g.time, divisionLengths.get(g.division_id) || DEFAULT_GAME_LENGTH_MINUTES));
   if (clash) return { error: 'Another game is already booked on that field at that time' };
 
   return { slot, time };
@@ -1830,7 +1881,7 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
       game);
     return res.status(400).json({ error: 'No date works for both teams right now. Your directors have been notified to help.', no_options: true });
   }
-  const picked = resolveProposedSlot(slots, slot, schedData, game_id);
+  const picked = resolveProposedSlot(slots, slot, schedData, game_id, seasonData);
   if (picked.error) return res.status(400).json({ error: picked.error, stale_slot: !!picked.stale });
   const chosen = { ...picked.slot, time: picked.time };
 
@@ -2231,7 +2282,7 @@ app.post('/api/change-requests/:id/counter', express.urlencoded({ extended: fals
     return res.send(crActionPage('No other times work',
       `There's no other date that fits both teams for Game #${cr.game_id}. Your directors have been notified.`));
   }
-  const picked = resolveProposedSlot(slots, { date, time }, schedData, cr.game_id);
+  const picked = resolveProposedSlot(slots, { date, time }, schedData, cr.game_id, seasonData);
   if (picked.error) {
     return res.status(400).send(crActionPage('That time is no longer free',
       `${picked.error}. Please open the link again and pick another.`));
@@ -3447,6 +3498,22 @@ app.post('/api/games/:id/result', requireVerified, (req, res) => {
   catch { return res.status(500).json({ error: 'Could not write schedule.json' }); }
 
   res.json({ ok: true, result, status: resultEffectiveStatus(result) });
+});
+
+// Anything that throws inside a route lands here. Without this, Express's
+// default handler renders an HTML stack-trace page — so an API caller doing
+// `res.json()` gets "Unexpected token '<'" instead of the actual error, which
+// is exactly how one intermittent 500 in the change-request options endpoint
+// showed up during testing: a misleading JSON parse error, several layers
+// away from the real fault. API paths now always get JSON.
+// eslint-disable-next-line no-unused-vars -- Express identifies error handlers by arity; `next` must stay.
+app.use((err, req, res, next) => {
+  console.error(`Unhandled error on ${req.method} ${req.originalUrl}:`, err && err.stack ? err.stack : err);
+  if (res.headersSent) return;
+  if (req.path.startsWith('/api/')) {
+    return res.status(500).json({ error: 'Something went wrong handling that request.' });
+  }
+  res.status(500).send('Something went wrong. Please go back and try again.');
 });
 
 app.listen(PORT, () => {

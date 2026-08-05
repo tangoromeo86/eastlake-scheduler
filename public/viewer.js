@@ -745,7 +745,7 @@ function renderProgramView() {
   const byDate = new Map();
   for (const g of games) { if (!byDate.has(g.date)) byDate.set(g.date, []); byDate.get(g.date).push(g); }
 
-  const summary = `<p class="field-utilization"><strong>${name}</strong> — <strong>${games.length}</strong> game${games.length !== 1 ? 's' : ''} across <strong>${byDate.size}</strong> date${byDate.size !== 1 ? 's' : ''} <button onclick="exportProgramCSV('${programId}')" style="margin-left:8px;font-size:11px;padding:2px 8px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;color:#475569">↓ CSV</button></p>`;
+  const summary = `<p class="field-utilization"><strong>${esc(name)}</strong> — <strong>${games.length}</strong> game${games.length !== 1 ? 's' : ''} across <strong>${byDate.size}</strong> date${byDate.size !== 1 ? 's' : ''} <button onclick="exportProgramCSV(${escAttr(programId)})" style="margin-left:8px;font-size:11px;padding:2px 8px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;color:#475569">↓ CSV</button></p>`;
 
   const groups = [...byDate.entries()].map(([date, dateGames]) => {
     const isSat = dateGames[0].day === 'Saturday';
