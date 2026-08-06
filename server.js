@@ -10,7 +10,7 @@ const { scheduleAll, validateGameEdit, dayName, teamName,
         resolveTeamAvailability, resolveFieldAvailability, nearestSaturdaySlot,
         SATURDAY_SLOTS, SATURDAY_SLOT_TIMES, WEEKDAY_TIME, TIME_BOUNDS, isValidGameTime, allowedTimes,
         buildSeasonWeeks, weekdayStartTimeForField, allowedWeekdayTimesForField,
-        isExemptBackToBack, MAX_GAMES_PER_WEEK, DEFAULT_GAME_LENGTH_MINUTES, toMinutes } = require('./lib/scheduler');
+        isExemptBackToBack, MAX_GAMES_PER_WEEK, DEFAULT_GAME_LENGTH_MINUTES, toMinutes, timeRangesOverlap } = require('./lib/scheduler');
 
 const app = express();
 // Deployed behind exactly one nginx hop. This MUST be the hop count (1), not
