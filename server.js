@@ -2121,6 +2121,13 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [], fields: [] }; }
   try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
 
+  // Snapshot the pre-change state before either branch below mutates it — the
+  // home team's director needs to see original vs. new to know refs must be
+  // rebooked (see the notification after the game is actually updated).
+  // applyChangeRequestToGame overwrites schedData.games[gameIdx] in place, so
+  // this has to be taken before it runs, not derived from it afterward.
+  const beforeGame = { ...(schedData.games.find(g => g.game_id === cr.game_id) || {}) };
+
   // A rain-out was never just "move the game" — both coaches agreeing on a
   // makeup slot is the same negotiation as any other reschedule, but what
   // happens on agreement is different: the original stays as cancelled
@@ -2171,6 +2178,39 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   cr.responded_at = new Date().toISOString();
   list[idx] = cr;
   writeChangeRequests(list);
+
+  // Alert the HOME team's director specifically — not both teams' directors,
+  // the way manual-override does — because refs are booked by whoever hosts,
+  // and only the home program has anything to rebook. home_team_id never
+  // changes through a negotiation (only date/time/field do), so beforeGame
+  // and updatedGame always agree on who that is.
+  if (updatedGame) {
+    const teamsForRefNotice = seasonData.teams || [];
+    const homeTeamForNotice = teamsForRefNotice.find(t => String(t.id) === String(updatedGame.home_team_id));
+    const homeDirector = (seasonData.directors || []).find(d =>
+      d.active !== false && d.program_id && d.program_id === homeTeamForNotice?.program_id);
+    if (homeDirector?.email) {
+      const refSubject = `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: reschedule refs — game moved`;
+      const refHtml = emailShell(`
+        ${emailHeading(refSubject)}
+        ${emailP(`Both coaches agreed to ${cr.is_rainout ? 'a rain-out makeup' : 'move'} Game #${cr.game_id}. This is a home game for your program, so referees booked for the original time will need to be moved.`)}
+        ${emailGameCard({ homeLabel: beforeGame.home_team_name, awayLabel: beforeGame.away_team_name, date: beforeGame.date, time: beforeGame.time, fieldName: beforeGame.field_name, fieldAddress: beforeGame.field_address, caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Original' })}
+        ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, caption: cr.is_rainout ? 'Makeup game' : 'New date & time' })}
+      `);
+      await sendEmail({
+        to: homeDirector.email,
+        subject: refSubject,
+        text: [
+          `Both coaches agreed to ${cr.is_rainout ? 'a rain-out makeup for' : 'move'} Game #${cr.game_id}. This is a home game for your program, so referees booked for the original time will need to be moved.`,
+          '',
+          `Original: ${beforeGame.day} ${beforeGame.date} at ${beforeGame.time} — ${beforeGame.field_name}`,
+          `New: ${updatedGame.day} ${updatedGame.date} at ${updatedGame.time} — ${updatedGame.field_name}`,
+          '', '— Eastlake Scheduler',
+        ].join('\n'),
+        html: refHtml,
+      });
+    }
+  }
 
   // Tell the coach who proposed it that it's locked in.
   const teams = seasonData.teams || [];

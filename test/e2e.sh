@@ -35,7 +35,7 @@ setup_server() {
   # address, opposite coach's contact info) instead of a bare text link — this
   # logs a one-line fingerprint of each one sent so the suite can assert the
   # content actually made it into the email, not just that sendEmail was called.
-  perl -0pi -e 's/(async function sendEmail\(\{ to, subject, text, html \}\) \{)/$1\n  if (html) console.log("DEBUG_EMAIL_HTML:" + subject + "||" + html.replace(\/\\n\/g, " "));/' "$repo/.server.e2e.js"
+  perl -0pi -e 's/(async function sendEmail\(\{ to, subject, text, html \}\) \{)/$1\n  if (html) console.log("DEBUG_EMAIL_HTML:" + subject + "||" + html.replace(\/\\n\/g, " "));\n  console.log("DEBUG_EMAIL_TO:" + subject + "||" + (Array.isArray(to) ? to.join(",") : to));/' "$repo/.server.e2e.js"
   perl -0pi -e 's/(^setInterval\(\(\) => \{ checkEscalations.*$)/$1\napp.post("\/api\/_test\/check-escalations", requireAdmin, async (req, res) => { await checkEscalations(); res.json({ ok: true }); });/m' "$repo/.server.e2e.js"
   ( cd "$repo" && ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=testpass \
       SESSION_SECRET=e2e PORT="${E2E_PORT:-3099}" RESEND_API_KEY= \
@@ -473,6 +473,35 @@ FINAL=$(python3 -c "
 import json, os; d=json.load(open('$SCHED'))
 g=[x for x in d['games'] if x['game_id']==$GID][0]; print(g['date'], g['time'], g['status'])")
 [ "$FINAL" = "$AGREED confirmed" ] && pass "on agreement the game finally moves to $AGREED" || fail "final = $FINAL (wanted $AGREED confirmed)"
+
+# --- the HOME team's director gets a ref-rescheduling alert (Ted, 2026-08-06) ---
+# Refs are booked by whoever hosts, so only the home program's director should
+# hear about this — not the away director, and not both (that's what manual-
+# override already does for a different scenario). T1 is Dana's team (P1), T2
+# is Mike's (P2); figure out which one is actually home for $GID so the
+# expected recipient is derived from real state, not assumed.
+HOMEDIR_EMAIL=$(python3 -c "
+import json
+d=json.load(open('$SCHED'))
+g=[x for x in d['games'] if x['game_id']==$GID][0]
+print('dana@example.com' if str(g['home_team_id'])=='$T1' else 'mike@example.com')")
+OTHERDIR_EMAIL=$([ "$HOMEDIR_EMAIL" = "dana@example.com" ] && echo "mike@example.com" || echo "dana@example.com")
+REFALERT_HTML=$(wait_for_log "DEBUG_EMAIL_HTML:.*reschedule refs")
+REFALERT_TO=$(wait_for_log "DEBUG_EMAIL_TO:.*reschedule refs")
+[[ "$REFALERT_TO" == *"$HOMEDIR_EMAIL"* ]] && pass "the home team's director gets the ref-reschedule alert ($HOMEDIR_EMAIL)" || fail "ref-reschedule alert didn't reach $HOMEDIR_EMAIL: $REFALERT_TO"
+[[ "$REFALERT_TO" == *"$OTHERDIR_EMAIL"* ]] && fail "the AWAY team's director was also alerted — should be home-only: $REFALERT_TO" || pass "the away team's director was correctly left out of the ref-reschedule alert"
+# The HTML card renders niceDate() ("Sep 19"), not the raw ISO date — match
+# what actually appears, not the $ORIGDATE/$AGREED strings themselves.
+ORIGDATE_NICE=$(python3 -c "
+import datetime
+d = datetime.date.fromisoformat('$ORIGDATE'.split()[0])
+print(d.strftime('%b ') + str(d.day))")
+AGREED_NICE=$(python3 -c "
+import datetime
+d = datetime.date.fromisoformat('$AGREED'.split()[0])
+print(d.strftime('%b ') + str(d.day))")
+[[ "$REFALERT_HTML" == *"$ORIGDATE_NICE"* ]] && pass "ref-reschedule alert shows the ORIGINAL game date" || fail "original date ($ORIGDATE_NICE) missing from ref-reschedule alert"
+[[ "$REFALERT_HTML" == *"$AGREED_NICE"* ]] && pass "ref-reschedule alert shows the NEW game date" || fail "new date ($AGREED_NICE) missing from ref-reschedule alert"
 
 HIST=$(curl -s -b coacha.txt "$BASE/api/games/$GID/history" | python3 -c "
 import sys,json
