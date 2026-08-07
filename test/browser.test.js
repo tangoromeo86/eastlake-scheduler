@@ -49,7 +49,7 @@ function seedSeason() {
     ],
   };
   fs.writeFileSync(path.join(ROOT, 'season.json'), JSON.stringify(season, null, 2));
-  for (const f of ['schedule.json', 'change_requests.json', 'changes.json']) {
+  for (const f of ['schedule.json', 'change_requests.json', 'changes.json', 'activity_log.json']) {
     try { fs.unlinkSync(path.join(ROOT, f)); } catch {}
   }
 }
@@ -893,7 +893,7 @@ async function loginAs(page, email, password) {
     await browser.close();
     srv.kill();
     try { fs.unlinkSync(INSTRUMENTED_COPY); } catch {}
-    for (const f of ['season.json', 'schedule.json', 'change_requests.json', 'changes.json']) {
+    for (const f of ['season.json', 'schedule.json', 'change_requests.json', 'changes.json', 'activity_log.json']) {
       try { fs.unlinkSync(path.join(ROOT, f)); } catch {}
     }
     try { fs.rmSync(path.join(ROOT, 'snapshots'), { recursive: true, force: true }); } catch {}

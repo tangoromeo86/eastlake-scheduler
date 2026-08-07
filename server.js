@@ -29,6 +29,7 @@ const SCHEDULE_FILE = path.join(__dirname, 'schedule.json');
 const SEASON_FILE   = path.join(__dirname, 'season.json');
 const CHANGES_FILE  = path.join(__dirname, 'changes.json');
 const CHANGE_REQUESTS_FILE = path.join(__dirname, 'change_requests.json');
+const ACTIVITY_LOG_FILE = path.join(__dirname, 'activity_log.json');
 
 // ── Auth config (set via environment — never hardcode secrets here) ───────────
 const ADMIN_EMAIL    = (process.env.ADMIN_EMAIL    || '').toLowerCase().trim();
@@ -565,6 +566,157 @@ app.get('/my-team', requireAuth, (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
+
+// ── Activity log ─────────────────────────────────────────────────────────────
+// Ted, 2026-08-07: "when someone says 'I was doing ___ and it didn't work' I
+// want to be able to see what they were doing." Before this, the app had
+// almost no logging at all — a handful of console.error calls for outright
+// crashes, nothing recording ordinary actions. This records every state-
+// changing request (who, what, when, whether it succeeded) so that kind of
+// report can actually be investigated instead of reasoned about from code
+// alone. Deliberately GET-only exempt: mutating requests are what "doing
+// something" means here, and logging every read would mostly be page-load
+// noise with little diagnostic value for this specific use case.
+const ACTIVITY_LOG_MAX = 5000;
+
+function readActivityLog() {
+  return readJsonSafe(ACTIVITY_LOG_FILE, []);
+}
+
+function writeActivityLog(list) {
+  // Same "keep the tail, drop the rest" pruning as auto-snapshots elsewhere —
+  // just a much higher cap, since these entries are tiny and the whole point
+  // is to have enough history to look back on.
+  const trimmed = list.length > ACTIVITY_LOG_MAX ? list.slice(list.length - ACTIVITY_LOG_MAX) : list;
+  try { fs.writeFileSync(ACTIVITY_LOG_FILE, JSON.stringify(trimmed, null, 2)); } catch (err) { console.error('Could not write activity_log.json:', err.message); }
+}
+
+// A DELETE removes its own evidence — if we want the log entry to say WHICH
+// team/field/etc. was deleted, that name has to be captured before the route
+// handler runs, not after. Middleware runs ahead of the route handler, so
+// this reads season.json once up front for the handful of routes where it
+// matters; PUT/POST don't need this since the submitted name is already in
+// the request body.
+function activityPriorLabel(req) {
+  const idMatch = req.path.match(/^\/api\/(teams|season\/fields|season\/programs|season\/directors|season\/divisions|game)\/([^/]+)$/);
+  if (!idMatch) return null;
+  const [, kind, id] = idMatch;
+  const data = readJsonSafe(SEASON_FILE, {});
+  const collection = { teams: 'teams', 'season/fields': 'fields', 'season/programs': 'programs',
+    'season/directors': 'directors', 'season/divisions': 'divisions' }[kind];
+  if (collection) {
+    const rec = (data[collection] || []).find(x => String(x.id) === id);
+    return rec ? (rec.label || rec.name || null) : null;
+  }
+  if (kind === 'game') {
+    const sched = readJsonSafe(SCHEDULE_FILE, { games: [] });
+    const g = (sched.games || []).find(x => String(x.game_id) === id);
+    return g ? `${g.home_team_name} vs ${g.away_team_name}` : null;
+  }
+  return null;
+}
+
+// Bespoke, readable descriptions for the actions Ted is actually likely to
+// need to look up. Anything not covered here still gets logged — just with
+// a plain "METHOD /path" summary — so nothing silently goes unrecorded for
+// lack of a describer; this list only ever needs to grow for readability,
+// never for coverage.
+//
+// `re` is matched against req.path and its capture groups are handed to
+// `describe` as `m` — req.params ISN'T available here. That only gets
+// populated once Express's router matches a specific route; this runs in a
+// plain app.use() middleware ahead of routing, so req.params is always {}.
+const ACTIVITY_DESCRIBERS = [
+  { method: 'POST', re: /^\/api\/auth\/login$/,
+    describe: (req, status) => `Login attempt (${req.body?.email || 'unknown email'})${status === 200 ? '' : ' — failed'}` },
+  { method: 'POST', re: /^\/api\/teams$/,
+    describe: (req) => `Added team "${req.body?.label || '?'}"` },
+  { method: 'PUT', re: /^\/api\/teams\/([^/]+)$/,
+    describe: (req) => `Updated team "${req.body?.label || '?'}"${req.body?.availability ? ' (availability changed)' : ''}` },
+  { method: 'DELETE', re: /^\/api\/teams\/([^/]+)$/,
+    describe: (req, status, prior, m) => `Deleted team "${prior || m[1]}"` },
+  { method: 'PATCH', re: /^\/api\/team\/([^/]+)$/,
+    describe: (req, status, prior, m) => `Admin edited team ${m[1]}` },
+  { method: 'POST', re: /^\/api\/season\/fields$/,
+    describe: (req) => `Added field "${req.body?.name || '?'}"` },
+  { method: 'PUT', re: /^\/api\/season\/fields\/([^/]+)$/,
+    describe: (req) => `Updated field "${req.body?.name || '?'}"${req.body?.availability ? ' (availability changed)' : ''}` },
+  { method: 'DELETE', re: /^\/api\/season\/fields\/([^/]+)$/,
+    describe: (req, status, prior, m) => `Deleted field "${prior || m[1]}"` },
+  { method: 'POST', re: /^\/api\/season\/programs$/,
+    describe: (req) => `Added program "${req.body?.name || '?'}"` },
+  { method: 'PUT', re: /^\/api\/season\/programs\/([^/]+)$/,
+    describe: (req) => `Renamed program to "${req.body?.name || '?'}"` },
+  { method: 'DELETE', re: /^\/api\/season\/programs\/([^/]+)$/,
+    describe: (req, status, prior, m) => `Deleted program "${prior || m[1]}"` },
+  { method: 'POST', re: /^\/api\/season\/directors$/,
+    describe: (req) => `Added director "${req.body?.name || '?'}" (${req.body?.email || 'no email'})` },
+  { method: 'DELETE', re: /^\/api\/season\/directors\/([^/]+)$/,
+    describe: (req, status, prior, m) => `Removed director "${prior || m[1]}"` },
+  { method: 'POST', re: /^\/api\/game$/,
+    describe: (req) => `Manually scheduled a game${req.body?.force ? ' (forced past a violation)' : ''}` },
+  { method: 'PUT', re: /^\/api\/game\/([^/]+)$/,
+    describe: (req, status, prior, m) => `Edited game #${m[1]}${req.body?.force ? ' (forced past a violation)' : ''}` },
+  { method: 'DELETE', re: /^\/api\/game\/([^/]+)$/,
+    describe: (req, status, prior, m) => `Deleted game "${prior || ('#' + m[1])}"` },
+  { method: 'POST', re: /^\/api\/game\/([^/]+)\/rainout$/,
+    describe: (req, status, prior, m) => `Rained out game #${m[1]}` },
+  { method: 'POST', re: /^\/api\/change-requests$/,
+    describe: (req) => `Requested a change on game #${req.body?.game_id}${req.body?.is_rainout ? ' (rain out)' : ''}` },
+  { method: 'POST', re: /^\/api\/change-requests\/([^/]+)\/manual-override$/,
+    describe: (req, status, prior, m) => `Manual override on game #${m[1]}` },
+  { method: 'POST', re: /^\/api\/games\/([^/]+)\/result$/,
+    describe: (req, status, prior, m) => `Reported a score for game #${m[1]}` },
+  { method: 'POST', re: /^\/api\/run$/,
+    describe: () => 'Ran the scheduler' },
+  { method: 'POST', re: /^\/api\/upload-season$/,
+    describe: () => 'Uploaded a new season.json' },
+  { method: 'POST', re: /^\/api\/season\/new$/,
+    describe: (req) => `Started a new season (${req.body?.label || req.body?.start || '?'})` },
+  { method: 'POST', re: /^\/api\/snapshots$/,
+    describe: (req) => `Took a manual backup ("${req.body?.label || 'Manual snapshot'}")` },
+  { method: 'POST', re: /^\/api\/snapshots\/([^/]+)\/restore$/,
+    describe: (req, status, prior, m) => `Restored a backup (${m[1]})` },
+];
+
+function describeActivity(req, status, priorLabel) {
+  for (const d of ACTIVITY_DESCRIBERS) {
+    if (d.method !== req.method) continue;
+    const m = req.path.match(d.re);
+    if (!m) continue;
+    try { return d.describe(req, status, priorLabel, m); } catch { break; }
+  }
+  return `${req.method} ${req.path}`;
+}
+
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  const startedAt = Date.now();
+  const priorLabel = req.method === 'DELETE' ? activityPriorLabel(req) : null;
+  res.on('finish', () => {
+    let s = null;
+    try { s = getSession(req); } catch { /* unauthenticated request, e.g. login itself */ }
+    const list = readActivityLog();
+    list.push({
+      id: Date.now() + Math.random().toString(36).slice(2, 6),
+      at: new Date().toISOString(),
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      ms: Date.now() - startedAt,
+      actor: s ? { email: s.email, role: s.role, name: s.name || null, team_id: s.team_id || null, program_id: s.program_id || null } : null,
+      summary: describeActivity(req, res.statusCode, priorLabel),
+    });
+    writeActivityLog(list);
+  });
+  next();
+});
+
+app.get('/api/activity-log', requireAdmin, (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), ACTIVITY_LOG_MAX);
+  const list = readActivityLog();
+  res.json({ ok: true, total: list.length, entries: list.slice(-limit).reverse() });
+});
 
 app.get('/login', (req, res) => {
   res.setHeader('Content-Type', 'text/html');

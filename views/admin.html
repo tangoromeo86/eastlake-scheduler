@@ -38,6 +38,7 @@
     <button class="top-nav-btn" data-page="programs">&#127961; Programs</button>
     <button class="top-nav-btn" data-page="season">&#128197; Season</button>
     <button class="top-nav-btn" data-page="backups">&#128190; Backups</button>
+    <button class="top-nav-btn" data-page="activity">&#128203; Activity</button>
   </nav>
 
   <input type="file" id="season-file-input" accept=".json,application/json" style="display:none">
@@ -192,6 +193,19 @@
       <span class="changes-toolbar-title">&#128231; Coach Change Requests</span>
     </div>
     <div id="requests-content"></div>
+  </div>
+
+  <div id="page-activity" class="page-section hidden">
+    <div class="changes-toolbar">
+      <span class="changes-toolbar-title">&#128203; Site Activity</span>
+      <input id="activity-search" type="text" placeholder="Filter by name, email, or action…"
+        style="flex:1;max-width:320px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">
+      <button id="btn-refresh-activity" class="btn btn-secondary">Refresh</button>
+    </div>
+    <p class="field-form-hint" style="margin:6px 0 14px">Every save, delete, login attempt and other action taken
+      anywhere on the site — who did it, when, and whether it succeeded. Page views aren't logged, only actions
+      that change something. Keeps the most recent 5,000 actions.</p>
+    <div id="activity-content"></div>
   </div>
 
   <div id="page-fields" class="page-section hidden">

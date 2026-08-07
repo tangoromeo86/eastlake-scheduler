@@ -712,13 +712,48 @@ async function verifyPage(page, email, srv) {
     coachCalErrs.length === 0
       ? ok('no JS errors on the coach availability calendar')
       : bad('JS errors on coach availability calendar', coachCalErrs.slice(0, 2).join(' | '));
+
+    // ── Activity log: admin can see who did what (Ted, 2026-08-07) ──────────
+    // By this point in the run, plenty of real mutating actions have already
+    // happened (team saves, the calendar-reset repro's own save, logins,
+    // etc.) — enough to check the log actually captured them, not just that
+    // the page renders empty.
+    await gotoRetry(p, `${BASE}/admin`);
+    await p.waitForTimeout(400);
+    const activityTab = p.locator('button:has-text("Activity"), [data-page="activity"]').first();
+    if (await activityTab.count()) {
+      await activityTab.click();
+      await p.waitForTimeout(500);
+      const activityRows = await p.locator('#activity-content tbody tr').count();
+      activityRows > 0
+        ? ok('activity log shows recorded actions', `${activityRows} rows`)
+        : bad('activity log rendered no rows despite earlier mutating actions', '');
+
+      const rowText = await p.locator('#activity-content').innerText().catch(() => '');
+      /Updated team|Added team|Login attempt/.test(rowText)
+        ? ok('activity log entries are human-readable, not raw method/path')
+        : bad('no recognizable action summary found in the activity log', rowText.slice(0, 200));
+
+      // The search box filters client-side — searching for something that
+      // can't match should shrink the visible rows without erroring.
+      await p.fill('#activity-search', 'zzz-no-such-action-zzz');
+      await p.waitForTimeout(200);
+      const filteredRows = await p.locator('#activity-content tbody tr').count();
+      filteredRows === 0
+        ? ok('activity search filters down to zero for a non-matching query')
+        : bad('activity search did not filter as expected', `${filteredRows} rows still shown`);
+      await p.fill('#activity-search', '');
+      await p.waitForTimeout(200);
+    } else {
+      bad('no Activity tab found in admin nav', '');
+    }
   } catch (e) {
     bad('browser run threw', e.message);
   } finally {
     await browser.close();
     srv.kill();
     try { fs.unlinkSync(INSTRUMENTED_COPY); } catch {}
-    for (const f of ['season.json', 'schedule.json', 'change_requests.json', 'changes.json']) {
+    for (const f of ['season.json', 'schedule.json', 'change_requests.json', 'changes.json', 'activity_log.json']) {
       try { fs.unlinkSync(path.join(ROOT, f)); } catch {}
     }
     try { fs.rmSync(path.join(ROOT, 'snapshots'), { recursive: true, force: true }); } catch {}

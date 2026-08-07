@@ -29,6 +29,7 @@ document.querySelectorAll('.top-nav-btn').forEach(btn => {
     document.getElementById('page-fields').classList.toggle('hidden', currentPage !== 'fields');
     document.getElementById('page-programs').classList.toggle('hidden', currentPage !== 'programs');
     document.getElementById('page-availability').classList.toggle('hidden', currentPage !== 'availability');
+    document.getElementById('page-activity').classList.toggle('hidden', currentPage !== 'activity');
     if (currentPage === 'teams') renderTeamsPage();
     if (currentPage === 'editor') renderSeasonEditor();
     if (currentPage === 'changes') renderChangesPage();
@@ -38,6 +39,7 @@ document.querySelectorAll('.top-nav-btn').forEach(btn => {
     if (currentPage === 'fields') renderFieldsPage();
     if (currentPage === 'programs') renderProgramsPage();
     if (currentPage === 'availability') renderAvailabilityPage();
+    if (currentPage === 'activity') renderActivityPage();
   });
 });
 
@@ -2286,6 +2288,69 @@ document.getElementById('btn-clear-changes').addEventListener('click', async () 
   document.getElementById('nav-changes').textContent = '📋 Changes';
   renderChangesPage();
 });
+
+// ── ACTIVITY LOG ──────────────────────────────────────────────────────────────
+// Who did what, when — added so "I was doing X and it didn't work" reports
+// can actually be investigated instead of reasoned about from code alone.
+let activityEntries = [];
+
+async function renderActivityPage() {
+  const container = document.getElementById('activity-content');
+  container.innerHTML = '<p style="padding:24px;color:#94a3b8">Loading…</p>';
+  try {
+    const data = await fetchJSON('api/activity-log');
+    activityEntries = data.entries || [];
+  } catch (e) {
+    container.innerHTML = `<p class="changes-empty">Error loading activity: ${esc(e.message)}</p>`;
+    return;
+  }
+  renderActivityList();
+}
+
+function renderActivityList() {
+  const container = document.getElementById('activity-content');
+  const q = (document.getElementById('activity-search').value || '').trim().toLowerCase();
+  const rows = q
+    ? activityEntries.filter(e => {
+        const hay = [e.summary, e.actor?.email, e.actor?.name, e.actor?.role, e.method, e.path].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+      })
+    : activityEntries;
+
+  if (!activityEntries.length) {
+    container.innerHTML = '<p class="changes-empty">No activity recorded yet.</p>';
+    return;
+  }
+  if (!rows.length) {
+    container.innerHTML = `<p class="changes-empty">No activity matches "${esc(q)}".</p>`;
+    return;
+  }
+
+  container.innerHTML = `<div class="table-wrap"><table class="fields-table">
+    <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Result</th></tr></thead>
+    <tbody>
+    ${rows.map(e => {
+      const ts = new Date(e.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' });
+      const who = e.actor
+        ? `<strong>${esc(e.actor.name || e.actor.email)}</strong><br><span style="color:#94a3b8;font-size:12px">${esc(e.actor.role)} · ${esc(e.actor.email)}</span>`
+        : '<span style="color:#94a3b8">not signed in</span>';
+      const ok = e.status >= 200 && e.status < 400;
+      const resultPill = ok
+        ? `<span class="pill pill-good">${e.status}</span>`
+        : `<span class="pill pill-wait" style="background:#fef2f2;color:#991b1b;border-color:#fecaca">${e.status}</span>`;
+      return `<tr>
+        <td style="white-space:nowrap;color:#64748b;font-size:12.5px">${esc(ts)}</td>
+        <td>${who}</td>
+        <td>${esc(e.summary)}</td>
+        <td>${resultPill}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+document.getElementById('activity-search').addEventListener('input', renderActivityList);
+document.getElementById('btn-refresh-activity').addEventListener('click', renderActivityPage);
 
 // ── FIELDS PAGE ───────────────────────────────────────────────────────────────
 let editingFieldId = null;

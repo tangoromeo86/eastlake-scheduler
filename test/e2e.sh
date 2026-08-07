@@ -65,7 +65,7 @@ fail() { echo "  ** FAIL: $1"; FAILURES=$((FAILURES+1)); }
 FAILURES=0
 
 # Reset all generated state so every run starts from an identical clean season.
-rm -f "$REPO"/schedule.json "$REPO"/change_requests.json "$REPO"/changes.json "$REPO"/*.backup-*.json 2>/dev/null
+rm -f "$REPO"/schedule.json "$REPO"/change_requests.json "$REPO"/changes.json "$REPO"/activity_log.json "$REPO"/*.backup-*.json 2>/dev/null
 rm -rf "$REPO"/snapshots 2>/dev/null
 python3 - <<'SEED'
 import json, datetime, os
@@ -1478,6 +1478,36 @@ print('  PASS: every team got exactly its requested game count' if short==0 else
 print(f'  PASS: travel spread {ratio}x (structural floor 1.69x)' if ratio<=1.7 else f'  ** FAIL: travel {ratio}x')
 print(f'  PASS: field hosts up to {maxfield} games per Saturday, 0 double-bookings' if dbl==0 and maxfield>=2 else '  ** FAIL: field capacity/clash issue')
 PY19
+
+echo
+echo "=============================================="
+echo "STEP 20 — Activity log (Ted, 2026-08-07: who's doing what)"
+echo "=============================================="
+
+AL_UNAUTH=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/activity-log")
+[ "$AL_UNAUTH" = "403" ] && pass "activity log refuses a logged-out request (403 — requireAdmin's JSON branch)" || fail "unauth activity-log request = $AL_UNAUTH (wanted 403)"
+
+AL_COACH=$(curl -s -o /dev/null -w "%{http_code}" -b coacha.txt "$BASE/api/activity-log")
+[ "$AL_COACH" = "403" ] && pass "activity log refuses a coach session (403)" || fail "coach activity-log request = $AL_COACH (wanted 403)"
+
+AL_DIR=$(curl -s -o /dev/null -w "%{http_code}" -b dana.txt "$BASE/api/activity-log")
+[ "$AL_DIR" = "403" ] && pass "activity log refuses a director session (403 — admin only)" || fail "director activity-log request = $AL_DIR (wanted 403)"
+
+# A known, distinctive action right here — easy to find in the log afterward
+# without depending on exactly what earlier steps happened to do.
+curl -s -b admin.txt -X POST "$BASE/api/season/programs" -H "$J" -d '{"name":"Activity Log Probe Program"}' > /dev/null
+AL=$(curl -s -b admin.txt "$BASE/api/activity-log")
+AL_CHECK=$(echo "$AL" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+entries = d.get('entries', [])
+hit = next((e for e in entries if 'Activity Log Probe Program' in e.get('summary','')), None)
+no_gets = all(e.get('method') != 'GET' for e in entries)
+print('found' if hit else 'missing', hit.get('actor',{}).get('email') if hit else '', hit.get('status') if hit else '', no_gets)
+")
+echo "$AL_CHECK" | grep -q "^found admin@example.com 200 True" \
+  && pass "a real action shows up in the activity log with the right actor and result" \
+  || fail "activity log entry missing or wrong: $AL_CHECK"
 
 echo
 echo "=============================================="
