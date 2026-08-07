@@ -1511,6 +1511,74 @@ echo "$AL_CHECK" | grep -q "^found admin@example.com 200 True" \
 
 echo
 echo "=============================================="
+echo "STEP 21 — Teams to Avoid (Ted, 2026-08-07)"
+echo "=============================================="
+
+# Fully self-contained fixture, not reusing any earlier variable — several
+# steps between here and STEP 15 (16-19's fixtures) overwrite season.json
+# directly with their own isolated scenarios, so nothing from early in the
+# script (T1/T2, P1/P2, F1/F2, u10b) is safe to assume still exists by now.
+# Admin can create programs/divisions/fields/teams directly (requireDirector
+# allows admin too), so this doesn't need fresh director logins either.
+RP1=$(curl -s -b admin.txt -X POST "$BASE/api/season/programs" -H "$J" -d '{"name":"Restrict Program 1"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['program']['id'])")
+RP2=$(curl -s -b admin.txt -X POST "$BASE/api/season/programs" -H "$J" -d '{"name":"Restrict Program 2"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['program']['id'])")
+curl -s -b admin.txt -X POST "$BASE/api/season/divisions" -H "$J" -d '{"id":"div-restrict-e2e","name":"Restrict Division","target_games":4}' > /dev/null
+RF=$(curl -s -b admin.txt -X POST "$BASE/api/season/fields" -H "$J" -d '{"name":"Restrict Field"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['field']['id'])")
+RT1=$(curl -s -b admin.txt -X POST "$BASE/api/teams" -H "$J" \
+  -d "{\"label\":\"Restrict Test A\",\"email\":\"restricta@example.com\",\"division_id\":\"div-restrict-e2e\",\"home_field_id\":\"$RF\",\"program_id\":\"$RP1\"}" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['team']['id'])")
+RT2=$(curl -s -b admin.txt -X POST "$BASE/api/teams" -H "$J" \
+  -d "{\"label\":\"Restrict Test B\",\"email\":\"restrictb@example.com\",\"division_id\":\"div-restrict-e2e\",\"home_field_id\":\"$RF\",\"program_id\":\"$RP2\"}" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['team']['id'])")
+[ -n "$RT1" ] && [ -n "$RT2" ] && pass "2 fresh teams registered for the restrictions checks ($RT1, $RT2)" || fail "fresh team registration for STEP 21"
+
+# RT1 (program RP1) excludes RT2's whole program (RP2) — the pre-existing
+# program-level mechanism, now reachable through a real route for the
+# first time.
+R1=$(curl -s -b admin.txt -X PUT "$BASE/api/teams/$RT1" -H "$J" \
+  -d "{\"label\":\"Restrict Test A\",\"email\":\"restricta@example.com\",\"division_id\":\"div-restrict-e2e\",\"restrictions\":[{\"type\":\"no_matchup\",\"opponent_program_id\":\"$RP2\"}]}")
+echo "$R1" | python3 -c "import sys,json;d=json.load(sys.stdin);print('ok' if d.get('ok') and d['team']['restrictions'][0]['opponent_program_id']=='$RP2' else 'bad: '+json.dumps(d))" | grep -q '^ok' \
+  && pass "a program-level exclusion saves and round-trips" \
+  || fail "program-level exclusion did not persist correctly: $R1"
+
+# Self-exclusion (own program) must be rejected, not silently accepted.
+R2=$(curl -s -o /dev/null -w "%{http_code}" -b admin.txt -X PUT "$BASE/api/teams/$RT1" -H "$J" \
+  -d "{\"label\":\"Restrict Test A\",\"email\":\"restricta@example.com\",\"division_id\":\"div-restrict-e2e\",\"restrictions\":[{\"type\":\"no_matchup\",\"opponent_program_id\":\"$RP1\"}]}")
+[ "$R2" = "400" ] && pass "excluding a team's own program is rejected (400)" || fail "self-program-exclusion = $R2 (wanted 400)"
+
+# Self-exclusion (own team id) must also be rejected.
+R3=$(curl -s -o /dev/null -w "%{http_code}" -b admin.txt -X PUT "$BASE/api/teams/$RT1" -H "$J" \
+  -d "{\"label\":\"Restrict Test A\",\"email\":\"restricta@example.com\",\"division_id\":\"div-restrict-e2e\",\"restrictions\":[{\"type\":\"no_matchup\",\"opponent_team_id\":\"$RT1\"}]}")
+[ "$R3" = "400" ] && pass "a team excluding itself is rejected (400)" || fail "self-team-exclusion = $R3 (wanted 400)"
+
+# An id that doesn't exist anywhere must be rejected, not silently stored as
+# a rule that can never match anything.
+R4=$(curl -s -o /dev/null -w "%{http_code}" -b admin.txt -X PUT "$BASE/api/teams/$RT1" -H "$J" \
+  -d "{\"label\":\"Restrict Test A\",\"email\":\"restricta@example.com\",\"division_id\":\"div-restrict-e2e\",\"restrictions\":[{\"type\":\"no_matchup\",\"opponent_team_id\":\"team-does-not-exist\"}]}")
+[ "$R4" = "400" ] && pass "an unknown team id in restrictions is rejected (400)" || fail "unknown-team-id exclusion = $R4 (wanted 400)"
+
+# Team-level: RT1 excludes RT2 specifically.
+R5=$(curl -s -b admin.txt -X PUT "$BASE/api/teams/$RT1" -H "$J" \
+  -d "{\"label\":\"Restrict Test A\",\"email\":\"restricta@example.com\",\"division_id\":\"div-restrict-e2e\",\"restrictions\":[{\"type\":\"no_matchup\",\"opponent_team_id\":\"$RT2\"}]}")
+echo "$R5" | python3 -c "import sys,json;d=json.load(sys.stdin);print('ok' if d.get('ok') and d['team']['restrictions'][0]['opponent_team_id']=='$RT2' else 'bad: '+json.dumps(d))" | grep -q '^ok' \
+  && pass "a team-level exclusion saves and round-trips" \
+  || fail "team-level exclusion did not persist correctly: $R5"
+
+# A coach can set this on their own team too — not director/admin only.
+curl -s -c restricta.txt -X POST "$BASE/api/auth/login" -H "$J" -d '{"email":"restricta@example.com"}' > /dev/null
+verify_session restricta.txt restricta@example.com
+R6=$(curl -s -o /dev/null -w "%{http_code}" -b restricta.txt -X PUT "$BASE/api/teams/$RT1" -H "$J" \
+  -d "{\"label\":\"Restrict Test A\",\"email\":\"restricta@example.com\",\"restrictions\":[]}")
+[ "$R6" = "200" ] && pass "a coach can clear their own team's restrictions" || fail "coach clearing restrictions = $R6 (wanted 200)"
+R6B=$(curl -s -b admin.txt "$BASE/api/season" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+t=[x for x in d['teams'] if x['id']=='$RT1'][0]
+print('cleared' if t.get('restrictions')==[] else 'not cleared: '+json.dumps(t.get('restrictions')))")
+[ "$R6B" = "cleared" ] && pass "the cleared restrictions actually persisted, not just accepted" || fail "restrictions still present after clearing: $R6B"
+
+echo
+echo "=============================================="
 PRINTED=$(grep -c "\*\* FAIL" "$OUTLOG" 2>/dev/null || true)
 PASSES=$(grep -c "PASS:" "$OUTLOG" 2>/dev/null || true)
 TOTAL=${PRINTED:-0}   # fail() also prints, so printed lines are the full count

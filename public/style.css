@@ -1215,6 +1215,11 @@ td.cal-day.av-mixed, .cal-legend-swatch.av-mixed                            { ba
 .av-group[open] > summary::before { content: '▾ '; }
 .av-group[open] > summary { border-bottom: 1px solid #e2e8f0; }
 
+.restriction-list { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0 0 4px; }
+.restriction-row { display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: #334155; padding: 3px 0; cursor: pointer; }
+.restriction-row input[disabled] { cursor: not-allowed; }
+.restriction-row:has(input[disabled]) { color: #94a3b8; }
+
 @media (max-width: 720px) {
   header { flex-direction: column; align-items: flex-start; gap: 10px; }
   .header-actions { flex-wrap: wrap; }

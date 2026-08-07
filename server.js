@@ -1635,7 +1635,7 @@ app.patch('/api/team/:id', requireAdmin, async (req, res) => {
     const vEarliest = V.validateEarliestDate(req.body.earliest_date);
     if (!vEarliest.ok) return res.status(400).json({ error: vEarliest.error, field: 'earliest_date' });
   }
-  const allowed = ['label', 'name', 'coach', 'phone', 'home_field_id', 'confirmed', 'blackout_dates', 'program_id', 'availability', 'target_games', 'earliest_date'];
+  const allowed = ['label', 'name', 'coach', 'phone', 'home_field_id', 'confirmed', 'blackout_dates', 'program_id', 'availability', 'target_games', 'earliest_date', 'restrictions'];
   for (const field of allowed) {
     if (!(field in req.body)) continue;
     team[field] = req.body[field];
@@ -2892,6 +2892,41 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
   res.json({ ok: true, team: t });
 });
 
+// "Teams to avoid" (Ted, 2026-08-07) — a team can exclude an entire other
+// program, or one specific opposing team, from ever being matched against it.
+// Reuses lib/scheduler.js's pre-existing (but previously unreachable — no
+// route ever accepted this field) team.restrictions/no_matchup mechanism, now
+// extended there to also support a single-team target, not just a program.
+// Lives here rather than lib/validate.js since it needs the season-wide
+// teams/programs lists to check for unknown/self-referencing ids, which
+// validate.js's other helpers deliberately don't take.
+function validateRestrictions(raw, { ownTeamId, ownProgramId, teams, programs }) {
+  if (raw === undefined) return { ok: true, value: undefined }; // field omitted — leave unchanged
+  if (!Array.isArray(raw)) return { ok: false, error: 'Restrictions must be a list' };
+  const out = [];
+  for (const r of raw) {
+    if (!r || r.type !== 'no_matchup') continue;
+    if (r.opponent_program_id) {
+      if (String(r.opponent_program_id) === String(ownProgramId)) {
+        return { ok: false, error: 'A team cannot exclude its own program' };
+      }
+      if (!(programs || []).some(p => String(p.id) === String(r.opponent_program_id))) {
+        return { ok: false, error: 'One of the excluded programs no longer exists' };
+      }
+      out.push({ type: 'no_matchup', opponent_program_id: r.opponent_program_id });
+    } else if (r.opponent_team_id) {
+      if (String(r.opponent_team_id) === String(ownTeamId)) {
+        return { ok: false, error: 'A team cannot exclude itself' };
+      }
+      if (!(teams || []).some(t => String(t.id) === String(r.opponent_team_id))) {
+        return { ok: false, error: 'One of the excluded teams no longer exists' };
+      }
+      out.push({ type: 'no_matchup', opponent_team_id: r.opponent_team_id });
+    }
+  }
+  return { ok: true, value: out };
+}
+
 app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
@@ -2901,7 +2936,7 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   if (idx === -1) return res.status(404).json({ error: 'Team not found' });
   const existing = data.teams[idx];
   if (!canEditTeam(s, existing)) return res.status(403).json({ error: 'You can only edit your own team' });
-  const { label, coach, email, phone, home_field_id, availability, target_games, earliest_date } = req.body;
+  const { label, coach, email, phone, home_field_id, availability, target_games, earliest_date, restrictions } = req.body;
   // Coaches can't move their own team to a different division — only a director/admin can.
   const division_id = s.role === 'coach' ? existing.division_id : req.body.division_id;
   const vLabel = V.validateName(label, { label: 'Team name' });
@@ -2913,6 +2948,10 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   if (!vTarget.ok) return res.status(400).json({ error: vTarget.error, field: 'target_games' });
   const vEarliest = V.validateEarliestDate(earliest_date);
   if (!vEarliest.ok) return res.status(400).json({ error: vEarliest.error, field: 'earliest_date' });
+  const vRestrictions = validateRestrictions(restrictions, {
+    ownTeamId: existing.id, ownProgramId: existing.program_id, teams: data.teams, programs: data.programs,
+  });
+  if (!vRestrictions.ok) return res.status(400).json({ error: vRestrictions.error, field: 'restrictions' });
   if (!division_id || !(data.divisions || []).some(d => String(d.id) === String(division_id))) {
     return res.status(400).json({ error: 'A valid division_id is required', field: 'division_id' });
   }
@@ -2957,6 +2996,7 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
     ...(availability && typeof availability === 'object' ? { availability } : {}),
     ...(target_games !== undefined ? { target_games: vTarget.value } : {}),
     ...(earliest_date !== undefined ? { earliest_date: vEarliest.value } : {}),
+    ...(vRestrictions.value !== undefined ? { restrictions: vRestrictions.value } : {}),
     // email is intentionally left as-is here — see confirm-email flow below
   };
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }

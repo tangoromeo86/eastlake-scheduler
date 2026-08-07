@@ -296,6 +296,56 @@ async function verifyPage(page, email, srv) {
         fridayRow.includes('Friday')
           ? ok('Friday is included in the admin team availability grid too')
           : bad('Friday row missing from admin team availability grid', fridayRow.slice(0, 200));
+
+        // ── Teams to Avoid (Ted, 2026-08-07) — the previously-unreachable
+        // scheduler restriction mechanism now has a real editor. Collapsed
+        // by default (same reasoning as Weekly Availability on Add elsewhere
+        // — this is occasional setup, not daily-use), so the checkboxes
+        // exist in the DOM but need the <details> opened before Playwright
+        // will treat them as interactable.
+        await p.locator(`#ef-restrictions-details-${firstTeamId}`).evaluate(el => { el.open = true; });
+        const restrictSel = `#ef-restrictions-${firstTeamId}`;
+        const programCbCount = await p.locator(`${restrictSel} .re-program`).count();
+        programCbCount > 0
+          ? ok('Teams to Avoid shows a checkbox for other programs', `${programCbCount} programs`)
+          : bad('no program checkboxes rendered in Teams to Avoid', '');
+
+        const teamCbCount = await p.locator(`${restrictSel} .re-team`).count();
+        teamCbCount > 0
+          ? ok('Teams to Avoid shows a checkbox for same-division opposing teams', `${teamCbCount} teams`)
+          : bad('no team checkboxes rendered in Teams to Avoid (fixture may lack same-division opponents)', '');
+
+        if (programCbCount > 0 && teamCbCount > 0) {
+          const firstProgramValue = await p.locator(`${restrictSel} .re-program`).first().getAttribute('value');
+          const matchingTeamCb = p.locator(`${restrictSel} label.restriction-row[data-program="${firstProgramValue}"] .re-team`).first();
+          if (await matchingTeamCb.count()) {
+            await p.locator(`${restrictSel} .re-program`).first().check();
+            await p.waitForTimeout(150);
+            const disabledAfterCheck = await matchingTeamCb.isDisabled();
+            disabledAfterCheck
+              ? ok('checking a program greys out its own teams below (avoids a redundant double-exclude)')
+              : bad('team checkbox did not disable when its whole program was excluded', '');
+            await p.locator(`${restrictSel} .re-program`).first().uncheck();
+          } else {
+            ok('no team in the fixture belongs to the first program option — greyout check not exercised (not a failure)');
+          }
+
+          // Save with one specific team excluded (not a whole program) and
+          // confirm it actually persisted, not just accepted by the UI.
+          const targetTeamCb = p.locator(`${restrictSel} .re-team`).first();
+          const excludedTeamId = await targetTeamCb.getAttribute('value');
+          await targetTeamCb.check();
+          await p.locator(`#editor-form-${firstTeamId} .editor-form-actions .btn-primary`).first().click();
+          await p.waitForTimeout(500);
+          await p.locator('.editor-team-row').first().click(); // close
+          await p.waitForTimeout(200);
+          await p.locator('.editor-team-row').first().click(); // reopen fresh
+          await p.waitForTimeout(400);
+          const persistedChecked = await p.locator(`${restrictSel} .re-team[value="${excludedTeamId}"]`).isChecked().catch(() => false);
+          persistedChecked
+            ? ok('a saved team-level exclusion persists across a re-open, not just accepted')
+            : bad('team-level exclusion did not persist on re-open', '');
+        }
       } else {
         bad('no team found in the Editor tab to click', '');
       }

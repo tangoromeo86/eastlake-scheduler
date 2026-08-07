@@ -641,6 +641,62 @@ avgSpread <= spreadLimit
     : bad('two games with overlapping time ranges were both scheduled on the same field/date', 'interval-overlap check failed');
 }
 
+// ── Teams to Avoid: program-level and team-level exclusions ──────────────────
+// Ted, 2026-08-07: coaches want to keep specific rivals (or a whole other
+// program) off their schedule. The program-level mechanism already existed
+// in the scheduler (team.restrictions[].opponent_program_id) but had no UI
+// anywhere to set it; this adds the team-level case (opponent_team_id)
+// alongside it. Six teams, three programs, one division: team-p1-a excludes
+// all of program 2 (program-level), team-p1-b excludes one specific team in
+// program 3 (team-level) but NOT the other team in that same program — the
+// two mechanisms have to coexist correctly, and the team-level one has to
+// be genuinely selective, not accidentally blanket the whole program too.
+{
+  const restrictSeason = {
+    season: { start: '2026-09-07', weeks: 10, target_games: 4, blackout_dates: [] },
+    divisions: [{ id: 'div-restrict', name: 'Restrict Test', target_games: 4 }],
+    programs: [
+      { id: 'prog-r1', name: 'Program 1' }, { id: 'prog-r2', name: 'Program 2' }, { id: 'prog-r3', name: 'Program 3' },
+    ],
+    fields: [{ id: 'field-r1', name: 'Field 1', program_id: 'prog-r1', coordinates: '41.5,-81.4' }],
+    teams: [
+      { id: 'team-p1-a', label: 'P1 A', division_id: 'div-restrict', program_id: 'prog-r1', home_field_id: 'field-r1',
+        restrictions: [{ type: 'no_matchup', opponent_program_id: 'prog-r2' }] },
+      { id: 'team-p1-b', label: 'P1 B', division_id: 'div-restrict', program_id: 'prog-r1', home_field_id: 'field-r1',
+        restrictions: [{ type: 'no_matchup', opponent_team_id: 'team-p3-x' }] },
+      { id: 'team-p2-a', label: 'P2 A', division_id: 'div-restrict', program_id: 'prog-r2', home_field_id: 'field-r1' },
+      { id: 'team-p2-b', label: 'P2 B', division_id: 'div-restrict', program_id: 'prog-r2', home_field_id: 'field-r1' },
+      { id: 'team-p3-x', label: 'P3 X', division_id: 'div-restrict', program_id: 'prog-r3', home_field_id: 'field-r1' },
+      { id: 'team-p3-y', label: 'P3 Y', division_id: 'div-restrict', program_id: 'prog-r3', home_field_id: 'field-r1' },
+    ],
+  };
+
+  let sawP1AvsP2 = false, sawP1BvsP3X = false, sawP1BvsP3Y = false, totalGames = 0;
+  for (let i = 0; i < RUNS; i++) {
+    const res = scheduleAll(restrictSeason);
+    totalGames += (res.games || []).length;
+    for (const g of res.games || []) {
+      const pair = [g.home_team_id, g.away_team_id].sort().join('|');
+      if (pair === ['team-p1-a', 'team-p2-a'].sort().join('|')) sawP1AvsP2 = true;
+      if (pair === ['team-p1-a', 'team-p2-b'].sort().join('|')) sawP1AvsP2 = true;
+      if (pair === ['team-p1-b', 'team-p3-x'].sort().join('|')) sawP1BvsP3X = true;
+      if (pair === ['team-p1-b', 'team-p3-y'].sort().join('|')) sawP1BvsP3Y = true;
+    }
+  }
+  totalGames > 0
+    ? ok('the restrictions fixture actually produced games to check', `${totalGames} games across ${RUNS} runs`)
+    : bad('no games were placed at all — fixture is broken, nothing else in this block is meaningful', '');
+  !sawP1AvsP2
+    ? ok('a program-level exclusion is respected — excluded program never appears as an opponent')
+    : bad('team-p1-a played a team from its excluded program (prog-r2)', '');
+  !sawP1BvsP3X
+    ? ok('a team-level exclusion is respected — the specific excluded team never appears as an opponent')
+    : bad('team-p1-b played its specifically-excluded opponent (team-p3-x)', '');
+  sawP1BvsP3Y
+    ? ok('a team-level exclusion is genuinely selective — the OTHER team in that same program is still a normal opponent')
+    : bad('team-p1-b never played team-p3-y even though only team-p3-x was excluded — exclusion leaked to the whole program', '');
+}
+
 // ── Friday: real option, exempt from back-to-back with Saturday, 2/week cap ──
 // Ted, 2026-08-04: other programs wanted Friday as a schedulable weeknight.
 // It uses the same time bounds as any other weekday, but a Friday game does

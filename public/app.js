@@ -1840,6 +1840,10 @@ function buildTeamEditorRow(team, fieldOptions) {
         <p class="field-form-hint" style="margin:10px 0">When can this team play? Fields left blank default to "Available for both."</p>
         <div id="ef-availability-${id}"></div>
       </details>
+      <details id="ef-restrictions-details-${id}" class="av-group" style="margin:14px 0">
+        <summary>Teams to Avoid</summary>
+        <div id="ef-restrictions-${id}" style="margin-top:12px"></div>
+      </details>
       <div class="editor-form-bottom">
         <label class="editor-label editor-label-wide">Blackout Dates <span class="editor-hint">one per line, YYYY-MM-DD</span>
           <textarea id="ef-blackouts-${id}" rows="4" spellcheck="false">${esc(blackoutStr)}</textarea>
@@ -1893,6 +1897,7 @@ async function toggleTeamForm(teamId) {
         try { seasonSlots = await fetchJSON('api/season/slots'); } catch { seasonSlots = []; }
       }
       renderAvailabilityGrid(`ef-availability-${teamId}`, team.availability, seasonSlots, team.earliest_date);
+      renderRestrictionsEditor(`ef-restrictions-${teamId}`, team, seasonData.teams, seasonData.programs, team.restrictions);
 
       // Live re-filter as admin edits the first-available-day field inline —
       // matches director.js's own team editor, since this form has the same
@@ -1924,12 +1929,13 @@ async function saveTeamForm(teamId) {
   const blackoutRaw = document.getElementById(`ef-blackouts-${teamId}`)?.value || '';
   const blackout_dates = blackoutRaw.split('\n').map(s => s.trim()).filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
   const availability = readAvailabilityGrid(`ef-availability-${teamId}`);
+  const restrictions = readRestrictionsEditor(`ef-restrictions-${teamId}`);
 
   try {
     const res = await fetch(`api/team/${teamId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label, coach, phone, email, home_field_id, confirmed, earliest_date, blackout_dates, availability }),
+      body: JSON.stringify({ label, coach, phone, email, home_field_id, confirmed, earliest_date, blackout_dates, availability, restrictions }),
     });
     const data = await res.json();
     if (!res.ok) {
