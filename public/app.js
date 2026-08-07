@@ -2315,6 +2315,10 @@ function populateAvailTargets() {
   const mode = document.getElementById('acal-mode').value;
   const divId = document.getElementById('acal-division').value;
   const sel = document.getElementById('acal-target');
+  // Same reset-on-rebuild gap as director.js's populateAvailCalTargets —
+  // restore the previous selection so switching the mode/division filter
+  // doesn't silently swap which team/field the calendar is showing.
+  const prevSelection = sel.value;
   document.getElementById('acal-target-label').textContent = mode === 'field' ? 'Field:' : 'Team:';
   if (mode === 'field') {
     let fields = [...(seasonData?.fields || [])];
@@ -2330,6 +2334,7 @@ function populateAvailTargets() {
     teams.sort((a, b) => teamLabel(a).localeCompare(teamLabel(b)));
     sel.innerHTML = teams.map(t => `<option value="${String(t.id)}">${esc(teamLabel(t))}</option>`).join('');
   }
+  if (prevSelection && [...sel.options].some(o => o.value === prevSelection)) sel.value = prevSelection;
   renderAdminAvailCalendar();
 }
 

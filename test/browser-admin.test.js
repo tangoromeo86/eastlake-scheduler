@@ -636,6 +636,60 @@ async function verifyPage(page, email, srv) {
       dirErrs.length === 0
         ? ok('no JS errors in the director availability calendar')
         : bad('JS errors in director availability calendar', dirErrs.slice(0, 2).join(' | '));
+
+      // ── Regression: saving a team must not silently swap which team the
+      // calendar is showing (Ted, 2026-08-07 bug report) ──────────────────
+      // populateAvailCalTargets() rebuilds #dcal-target's <option> list after
+      // ANY team/field save on the page — without explicitly restoring the
+      // selection, the browser resets a rebuilt <select> to whichever option
+      // is now first, so a director watching one team's calendar would get
+      // silently bounced to a different team the moment they saved an edit
+      // (their own edit still saved fine — this was a pure display bug, but
+      // it looked exactly like "my change isn't showing up").
+      const dirTeams = (seasonData.teams || [])
+        .filter(t => t.program_id === (seasonData.directors || []).find(d => d.email === directorEmail)?.program_id)
+        .sort((a, b) => (a.label || '').localeCompare(b.label || ''));
+      if (dirTeams.length >= 2) {
+        // Verify BEFORE interacting — verifyPage only updates the server-side
+        // session, and this page's in-memory `session` object was fetched at
+        // its earlier page load, so saving would still hit the unverified
+        // gate without a reload to pick the change up (same reload the other
+        // verifyPage call sites in this file already do).
+        const verified = await verifyPage(dp, directorEmail, srv);
+        verified
+          ? ok('director session verified for the calendar-reset regression check')
+          : bad('director verification failed — cannot exercise the save path', '');
+        await dp.goto(`${BASE}/director`, { waitUntil: 'networkidle' });
+        await dp.waitForTimeout(500);
+
+        await dp.selectOption('#dcal-mode', 'team').catch(() => {});
+        await dp.waitForTimeout(300);
+        // Pick the LAST team alphabetically — guaranteed not to be what a
+        // naive reset-to-first would leave selected, so this can't pass by
+        // coincidence.
+        const watchedTeam = dirTeams[dirTeams.length - 1];
+        await dp.selectOption('#dcal-target', String(watchedTeam.id));
+        await dp.waitForTimeout(200);
+        const targetBefore = await dp.locator('#dcal-target').inputValue();
+
+        // has-text() is a substring match — with several teams differing only
+        // by division (e.g. "Chardon U10" is a substring of "Chardon U10
+        // Boys"), that can grab the wrong row. Match the team name cell
+        // exactly, then scope to its own row.
+        await dp.locator('tr').filter({ has: dp.getByText(watchedTeam.label, { exact: true }) })
+          .locator('button:has-text("Edit")').first().click();
+        await dp.waitForTimeout(300);
+        await dp.locator('#tfe-availability select.av-pat[data-key="Tuesday"]').selectOption('none');
+        await dp.click('#tfe-save');
+        await dp.waitForTimeout(500);
+
+        const targetAfter = await dp.locator('#dcal-target').inputValue();
+        targetAfter === targetBefore
+          ? ok('calendar selection survives an unrelated team save', `stayed on ${targetAfter}`)
+          : bad('calendar silently swapped to a different team after saving', `${targetBefore} -> ${targetAfter}`);
+      } else {
+        ok('director\'s program has fewer than 2 teams — calendar-reset regression not exercised (not a failure)');
+      }
     } else {
       ok('no director account in fixture to test the program-scoped calendar (not a failure)');
     }

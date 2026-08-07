@@ -458,6 +458,14 @@ function myProgramTeams() {
 function populateAvailCalTargets() {
   const mode = document.getElementById('dcal-mode').value;
   const sel = document.getElementById('dcal-target');
+  // Rebuilding a <select>'s options resets the browser's selection to
+  // whichever is now first, unless we explicitly restore it — this function
+  // gets called after ANY team/field save on the whole page (not just ones
+  // made from this tab), so without this a director watching one team's
+  // calendar would silently get bounced to a different team the moment they
+  // saved an edit, making the edit look like it "didn't show up" when it
+  // actually saved fine (Ted, 2026-08-07 bug report).
+  const prevSelection = sel.value;
   document.getElementById('dcal-target-label').textContent = mode === 'field' ? 'Field:' : 'Team:';
   if (mode === 'field') {
     const fields = [...myProgramFields()].sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)));
@@ -466,6 +474,7 @@ function populateAvailCalTargets() {
     const teams = [...myProgramTeams()].sort((a, b) => teamLabel(a).localeCompare(teamLabel(b)));
     sel.innerHTML = teams.map(t => `<option value="${String(t.id)}">${esc(teamLabel(t))}</option>`).join('');
   }
+  if (prevSelection && [...sel.options].some(o => o.value === prevSelection)) sel.value = prevSelection;
   renderDirectorAvailCalendar();
 }
 
