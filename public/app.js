@@ -440,17 +440,15 @@ function adminExportFieldCSV(fieldName) {
 }
 
 // ── ADMIN PROGRAM VIEW ───────────────────────────────────────────────────────────
+// Used to derive a display name from the common prefix of team labels,
+// back when programs didn't have their own `name` field — now they do, so
+// that's just the correct source of truth. The old heuristic broke as soon
+// as a program's teams didn't all start with the program's name (e.g. a
+// coach-entered label like "Katach U15"), producing either a mangled
+// truncation or, when labels shared no common prefix at all, the raw
+// "program-1785906934654" id (Ted, 2026-08-12 — reported from real data).
 function adminProgramName(programId) {
-  const labels = (seasonData?.teams || []).filter(t => t.program_id === programId).map(t => t.label || '');
-  if (!labels.length) return programId;
-  if (labels.length === 1) return labels[0].replace(/\s+\d+$/, '').replace(/\s+-\s+\w+$/, '').trim();
-  let prefix = labels[0];
-  for (const l of labels.slice(1)) {
-    let i = 0;
-    while (i < prefix.length && i < l.length && prefix[i] === l[i]) i++;
-    prefix = prefix.slice(0, i);
-  }
-  return prefix.replace(/[\s\-]+$/, '').trim() || programId;
+  return (seasonData?.programs || []).find(p => String(p.id) === String(programId))?.name || programId;
 }
 
 function populateAdminProgramSelect() {

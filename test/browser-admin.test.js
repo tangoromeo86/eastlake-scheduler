@@ -405,6 +405,50 @@ async function verifyPage(page, email, srv) {
       } else {
         bad('could not create a throwaway team to test admin delete against', '');
       }
+
+      // ── Program filter shows real names, not raw ids or mangled guesses
+      // (Ted, 2026-08-12) — adminProgramName used to derive a display name
+      // from the common character-prefix of that program's team labels,
+      // which broke as soon as a program's teams didn't all start with the
+      // program's own name (real example: a program named "Mentor" whose
+      // two teams were coach-labelled "Katach U15" and "Yanick U10 G",
+      // sharing zero common prefix, rendered as the raw
+      // "program-1785906934654" id). Programs have a real `name` field now
+      // — this just has to be read, not guessed.
+      const mismatchProgram = await p.evaluate(async () => {
+        const r = await fetch('api/season/programs', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'PROGNAME-TEST-Riverdale' }),
+        });
+        const d = await r.json();
+        return d.ok ? d.program.id : null;
+      });
+      if (mismatchProgram) {
+        await p.evaluate(async ({ programId, divId }) => {
+          await fetch('api/teams', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label: 'Zephyr Kickers', division_id: divId, program_id: programId }),
+          });
+          await fetch('api/teams', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label: 'Alpha United', division_id: divId, program_id: programId }),
+          });
+        }, { programId: mismatchProgram, divId: seasonData.divisions[0].id });
+
+        await p.reload({ waitUntil: 'networkidle' });
+        await p.waitForTimeout(500);
+        await p.click('.admin-top-view-btn[data-topview="program"]');
+        await p.waitForTimeout(400);
+        const optionTexts = await p.locator('#admin-program-select option').allInnerTexts();
+        optionTexts.includes('PROGNAME-TEST-Riverdale')
+          ? ok('the Program filter shows the real program name for teams with mismatched labels')
+          : bad('Program filter did not show the real program name', JSON.stringify(optionTexts));
+        optionTexts.some(t => t.startsWith('program-'))
+          ? bad('a raw program-<id> string leaked into the Program filter', JSON.stringify(optionTexts))
+          : ok('no raw program-<id> string appears anywhere in the Program filter');
+      } else {
+        bad('could not create a throwaway program to test the name-display fix against', '');
+      }
     } else {
       bad('Editor tab not found', '');
     }
