@@ -11,6 +11,7 @@ const { scheduleAll, validateGameEdit, dayName, teamName,
         SATURDAY_SLOTS, SATURDAY_SLOT_TIMES, WEEKDAY_TIME, TIME_BOUNDS, isValidGameTime, allowedTimes,
         buildSeasonWeeks, weekdayStartTimeForField, allowedWeekdayTimesForField,
         isExemptBackToBack, MAX_GAMES_PER_WEEK, DEFAULT_GAME_LENGTH_MINUTES, toMinutes, timeRangesOverlap } = require('./lib/scheduler');
+const { fetchDrivingDistanceMatrix, distanceMilesFor } = require('./lib/driving-distance');
 
 const app = express();
 // Deployed behind exactly one nginx hop. This MUST be the hop count (1), not
@@ -30,6 +31,7 @@ const SEASON_FILE   = path.join(__dirname, 'season.json');
 const CHANGES_FILE  = path.join(__dirname, 'changes.json');
 const CHANGE_REQUESTS_FILE = path.join(__dirname, 'change_requests.json');
 const ACTIVITY_LOG_FILE = path.join(__dirname, 'activity_log.json');
+const FIELD_DISTANCES_FILE = path.join(__dirname, 'field_distances.json');
 
 // ── Auth config (set via environment — never hardcode secrets here) ───────────
 const ADMIN_EMAIL    = (process.env.ADMIN_EMAIL    || '').toLowerCase().trim();
@@ -1132,6 +1134,11 @@ app.post('/api/run', requireAdmin, (req, res) => {
   let seasonData;
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
+  // Prefer real driving distance over straight-line wherever it's cached
+  // (Ted, 2026-08-13) — an absent/empty cache just means every distance
+  // falls back to straight-line inside scheduleAll, so this is safe even
+  // before the first refresh has ever run.
+  seasonData._distanceCache = readFieldDistances();
 
   let result;
   try { result = scheduleAll(seasonData); }
@@ -2731,6 +2738,62 @@ app.get('/api/geocode', requireAuth, async (req, res) => {
   });
 });
 
+// ── Driving-distance cache (Ted, 2026-08-13) ──────────────────────────────────
+//
+// Fields are static, so the whole field-to-field driving-distance matrix is
+// computed once via OSRM and cached here, rather than the scheduler ever
+// making a live routing call (it evaluates distance thousands of times per
+// run — a per-lookup network call would be far too slow). Everything that
+// needs a distance reads this cache and falls back to straight-line for any
+// pair not in it, so a stale or missing cache never blocks scheduling —
+// only makes its travel numbers a rougher estimate until the next refresh.
+function readFieldDistances() {
+  return readJsonSafe(FIELD_DISTANCES_FILE, { generated_at: null, pairs: {} });
+}
+
+// Recomputes the full matrix from season.json's current fields and writes
+// it — but only on success. A transient OSRM failure (timeout, rate limit,
+// the public server being down) must never wipe out a working cache; it
+// just means travel numbers keep using whatever was last generated until
+// the next successful refresh.
+async function refreshFieldDistances() {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch { return { ok: false, reason: 'Could not read season.json' }; }
+
+  const result = await fetchDrivingDistanceMatrix(data.fields || []);
+  if (!result.ok) {
+    console.error('Field distance refresh failed, keeping existing cache:', result.reason);
+    return result;
+  }
+  const cache = { generated_at: new Date().toISOString(), pairs: result.pairs, skipped: result.skipped };
+  try { fs.writeFileSync(FIELD_DISTANCES_FILE, JSON.stringify(cache, null, 2)); }
+  catch (err) { console.error('Could not write field_distances.json:', err.message); return { ok: false, reason: err.message }; }
+  return { ok: true, cache };
+}
+
+// Fire-and-forget — a field save must never wait on (or fail because of) an
+// OSRM round-trip. Errors are already logged inside refreshFieldDistances.
+function refreshFieldDistancesInBackground() {
+  refreshFieldDistances().catch(err => console.error('Field distance refresh threw:', err.message));
+}
+
+// Read-only, any authenticated user — used by the admin/coach travel stats
+// views and by one-off reports to prefer real driving distance over
+// straight-line wherever it's known.
+app.get('/api/field-distances', requireAuth, (req, res) => {
+  res.json(readFieldDistances());
+});
+
+// Manual refresh — admin only, since it recomputes the whole league's
+// matrix in one OSRM call rather than the narrower per-field auto-refresh
+// every field save already triggers.
+app.post('/api/field-distances/refresh', requireAdmin, async (req, res) => {
+  const result = await refreshFieldDistances();
+  if (!result.ok) return res.status(502).json({ error: `Could not reach OSRM: ${result.reason}` });
+  res.json({ ok: true, generated_at: result.cache.generated_at, pairs: Object.keys(result.cache.pairs).length, skipped: result.cache.skipped });
+});
+
 app.post('/api/season/fields', requireDirector, requireVerified, async (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
@@ -2760,6 +2823,7 @@ app.post('/api/season/fields', requireDirector, requireVerified, async (req, res
   data.fields = [...(data.fields || []), f];
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  if (f.coordinates) refreshFieldDistancesInBackground();
   res.json({ ok: true, field: f });
 });
 
@@ -2777,6 +2841,7 @@ app.put('/api/season/fields/:id', requireDirector, requireVerified, async (req, 
   const vCoords = V.validateCoordinates(coordinates);
   if (!vCoords.ok) return res.status(400).json({ error: vCoords.error, field: 'coordinates' });
   const trimmedAddress = (address || '').trim();
+  const priorCoordinates = data.fields[idx].coordinates;
   const updated = { ...data.fields[idx], name: vName.value, address: trimmedAddress };
   if (sub_field?.trim()) updated.sub_field = sub_field.trim(); else delete updated.sub_field;
   if (notes?.trim()) updated.notes = notes.trim(); else delete updated.notes;
@@ -2794,6 +2859,7 @@ app.put('/api/season/fields/:id', requireDirector, requireVerified, async (req, 
   data.fields[idx] = updated;
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  if (updated.coordinates !== priorCoordinates) refreshFieldDistancesInBackground();
 
   // Re-resolve field names in schedule.json for all games using this field
   if (fs.existsSync(SCHEDULE_FILE)) {

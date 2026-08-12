@@ -13,6 +13,7 @@ let isAddingGame = false;
 let session = null;
 let rainoutGameId = null;
 let rainoutSelectedSlot = null;
+let fieldDistanceCache = null; // { generated_at, pairs: {"fieldA|fieldB": miles} } — see lib/driving-distance.js
 
 // ── Top-level page switching ──────────────────────────────────────────────────
 document.querySelectorAll('.top-nav-btn').forEach(btn => {
@@ -46,11 +47,13 @@ document.querySelectorAll('.top-nav-btn').forEach(btn => {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function init() {
   try {
-    const [sched, seas] = await Promise.all([
+    const [sched, seas, dist] = await Promise.all([
       fetchJSON('api/schedule'),
       fetchJSON('api/season'),
+      fetchJSON('api/field-distances').catch(() => null), // never block the page on this
     ]);
     seasonData = seas;
+    fieldDistanceCache = dist;
     renderSeasonBar(seas);
     applySchedule(sched);
   } catch (e) {
@@ -784,7 +787,10 @@ function renderMatrixView(divGames, divTeams) {
 }
 
 // ── STATS VIEW ────────────────────────────────────────────────────────────────
-// Mirrors the haversine calc in lib/scheduler.js (not shared — that module isn't loaded client-side).
+// Mirrors the haversine calc in lib/driving-distance.js (not shared — that
+// module isn't loaded client-side). Only ever used as a fallback now — real
+// driving distance (fieldDistanceCache, fetched once at boot) is preferred
+// wherever a field pair has been cached (Ted, 2026-08-13).
 function parseCoordsClient(str) {
   if (!str) return null;
   const parts = str.split(',').map(s => parseFloat(s.trim()));
@@ -800,15 +806,27 @@ function haversineMilesClient(a, b) {
   const h = sinLat * sinLat + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * sinLng * sinLng;
   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
+// Mirrors lib/driving-distance.js's fieldPairKey exactly — order-independent
+// so it never matters which field is "home" vs "away" in the lookup.
+function fieldPairKeyClient(idA, idB) {
+  const [x, y] = [String(idA), String(idB)].sort();
+  return `${x}|${y}`;
+}
+function distanceMilesClient(fieldA, fieldB) {
+  if (!fieldA || !fieldB) return null;
+  const cached = fieldDistanceCache?.pairs?.[fieldPairKeyClient(fieldA.id, fieldB.id)];
+  if (Number.isFinite(cached)) return cached;
+  return haversineMilesClient(parseCoordsClient(fieldA.coordinates), parseCoordsClient(fieldB.coordinates));
+}
 // Total miles a team traveled on their away games, or null if coordinates aren't
 // available for the team's home field or any of the venues they played at.
 function teamTravelMiles(team, myGames) {
   const fields = seasonData?.fields || [];
-  const homeCoords = parseCoordsClient(fields.find(f => f.id === team.home_field_id)?.coordinates);
-  if (!homeCoords) return null;
+  const homeField = fields.find(f => f.id === team.home_field_id);
+  if (!homeField) return null;
   let total = 0, any = false;
   myGames.filter(g => g.away_team_id === team.id).forEach(g => {
-    const dist = haversineMilesClient(homeCoords, parseCoordsClient(fields.find(f => f.id === g.field_id)?.coordinates));
+    const dist = distanceMilesClient(homeField, fields.find(f => f.id === g.field_id));
     if (dist !== null) { total += dist; any = true; }
   });
   return any ? total : null;
@@ -875,7 +893,7 @@ function renderStatsView(divGames, divTeams) {
         </tr></tfoot>
       </table>
     </div>
-    <p class="stats-note">Orange = home/away imbalance &gt;1. · = no game that week. Travel is estimated straight-line distance, not driving distance.</p>`;
+    <p class="stats-note">Orange = home/away imbalance &gt;1. · = no game that week. Travel uses real driving distance where it's been calculated; straight-line distance otherwise.</p>`;
 }
 
 // ── Teams Roster Page (global, all divisions) ─────────────────────────────────
@@ -2560,6 +2578,30 @@ async function openFieldEdit(fieldId) {
 }
 
 document.getElementById('btn-add-field').addEventListener('click', openFieldAdd);
+
+// Auto-refreshes on its own whenever a field's location changes — this is
+// only for forcing it on demand (after a bulk import, or just to confirm
+// it's current) without waiting on or guessing at the background trigger.
+document.getElementById('btn-refresh-distances').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-refresh-distances');
+  const status = document.getElementById('field-distances-status');
+  btn.disabled = true;
+  status.textContent = 'Recomputing driving distances…';
+  status.className = 'field-form-hint';
+  try {
+    const res = await fetch('api/field-distances/refresh', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) { status.textContent = data.error || 'Could not refresh driving distances.'; status.classList.add('danger-text'); return; }
+    fieldDistanceCache = await fetchJSON('api/field-distances');
+    status.textContent = `Updated ${data.pairs} field pair${data.pairs === 1 ? '' : 's'}` +
+      (data.skipped?.length ? ` — ${data.skipped.length} field(s) skipped (no coordinates set)` : '') + '.';
+  } catch {
+    status.textContent = 'Network error — could not reach the server.';
+    status.classList.add('danger-text');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 document.getElementById('ffe-cancel').addEventListener('click', () => {
   document.getElementById('field-editor-form').classList.add('hidden');

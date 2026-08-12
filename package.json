@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node test/validate.test.js && node test/sun.test.js && node test/scheduler.test.js",
+    "test": "node test/validate.test.js && node test/sun.test.js && node test/driving-distance.test.js && node test/scheduler.test.js",
     "test:ui": "node test/browser.test.js",
     "test:ui:admin": "node test/browser-admin.test.js",
     "test:e2e": "bash test/e2e.sh",

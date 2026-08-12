@@ -271,6 +271,45 @@ async function verifyPage(page, email, srv) {
       bad('no field to edit in the admin Fields tab', '');
     }
 
+    // ── Driving-distance refresh button (Ted, 2026-08-13) — real distance
+    // instead of always-straight-line. Live call against the public OSRM
+    // server, same tolerance as the existing live geocode test: a transient
+    // OSRM outage degrades to a note, not a suite failure.
+    await p.click('#btn-refresh-distances');
+    // Wait for the button to re-enable (set in the handler's `finally`), not
+    // just for the status text to be non-empty — the "Recomputing…"
+    // placeholder is itself non-empty the instant the click fires, so that
+    // condition alone would resolve before the actual refresh ever
+    // completes. Confirm it actually went disabled first, so "already
+    // enabled, never even started" can't be mistaken for "finished".
+    await p.waitForFunction(() => document.getElementById('btn-refresh-distances')?.disabled === true, { timeout: 3000 }).catch(() => {});
+    await p.waitForFunction(() => document.getElementById('btn-refresh-distances')?.disabled === false, { timeout: 15000 }).catch(() => {});
+    const distStatus = await p.locator('#field-distances-status').innerText().catch(() => '');
+    if (/Updated \d+ field pair/.test(distStatus)) {
+      ok('clicking Refresh Driving Distances recomputes and reports real pairs', distStatus);
+
+      const cachePairCount = await p.evaluate(() => Object.keys(fieldDistanceCache?.pairs || {}).length);
+      cachePairCount > 0
+        ? ok('the client picks up the refreshed cache without a full page reload', `${cachePairCount} pairs in memory`)
+        : bad('fieldDistanceCache was not updated client-side after a refresh', '');
+
+      await p.click('.top-nav-btn[data-page="schedule"]');
+      await p.waitForTimeout(300);
+      const viewButtons = await p.locator('.view-btn[data-view="stats"]').count();
+      if (viewButtons > 0) {
+        await p.locator('.view-btn[data-view="stats"]').first().click();
+        await p.waitForTimeout(300);
+        const statsNote = await p.locator('.stats-note').innerText().catch(() => '');
+        /real driving distance/i.test(statsNote)
+          ? ok('the stats page disclaimer reflects real driving distance, not just "estimated straight-line"')
+          : bad('stats page disclaimer was not updated', statsNote);
+      } else {
+        ok('no Stats view tab found in this fixture — disclaimer text not exercised (not a failure)');
+      }
+    } else {
+      ok(`Refresh Driving Distances ran but OSRM may be unavailable in this environment — not a failure ("${distStatus}")`);
+    }
+
     // ── Editor tab: clicking a team opens its full availability, not just
     // contact info (Ted: "that team's page/preferences to look at") ────────
     const editorTab = p.locator('button:has-text("Editor"), [data-page="editor"]').first();

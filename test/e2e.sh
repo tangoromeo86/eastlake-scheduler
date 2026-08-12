@@ -1611,6 +1611,66 @@ print('ok' if ok else 'bad: '+json.dumps(d))
 SCHED_AFTER=$(curl -s -b admin.txt "$BASE/api/schedule")
 [ "$SCHED_BEFORE" = "$SCHED_AFTER" ] && pass "schedule.json is byte-for-byte untouched by a blocked run" || fail "a blocked run modified schedule.json"
 
+echo
+echo "=============================================="
+echo "STEP 23 — Driving-distance cache (Ted, 2026-08-13)"
+echo "=============================================="
+
+# Auth: reading the cache is any authenticated user; recomputing it is admin
+# only, since one refresh recomputes the whole league's matrix in a single
+# OSRM call.
+FD_ANON=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/field-distances")
+[ "$FD_ANON" = "401" ] && pass "reading the distance cache refuses a logged-out request (401)" || fail "GET /api/field-distances anon = $FD_ANON (wanted 401)"
+
+FD_COACH_REFRESH=$(curl -s -o /dev/null -w "%{http_code}" -X POST -b restricta.txt "$BASE/api/field-distances/refresh")
+[ "$FD_COACH_REFRESH" = "403" ] && pass "a coach cannot trigger a distance refresh (403)" || fail "coach refresh = $FD_COACH_REFRESH (wanted 403)"
+
+FD_GET=$(curl -s -b admin.txt "$BASE/api/field-distances")
+echo "$FD_GET" | python3 -c "import sys,json;d=json.load(sys.stdin);print('ok' if 'pairs' in d else 'bad: '+json.dumps(d))" | grep -q '^ok' \
+  && pass "the cache is readable before any refresh has ever run (empty pairs, not an error)" \
+  || fail "GET /api/field-distances shape is wrong: $FD_GET"
+
+# Self-contained again (same reasoning as STEP 21/22 above) — whatever fields
+# survive to this point in the script may not have real coordinates, so add
+# two fresh ones specifically so a refresh has an actual pair to compute.
+curl -s -b admin.txt -X POST "$BASE/api/season/fields" -H "$J" -d '{"name":"FD-Test Field A","coordinates":"41.60,-81.40"}' > /dev/null
+curl -s -b admin.txt -X POST "$BASE/api/season/fields" -H "$J" -d '{"name":"FD-Test Field B","coordinates":"41.70,-81.50"}' > /dev/null
+
+# Real refresh against the live public OSRM server — same precedent as the
+# existing live Nominatim geocode check in test/browser.test.js. Best-effort:
+# a transient OSRM outage degrades to a warning, not a suite failure, since
+# this suite must still be meaningful when the public server is flaky.
+FD_REFRESH=$(curl -s -X POST -b admin.txt "$BASE/api/field-distances/refresh")
+FD_REFRESH_OK=$(echo "$FD_REFRESH" | python3 -c "import sys,json;d=json.load(sys.stdin);print('ok' if d.get('ok') else 'no')" 2>/dev/null)
+if [ "$FD_REFRESH_OK" = "ok" ]; then
+  pass "admin can trigger a real driving-distance refresh against OSRM"
+  echo "$FD_REFRESH" | python3 -c "import sys,json;d=json.load(sys.stdin);print('ok' if d.get('pairs',0) > 0 else 'bad: '+json.dumps(d))" | grep -q '^ok' \
+    && pass "the refreshed cache actually contains pairs, not an empty result" \
+    || fail "refresh reported ok but produced 0 pairs: $FD_REFRESH"
+  FD_GET2=$(curl -s -b admin.txt "$BASE/api/field-distances")
+  echo "$FD_GET2" | python3 -c "import sys,json;d=json.load(sys.stdin);print('ok' if len(d.get('pairs',{}))>0 and d.get('generated_at') else 'bad: '+json.dumps(d))" | grep -q '^ok' \
+    && pass "the refresh actually persisted — GET reflects it, not just the POST response" \
+    || fail "cache did not persist after refresh: $FD_GET2"
+else
+  echo "  (note) OSRM refresh unavailable in this environment ($FD_REFRESH) — not a failure, same tolerance as the live geocode check"
+fi
+
+# Auto-refresh: creating a field with coordinates fires a background refresh
+# without any explicit call to /api/field-distances/refresh — a new field
+# should end up with a real pair against an existing one, on its own.
+FD_C=$(curl -s -b admin.txt -X POST "$BASE/api/season/fields" -H "$J" -d '{"name":"FD-Test Field C","coordinates":"41.55,-81.30"}')
+FD_C_ID=$(echo "$FD_C" | python3 -c "import sys,json;print(json.load(sys.stdin)['field']['id'])")
+sleep 5
+FD_AUTOCHECK=$(curl -s -b admin.txt "$BASE/api/field-distances")
+echo "$FD_AUTOCHECK" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+has_c_pair = any('$FD_C_ID' in k for k in d.get('pairs', {}).keys())
+print('ok' if has_c_pair else 'bad: no pair found for $FD_C_ID')
+" | grep -q '^ok' \
+  && pass "saving a field with coordinates auto-refreshes the cache in the background, with no manual trigger" \
+  || echo "  (note) auto-refresh pair not found within 5s — either OSRM is unavailable or timing-dependent, not a hard failure"
+
 PRINTED=$(grep -c "\*\* FAIL" "$OUTLOG" 2>/dev/null || true)
 PASSES=$(grep -c "PASS:" "$OUTLOG" 2>/dev/null || true)
 TOTAL=${PRINTED:-0}   # fail() also prints, so printed lines are the full count

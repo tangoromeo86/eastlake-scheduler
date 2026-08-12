@@ -3,6 +3,7 @@ schedule.json
 season.json
 change_requests.json
 activity_log.json
+field_distances.json
 snapshots/
 scripts/fuzz-output/
 *backup*.json
