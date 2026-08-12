@@ -1770,6 +1770,19 @@ function renderCalMonth(year, month, label, byDate, teamId, blackouts) {
 // ── Season Editor Page ────────────────────────────────────────────────────────
 let editorOpenTeamId = null;
 
+// Single source of truth for the Editor tab's Home Field <option> list — the
+// post-save row refresh in saveTeamForm used to build its own, subtly
+// different version (raw field.id appended in parens, sub_field dropped
+// entirely), so the dropdown's field names visibly changed the moment you
+// saved a team (Ted, 2026-08-12). Both call sites now share this exact
+// function so they can't drift apart again.
+function buildFieldOptionsHTML() {
+  return [...(seasonData.fields || [])]
+    .sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)))
+    .map(f => `<option value="${esc(f.id)}">${esc(fieldDisplayName(f))}</option>`)
+    .join('');
+}
+
 function renderSeasonEditor() {
   const container = document.getElementById('season-editor-content');
   if (!seasonData || !seasonData.divisions) {
@@ -1777,10 +1790,7 @@ function renderSeasonEditor() {
     return;
   }
 
-  const fieldOptions = [...(seasonData.fields || [])]
-    .sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)))
-    .map(f => `<option value="${esc(f.id)}">${esc(fieldDisplayName(f))}</option>`)
-    .join('');
+  const fieldOptions = buildFieldOptionsHTML();
 
   const html = seasonData.divisions.map(div => {
     const divTeams = (seasonData.teams || []).filter(t => t.division_id === div.id);
@@ -1991,11 +2001,7 @@ async function saveTeamForm(teamId) {
     // Refresh the team row summary
     const teamEl = document.getElementById(`editor-team-${teamId}`);
     if (teamEl) {
-      const allFieldOptions = [...(seasonData.fields || [])]
-        .sort((a, b) => fieldDisplayName(a).localeCompare(fieldDisplayName(b)))
-        .map(f => `<option value="${esc(f.id)}">${esc(f.name || f.id)} (${esc(f.id)})</option>`)
-        .join('');
-      teamEl.outerHTML = buildTeamEditorRow(data.team, allFieldOptions);
+      teamEl.outerHTML = buildTeamEditorRow(data.team, buildFieldOptionsHTML());
       // Re-open the form after replace
       editorOpenTeamId = null;
       toggleTeamForm(teamId);

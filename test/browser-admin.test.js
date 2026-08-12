@@ -449,6 +449,48 @@ async function verifyPage(page, email, srv) {
       } else {
         bad('could not create a throwaway program to test the name-display fix against', '');
       }
+
+      // ── Home Field dropdown must not change format after a save (Ted,
+      // 2026-08-12) — saveTeamForm's post-save row refresh used to build
+      // its own, different <option> list (raw field.id appended in
+      // parens, sub_field silently dropped) instead of reusing the exact
+      // same formatting the initial render used, so a field like "Burton
+      // Fields – Upper - U10" visibly turned into
+      // "Burton Fields (field-1786045647326)" the moment you hit Save.
+      const fieldFmtFixture = await p.evaluate(async (divId) => {
+        const fr = await fetch('api/season/fields', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'FIELDFMT-TEST Park', sub_field: 'Upper - U10' }),
+        });
+        const fd = await fr.json();
+        if (!fd.ok) return null;
+        const tr = await fetch('api/teams', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: 'FIELDFMT-TEST Team', division_id: divId, home_field_id: fd.field.id }),
+        });
+        const td = await tr.json();
+        return td.ok ? { fieldId: fd.field.id, teamId: td.team.id } : null;
+      }, seasonData.divisions[0].id);
+
+      if (fieldFmtFixture) {
+        await p.reload({ waitUntil: 'networkidle' });
+        await p.waitForTimeout(500);
+        await editorTab.click();
+        await p.waitForTimeout(300);
+        const fmtRow = p.locator('.editor-team-row', { hasText: 'FIELDFMT-TEST Team' });
+        await fmtRow.click();
+        await p.waitForTimeout(300);
+        const fieldSel = `#ef-field-${fieldFmtFixture.teamId}`;
+        const beforeText = await p.locator(`${fieldSel} option[value="${fieldFmtFixture.fieldId}"]`).innerText();
+        await p.locator(`#editor-form-${fieldFmtFixture.teamId} button:has-text("Save")`).click();
+        await p.waitForTimeout(500);
+        const afterText = await p.locator(`${fieldSel} option[value="${fieldFmtFixture.fieldId}"]`).innerText();
+        (afterText === beforeText && !afterText.includes(fieldFmtFixture.fieldId) && afterText.includes('Upper - U10'))
+          ? ok('Home Field option text is identical before and after a save', `"${afterText}"`)
+          : bad('Home Field option text changed after saving', `before="${beforeText}" after="${afterText}"`);
+      } else {
+        bad('could not create the field/team fixture for the post-save format check', '');
+      }
     } else {
       bad('Editor tab not found', '');
     }
