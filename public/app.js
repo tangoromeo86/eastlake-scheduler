@@ -1855,6 +1855,7 @@ function buildTeamEditorRow(team, fieldOptions) {
           </label>
           <span class="editor-hint" style="text-align:right;max-width:160px">Unchecked teams are excluded from scheduling (still counts as registered)</span>
           <div class="editor-form-actions">
+            <button class="btn btn-secondary danger-text" onclick="deleteTeamFromEditor(${idAttr},${escAttr(name)})">Delete</button>
             <button class="btn btn-secondary" onclick="toggleTeamForm(${idAttr})">Cancel</button>
             <button class="btn btn-primary" onclick="saveTeamForm(${idAttr})">Save</button>
           </div>
@@ -1975,6 +1976,19 @@ async function saveTeamForm(teamId) {
     statusEl.textContent = 'Error: ' + err.message;
     statusEl.className = 'editor-status error';
   }
+}
+
+// Admin had no way to delete a team at all — every other entity (fields,
+// programs, directors, divisions, snapshots) already has a Delete button in
+// this file; teams were the one gap (Ted, 2026-08-12). Lives on the Editor
+// tab's per-team form, not the read-only Teams tab, since that's the only
+// place admin already mutates a team (Cancel/Save already sit right here) —
+// the Teams tab's table has no actions column for any entity at all.
+async function deleteTeamFromEditor(teamId, teamName) {
+  if (!await deleteWithBlockers(`api/teams/${teamId}`, teamName, 'delete')) return;
+  seasonData = await fetchJSON('api/season');
+  editorOpenTeamId = null;
+  renderSeasonEditor();
 }
 
 // Division target_games inline editor

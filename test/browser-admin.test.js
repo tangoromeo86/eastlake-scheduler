@@ -349,6 +349,62 @@ async function verifyPage(page, email, srv) {
       } else {
         bad('no team found in the Editor tab to click', '');
       }
+
+      // ── Admin can delete a team (Ted, 2026-08-12) — every other entity
+      // (fields, programs, directors, divisions, snapshots) already had a
+      // Delete button in this exact tab; teams were the one gap. A
+      // throwaway team created just for this check, not one of the fixture
+      // teams other assertions in this file depend on. ────────────────────
+      const throwawayId = await p.evaluate(async (divId) => {
+        const r = await fetch('api/teams', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: 'DELETE-TEST-THROWAWAY', division_id: divId }),
+        });
+        const d = await r.json();
+        return d.ok ? d.team.id : null;
+      }, seasonData.divisions[0].id);
+      if (throwawayId) {
+        // Created via a raw fetch, bypassing the app's own team-creation
+        // flow — its in-memory seasonData never picked up the new team, so
+        // the Editor tab would still render the old, now-stale list.
+        await p.reload({ waitUntil: 'networkidle' });
+        await p.waitForTimeout(500);
+        await editorTab.click();
+        await p.waitForTimeout(300);
+        const throwawayRow = p.locator('.editor-team-row', { hasText: 'DELETE-TEST-THROWAWAY' });
+        (await throwawayRow.count()) > 0
+          ? ok('a newly-created team appears in the Editor tab')
+          : bad('throwaway team not found in Editor tab after creating it via the API', '');
+        await throwawayRow.click();
+        await p.waitForTimeout(300);
+        const deleteBtn = p.locator(`#editor-form-${throwawayId} button:has-text("Delete")`);
+        (await deleteBtn.count()) > 0
+          ? ok('the team edit form has a Delete button')
+          : bad('no Delete button found in the team edit form', '');
+        await deleteBtn.click();
+        await p.waitForTimeout(300);
+        const confirmVisible = await p.locator('#ui-confirm-input').isVisible().catch(() => false);
+        confirmVisible
+          ? ok('deleting a team asks for a typed confirmation, not a bare click')
+          : bad('no typed-confirmation prompt appeared for team deletion', '');
+        await p.fill('#ui-confirm-input', 'delete');
+        await p.click('#ui-confirm-yes');
+        await p.waitForTimeout(500);
+        const stillThere = await p.locator('.editor-team-row', { hasText: 'DELETE-TEST-THROWAWAY' }).count();
+        stillThere === 0
+          ? ok('the team is actually gone from the Editor tab after confirming delete')
+          : bad('team still shown in the Editor tab after deleting it', '');
+        const stillOnServer = await p.evaluate(async (id) => {
+          const r = await fetch('api/season');
+          const d = await r.json();
+          return d.teams.some(t => t.id === id);
+        }, throwawayId);
+        !stillOnServer
+          ? ok('the delete actually persisted server-side, not just in the UI')
+          : bad('team still present in season.json after deleting it via the UI', '');
+      } else {
+        bad('could not create a throwaway team to test admin delete against', '');
+      }
     } else {
       bad('Editor tab not found', '');
     }
