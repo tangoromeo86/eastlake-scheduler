@@ -204,7 +204,16 @@ async function _executeRun() {
   hide('success-banner');
   try {
     const res = await fetch('api/run', { method: 'POST' });
-    if (!res.ok) { showBanner((await res.json()).error || 'Scheduler error.', 'error'); return; }
+    if (!res.ok) {
+      const data = await res.json();
+      showBanner(data.error || 'Scheduler error.', 'error');
+      // A blocked run (no valid home field, etc.) — list the specific teams
+      // so it's obvious what to fix, not just a one-line banner. Nothing
+      // was scheduled or written, so the existing schedule/conflict view is
+      // left exactly as it was.
+      renderWarnings((data.blocking_errors || []).length ? data.blocking_errors : (data.warnings || []));
+      return;
+    }
     const data = await res.json();
     seasonData = await fetchJSON('api/season');
     applySchedule(data);
@@ -890,7 +899,7 @@ function renderTeamsPage() {
       const fieldName = fieldMap[t.home_field_id] || t.home_field_id || '—';
       const noFieldWarning = fieldMap[t.home_field_id]
         ? ''
-        : ` <span class="pill pill-bad" title="No home field set — this team can never be scheduled as home.">No field</span>`;
+        : ` <span class="pill pill-bad" title="No home field set — the scheduler will refuse to run until this is fixed.">No field (blocks scheduler)</span>`;
       const confirmed = t.confirmed !== false;
       const statusBadge = confirmed
         ? '<span class="confirmed-badge">Confirmed</span>'
@@ -1813,7 +1822,7 @@ function buildTeamEditorRow(team, fieldOptions) {
   // flagged here so it's caught before running the scheduler, not after
   // (see the matching pre-run warning in lib/scheduler.js's scheduleAll).
   const noFieldWarning = !fieldObj
-    ? ` <span class="pill pill-bad" title="No home field set — this team can never be scheduled as home.">No field</span>`
+    ? ` <span class="pill pill-bad" title="No home field set — the scheduler will refuse to run until this is fixed.">No field (blocks scheduler)</span>`
     : '';
   const confirmedBadge = team.confirmed !== false
     ? '<span class="confirmed-badge">Confirmed</span>'

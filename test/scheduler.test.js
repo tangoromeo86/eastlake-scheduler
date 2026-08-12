@@ -937,13 +937,15 @@ avgSpread <= spreadLimit
     : bad('relaxation fired even without genuine strain', `forced=${looseForced} worstGap=${looseWorstGap}`);
 }
 
-// ── Missing home field is caught by name, up front ─────────────────────────
+// ── Missing home field is a hard block, caught by name, up front ───────────
 // Ted, 2026-08-12: a team with no home field (or one pointing at a deleted
 // field) silently can never be scheduled as home — it doesn't fail loudly on
 // its own, it cascades into "no valid slot" failures for every opponent
 // instead. This was the actual root cause behind a wall of confusing
-// conflicts on real production data. scheduleAll now surfaces it as a named
-// warning before that cascade even starts.
+// conflicts on real production data. Ted, follow-up: this must REFUSE to
+// run, not just warn — "that's a critical error." scheduleAll now returns
+// blocked:true with zero games attempted whenever any confirmed team has no
+// resolvable home field, naming every such team.
 {
   const keys = ['p1', 'p2'];
   const noFieldSeason = {
@@ -961,22 +963,41 @@ avgSpread <= spreadLimit
     ],
   };
   const nfRes = scheduleAll(noFieldSeason);
-  const nfWarnings = nfRes.warnings || [];
-  const noFieldMsg = nfWarnings.find(w => w.team_id === 'T-nofield');
-  const deletedFieldMsg = nfWarnings.find(w => w.team_id === 'T-deletedfield');
-  const okFalselyWarned = nfWarnings.some(w => w.team_id === 'T-ok');
+  const blockingErrors = nfRes.blocking_errors || [];
+  const noFieldErr = blockingErrors.find(e => e.team_id === 'T-nofield');
+  const deletedFieldErr = blockingErrors.find(e => e.team_id === 'T-deletedfield');
+  const okFalselyBlocked = blockingErrors.some(e => e.team_id === 'T-ok');
 
-  (noFieldMsg && noFieldMsg.type === 'no_home_field_warning' && /no home field/i.test(noFieldMsg.message))
-    ? ok('a team with no home_field_id at all gets a named warning')
-    : bad('missing home_field_id was not flagged', JSON.stringify(nfWarnings));
+  (nfRes.blocked === true && nfRes.success === false && nfRes.games.length === 0)
+    ? ok('scheduleAll refuses to run at all — blocked, zero games, when any confirmed team has no home field')
+    : bad('scheduleAll did not hard-block on a missing home field', JSON.stringify({ blocked: nfRes.blocked, success: nfRes.success, games: nfRes.games.length }));
 
-  (deletedFieldMsg && deletedFieldMsg.type === 'no_home_field_warning' && /no longer exists/i.test(deletedFieldMsg.message))
-    ? ok('a team whose home_field_id points at a deleted field gets a distinct, accurate warning')
-    : bad('a home_field_id pointing at a nonexistent field was not flagged', JSON.stringify(nfWarnings));
+  (noFieldErr && noFieldErr.type === 'no_home_field_error' && /no home field/i.test(noFieldErr.message))
+    ? ok('a team with no home_field_id at all is named in blocking_errors')
+    : bad('missing home_field_id was not named as a blocking error', JSON.stringify(blockingErrors));
 
-  !okFalselyWarned
-    ? ok('a team with a real, resolvable home field is never warned')
-    : bad('a team with a valid home field was warned anyway', JSON.stringify(nfWarnings));
+  (deletedFieldErr && deletedFieldErr.type === 'no_home_field_error' && /no longer exists/i.test(deletedFieldErr.message))
+    ? ok('a team whose home_field_id points at a deleted field gets a distinct, accurate blocking error')
+    : bad('a home_field_id pointing at a nonexistent field was not named as a blocking error', JSON.stringify(blockingErrors));
+
+  !okFalselyBlocked
+    ? ok('a team with a real, resolvable home field never blocks the run')
+    : bad('a team with a valid home field was blocked anyway', JSON.stringify(blockingErrors));
+
+  (typeof nfRes.blocking_reason === 'string' && /T-nofield/.test(nfRes.blocking_reason) && /T-deletedfield/.test(nfRes.blocking_reason))
+    ? ok('blocking_reason is a clear, human-readable summary naming every affected team')
+    : bad('blocking_reason missing or does not name the affected teams', nfRes.blocking_reason);
+
+  // A season with NO missing fields must run exactly as before — this check
+  // must never fire for a healthy season.
+  const healthySeason = JSON.parse(JSON.stringify(noFieldSeason));
+  healthySeason.teams = healthySeason.teams.filter(t => t.id === 'T-ok');
+  healthySeason.teams.push({ id: 'T-ok2', label: 'T-ok2', division_id: 'div-nf', program_id: 'p2', home_field_id: 'f-p1',
+    availability: { weekday: {}, saturday: {}, dates: {} } });
+  const healthyRes = scheduleAll(healthySeason);
+  (!healthyRes.blocked && healthyRes.games.length > 0)
+    ? ok('a fully healthy season is never blocked')
+    : bad('a healthy season was incorrectly blocked', JSON.stringify({ blocked: healthyRes.blocked, games: healthyRes.games.length }));
 }
 
 // ── Performance ──────────────────────────────────────────────────────────────

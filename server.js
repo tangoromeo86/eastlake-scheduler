@@ -1129,7 +1129,6 @@ app.delete('/api/changes', requireAdmin, (req, res) => {
 });
 
 app.post('/api/run', requireAdmin, (req, res) => {
-  createSnapshot('Before running scheduler', 'auto');
   let seasonData;
   try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
@@ -1137,6 +1136,18 @@ app.post('/api/run', requireAdmin, (req, res) => {
   let result;
   try { result = scheduleAll(seasonData); }
   catch (err) { return res.status(500).json({ error: `Scheduler error: ${err.message}` }); }
+
+  // Ted, 2026-08-12: a team with no valid home field is a critical error,
+  // not a warning — scheduleAll refuses to run at all while one exists
+  // (blocked: true, zero games attempted). Respect that here: no snapshot,
+  // no write to schedule.json, nothing changes. Checked BEFORE the snapshot
+  // used to be taken, since there is nothing to snapshot before if the run
+  // never actually happens.
+  if (result.blocked) {
+    return res.status(422).json({ error: result.blocking_reason, blocking_errors: result.blocking_errors, warnings: result.warnings });
+  }
+
+  createSnapshot('Before running scheduler', 'auto');
 
   // Strip every scheduler-internal field (_fieldKey, _intervalStart,
   // _intervalEnd, and anything added later) rather than naming them one by

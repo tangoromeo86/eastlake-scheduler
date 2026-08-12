@@ -1579,6 +1579,38 @@ print('cleared' if t.get('restrictions')==[] else 'not cleared: '+json.dumps(t.g
 
 echo
 echo "=============================================="
+echo "STEP 22 — Missing home field hard-blocks the scheduler (Ted, 2026-08-12)"
+echo "=============================================="
+
+# A team with no home_field_id can never be scheduled as home — Ted: "that's
+# a critical error", so /api/run must refuse to run at all, not just warn.
+# Self-contained fixture again, same reasoning as STEP 21 above. This is
+# deliberately the LAST step in the script — /api/run operates on the whole
+# season, so blocking it here must not interfere with any earlier step.
+NFP=$(curl -s -b admin.txt -X POST "$BASE/api/season/programs" -H "$J" -d '{"name":"No Field Program"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['program']['id'])")
+curl -s -b admin.txt -X POST "$BASE/api/season/divisions" -H "$J" -d '{"id":"div-nofield-e2e","name":"No Field Division","target_games":4}' > /dev/null
+NFT1=$(curl -s -b admin.txt -X POST "$BASE/api/teams" -H "$J" \
+  -d "{\"label\":\"No Field Team\",\"email\":\"nofield@example.com\",\"division_id\":\"div-nofield-e2e\",\"program_id\":\"$NFP\"}" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['team']['id'])")
+[ -n "$NFT1" ] && pass "a team with no home_field_id registered for the block check ($NFT1)" || fail "fresh no-field team registration for STEP 22"
+
+SCHED_BEFORE=$(curl -s -b admin.txt "$BASE/api/schedule")
+
+RUN_STATUS=$(curl -s -o /tmp/e2e_run_blocked.json -w "%{http_code}" -b admin.txt -X POST "$BASE/api/run")
+[ "$RUN_STATUS" = "422" ] && pass "the scheduler refuses to run (422) while a team has no home field" || fail "blocked run status = $RUN_STATUS (wanted 422)"
+
+python3 -c "
+import json
+d = json.load(open('/tmp/e2e_run_blocked.json'))
+ok = d.get('error','').find('No Field Team') != -1 and any(e.get('team_id')=='$NFT1' for e in d.get('blocking_errors',[]))
+print('ok' if ok else 'bad: '+json.dumps(d))
+" | grep -q '^ok' \
+  && pass "the error names the specific team by label, not just a generic message" \
+  || fail "blocked-run error did not name the offending team"
+
+SCHED_AFTER=$(curl -s -b admin.txt "$BASE/api/schedule")
+[ "$SCHED_BEFORE" = "$SCHED_AFTER" ] && pass "schedule.json is byte-for-byte untouched by a blocked run" || fail "a blocked run modified schedule.json"
+
 PRINTED=$(grep -c "\*\* FAIL" "$OUTLOG" 2>/dev/null || true)
 PASSES=$(grep -c "PASS:" "$OUTLOG" 2>/dev/null || true)
 TOTAL=${PRINTED:-0}   # fail() also prints, so printed lines are the full count
