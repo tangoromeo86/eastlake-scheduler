@@ -937,6 +937,48 @@ avgSpread <= spreadLimit
     : bad('relaxation fired even without genuine strain', `forced=${looseForced} worstGap=${looseWorstGap}`);
 }
 
+// ── Missing home field is caught by name, up front ─────────────────────────
+// Ted, 2026-08-12: a team with no home field (or one pointing at a deleted
+// field) silently can never be scheduled as home — it doesn't fail loudly on
+// its own, it cascades into "no valid slot" failures for every opponent
+// instead. This was the actual root cause behind a wall of confusing
+// conflicts on real production data. scheduleAll now surfaces it as a named
+// warning before that cascade even starts.
+{
+  const keys = ['p1', 'p2'];
+  const noFieldSeason = {
+    season: { start: '2026-09-07', weeks: 4, target_games: 2, blackout_dates: [] },
+    divisions: [{ id: 'div-nf', name: 'No Field Test', target_games: 2 }],
+    programs: keys.map(k => ({ id: k, name: k })),
+    fields: [{ id: 'f-p1', name: 'p1', program_id: 'p1', coordinates: '41.6,-81.4' }],
+    teams: [
+      { id: 'T-nofield', label: 'T-nofield', division_id: 'div-nf', program_id: 'p1', home_field_id: null,
+        availability: { weekday: {}, saturday: {}, dates: {} } },
+      { id: 'T-deletedfield', label: 'T-deletedfield', division_id: 'div-nf', program_id: 'p1', home_field_id: 'f-does-not-exist',
+        availability: { weekday: {}, saturday: {}, dates: {} } },
+      { id: 'T-ok', label: 'T-ok', division_id: 'div-nf', program_id: 'p2', home_field_id: 'f-p1',
+        availability: { weekday: {}, saturday: {}, dates: {} } },
+    ],
+  };
+  const nfRes = scheduleAll(noFieldSeason);
+  const nfWarnings = nfRes.warnings || [];
+  const noFieldMsg = nfWarnings.find(w => w.team_id === 'T-nofield');
+  const deletedFieldMsg = nfWarnings.find(w => w.team_id === 'T-deletedfield');
+  const okFalselyWarned = nfWarnings.some(w => w.team_id === 'T-ok');
+
+  (noFieldMsg && noFieldMsg.type === 'no_home_field_warning' && /no home field/i.test(noFieldMsg.message))
+    ? ok('a team with no home_field_id at all gets a named warning')
+    : bad('missing home_field_id was not flagged', JSON.stringify(nfWarnings));
+
+  (deletedFieldMsg && deletedFieldMsg.type === 'no_home_field_warning' && /no longer exists/i.test(deletedFieldMsg.message))
+    ? ok('a team whose home_field_id points at a deleted field gets a distinct, accurate warning')
+    : bad('a home_field_id pointing at a nonexistent field was not flagged', JSON.stringify(nfWarnings));
+
+  !okFalselyWarned
+    ? ok('a team with a real, resolvable home field is never warned')
+    : bad('a team with a valid home field was warned anyway', JSON.stringify(nfWarnings));
+}
+
 // ── Performance ──────────────────────────────────────────────────────────────
 const avgMs = results.reduce((s, r) => s + r.ms, 0) / results.length;
 avgMs < 10000

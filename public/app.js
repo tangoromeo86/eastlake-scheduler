@@ -239,6 +239,7 @@ document.getElementById('run-confirm-input').addEventListener('keydown', (e) => 
 function applySchedule(data) {
   scheduleData = data;
   renderConflicts(data.failures || []);
+  renderWarnings(data.warnings || []);
 
   if (!(data.games || []).length && !(data.failures || []).length) {
     hide('tabs-container');
@@ -270,6 +271,19 @@ function renderConflicts(failures) {
       ${f.blocking_matchup ? `<br>Blocked: <em>${esc(f.blocking_matchup)}</em>` : ''}
       <br>${esc(f.reason || '')}
     </div>
+  `).join('');
+}
+
+// Non-blocking, but likely to cause a wall of confusing scheduling
+// conflicts if ignored — e.g. a team with no home field, which fails
+// silently on its own and instead cascades into a "no valid slot" failure
+// for every opponent it's paired with. Shown above the conflict list so the
+// actual root cause is visible before the symptom list.
+function renderWarnings(warnings) {
+  if (!warnings.length) { hide('warning-section'); return; }
+  show('warning-section');
+  document.getElementById('warning-list').innerHTML = warnings.map(w => `
+    <div class="warning-card">${esc(w.message || '')}</div>
   `).join('');
 }
 
@@ -874,6 +888,9 @@ function renderTeamsPage() {
 
     const rows = divTeams.map(t => {
       const fieldName = fieldMap[t.home_field_id] || t.home_field_id || '—';
+      const noFieldWarning = fieldMap[t.home_field_id]
+        ? ''
+        : ` <span class="pill pill-bad" title="No home field set — this team can never be scheduled as home.">No field</span>`;
       const confirmed = t.confirmed !== false;
       const statusBadge = confirmed
         ? '<span class="confirmed-badge">Confirmed</span>'
@@ -883,7 +900,7 @@ function renderTeamsPage() {
         <td>${esc(t.coach || '—')}</td>
         <td>${esc(t.phone || '—')}</td>
         <td>${esc(t.email || '—')}</td>
-        <td>${esc(fieldName)}</td>
+        <td>${esc(fieldName)}${noFieldWarning}</td>
         <td>${statusBadge}</td>
       </tr>`;
     }).join('');
@@ -1792,6 +1809,12 @@ function buildTeamEditorRow(team, fieldOptions) {
   const name = teamLabel(team);
   const fieldObj  = (seasonData.fields || []).find(f => f.id === team.home_field_id);
   const fieldName = fieldObj ? fieldDisplayName(fieldObj) : (team.home_field_id || '—');
+  // A team with no resolvable home field can never be scheduled as home —
+  // flagged here so it's caught before running the scheduler, not after
+  // (see the matching pre-run warning in lib/scheduler.js's scheduleAll).
+  const noFieldWarning = !fieldObj
+    ? ` <span class="pill pill-bad" title="No home field set — this team can never be scheduled as home.">No field</span>`
+    : '';
   const confirmedBadge = team.confirmed !== false
     ? '<span class="confirmed-badge">Confirmed</span>'
     : '<span class="unconfirmed-badge">Unconfirmed</span>';
@@ -1808,7 +1831,7 @@ function buildTeamEditorRow(team, fieldOptions) {
     <div class="editor-team-row" onclick="toggleTeamForm(${idAttr})">
       <span class="editor-team-name">${esc(name)}</span>
       <span class="editor-team-coach">${esc(team.coach || '—')}</span>
-      <span class="editor-team-field">${esc(fieldName)}</span>
+      <span class="editor-team-field">${esc(fieldName)}${noFieldWarning}</span>
       ${confirmedBadge}
       <span class="editor-chevron">›</span>
     </div>
