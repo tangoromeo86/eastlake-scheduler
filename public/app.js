@@ -647,7 +647,7 @@ function renderGames(divGames) {
       <td class="team-cell away">${esc(g.away_team_name)}</td>
       <td>${esc(g.field_name)}</td>
       <td class="address">${esc(g.field_address)}</td>
-      <td>${gameStatusBadge(g.status || 'scheduled', g.confirmations)}${g.is_makeup ? ' <span class="pill pill-good">Makeup of #' + g.rescheduled_from_game_id + '</span>' : ''}${g.rescheduled_to_game_id ? ' <span class="pill pill-neutral">&rarr; #' + g.rescheduled_to_game_id + '</span>' : ''} ${resultBadge(g)}</td>
+      <td>${gameStatusBadge(g.status || 'scheduled', g.confirmations)}${g.is_makeup ? ' <span class="pill pill-good">Makeup of #' + g.rescheduled_from_game_id + '</span>' : ''}${g.rescheduled_to_game_id ? ' <span class="pill pill-neutral">&rarr; #' + g.rescheduled_to_game_id + '</span>' : ''}${g.forced ? ` <span class="pill pill-wait" title="${escAttr(g.warning || 'Placed as a last resort.')}">Forced</span>` : ''} ${resultBadge(g)}</td>
     </tr>
   `).join('');
 }
@@ -1707,10 +1707,10 @@ function renderCalMonth(year, month, label, byDate, teamId, blackouts) {
       const haLabel = isHome
         ? '<span class="cal-ha-label home">Home</span>'
         : '<span class="cal-ha-label away">Away</span>';
-      return `<div class="cal-game${g.is_rematch ? ' cal-rematch' : ''}">
+      return `<div class="cal-game${g.is_rematch ? ' cal-rematch' : ''}"${g.forced ? ` title="${escAttr(g.warning || 'Placed as a last resort.')}"` : ''}>
         ${haLabel}
         <span class="cal-opp">${opp}</span>
-        <span class="cal-meta">${formatTime12h(g.time)} · #${g.game_id}</span>
+        <span class="cal-meta">${formatTime12h(g.time)} · #${g.game_id}</span>${g.forced ? ' <span class="pill pill-wait">Forced</span>' : ''}
       </div>`;
     }).join('');
 

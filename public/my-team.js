@@ -156,6 +156,7 @@ function renderGamesList() {
     return;
   }
   const rows = games.map(myGameRowCtx);
+  const forcedBadge = (g) => g.forced ? ` <span class="pill pill-wait" title="${escAttr(g.warning || 'Placed as a last resort.')}">Forced</span>` : '';
 
   const table = `<div class="mg-table-wrap table-wrap"><table class="fields-table">
     <thead><tr><th>#</th><th>Date</th><th>Opponent</th><th>Status</th><th>Score</th><th></th></tr></thead>
@@ -164,7 +165,7 @@ function renderGamesList() {
         <td>#${ctx.g.game_id}</td>
         <td>${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</td>
         <td>${ctx.matchupLabel}</td>
-        <td>${ctx.statusBadge}</td>
+        <td>${ctx.statusBadge}${forcedBadge(ctx.g)}</td>
         <td>${resultBadge(ctx.g)}</td>
         <td><div class="row-actions">${myGameActionButtons(ctx)}</div></td>
       </tr>`).join('')}
@@ -177,7 +178,7 @@ function renderGamesList() {
           <span>#${ctx.g.game_id} &middot; ${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</span>
         </div>
         <div class="mg-card-matchup">${ctx.matchupLabel}</div>
-        <div class="mg-card-badges">${ctx.statusBadge} ${resultBadge(ctx.g)}</div>
+        <div class="mg-card-badges">${ctx.statusBadge} ${resultBadge(ctx.g)}${forcedBadge(ctx.g)}</div>
         <div class="mg-card-actions">${myGameActionButtons(ctx)}</div>
       </div>`).join('')}
   </div>`;

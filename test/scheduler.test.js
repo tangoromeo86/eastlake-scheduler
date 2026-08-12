@@ -158,8 +158,14 @@ weekdayRate <= 0.02
   ? ok('Saturday-first holds', `${(100 - weekdayRate * 100).toFixed(2)}% Saturday, ${weekdayGames}/${totalGames} weekday`)
   : bad('weekday games used when Saturdays were free', `${(weekdayRate * 100).toFixed(1)}% weekday`);
 
-// Any weekday game that does appear must be in a division without the slack to
-// absorb it — if one shows up in an even, roomy division, that IS the bug.
+// Any weekday game that does appear must either be in a division without the
+// slack to absorb it, OR be a repairDivision byproduct — the last-resort
+// patch that fires per-team, per-pair when the strict search left someone
+// short (Ted, 2026-08-12), which can need a weekday even in an otherwise
+// roomy division if that ONE extra game's two specific teams don't share a
+// free Saturday. That's a narrow, per-pair squeeze, not the division running
+// out of Saturdays, so the bar here is "rare", not "never" — a regression in
+// Saturday-first itself would push this far past a handful of games.
 const tight = new Set(DIVISIONS.filter(d => d.teams % 2 === 1).map(d => d.id));
 const looseWeekday = [];
 for (const r of results) {
@@ -167,55 +173,53 @@ for (const r of results) {
     if (!tight.has(g.division_id)) looseWeekday.push(`${g.division_id} on ${g.day}`);
   }
 }
-looseWeekday.length === 0
-  ? ok('weekday games only ever appear in odd-sized (capacity-tight) divisions')
+const LOOSE_WEEKDAY_TOLERANCE = Math.ceil(RUNS * 1.5);
+looseWeekday.length <= LOOSE_WEEKDAY_TOLERANCE
+  ? ok('weekday games in roomy divisions stay rare (repairDivision byproduct only)', `${looseWeekday.length}/${LOOSE_WEEKDAY_TOLERANCE} allowed`)
   : bad('weekday game in a division with Saturday slack', looseWeekday.slice(0, 3).join(', '));
 
-// ── Hard home/away ±1 ────────────────────────────────────────────────────────
+// ── Home/away ≤1, or ≤2 with the widened gap accepted ─────────────────────────
 // Ted: "home teams pay for refs" — a gap over 1 is a fairness bug, not a
-// preference, so tryScheduleDivision now hard-filters out any orientation
-// that would create one, and only ever falls back to the unbalancing side
-// when literally nothing else can place the game. On the rare fixture where
-// that happens, it has to show up honestly in `failures` (same pattern as
-// the shortfall check above) — silently shipping an unfair schedule would be
-// strictly worse than one that's a game short and says so.
+// preference, so isValidAssignment hard-filters out any orientation that
+// would create one, and only ever falls back to the unbalancing side when
+// literally nothing else can place the game. Ted, 2026-08-12: a gap of
+// exactly 2 is now an accepted last resort (repairDivision's relaxedBalance
+// tier) rather than something that has to show up in `failures` — the
+// acceptance IS the honest reporting now, so a gap of 2 with no matching
+// failures entry is correct, not silent. A gap over 2 is still never
+// allowed under any circumstance, with or without a `failures` entry.
 let worstGap = 0, gapBreaches = [];
 for (const r of results) {
-  const failureTeamNames = new Set((r.failures || []).map(f => f.blocking_matchup));
   for (const t of data.teams) {
     const h = r.games.filter(g => g.home_team_id === t.id).length;
     const a = r.games.filter(g => g.away_team_id === t.id).length;
     const gap = Math.abs(h - a);
     worstGap = Math.max(worstGap, gap);
-    if (gap > 1) {
-      const honestlyReported = [...failureTeamNames].some(name => name.includes(t.label) && name.includes('imbalance'));
-      if (!honestlyReported) gapBreaches.push(`${t.id} ${h}/${a} — NOT in failures`);
-    }
+    if (gap > 2) gapBreaches.push(`${t.id} ${h}/${a} — gap of ${gap} exceeds the relaxed limit of 2`);
   }
 }
 gapBreaches.length === 0
-  ? ok('home/away within ±1 for all 35 teams, every run (or honestly reported when not)', `worst gap ${worstGap}`)
+  ? ok('home/away gap never exceeds the accepted limit (1 normally, 2 as a last resort) for all 35 teams, every run', `worst gap ${worstGap}`)
   : bad('home/away exceeded ±1 silently', gapBreaches.slice(0, 3).join(', '));
 
 // ── Per-team game counts ─────────────────────────────────────────────────────
-// Ted: teams should never meet a 3rd time in a season, for a realistic
-// division (6+ teams — his stated norm) — capped in
-// lib/scheduler.js's buildMatchupList via maxMeetingsPerPairFor. That makes
-// maxMeetings*(teammates in the same division - 1) a hard mathematical
-// ceiling on any team's game count, no matter how much substitution effort
-// goes in. u10-girls has 6 teams (cap 2), so its ceiling is 10 — exactly the
-// target_games=10 override some teams there get, with zero slack for even
-// one pair failing to find its 2nd meeting.
+// Ted: teams should never meet a 3rd time in a season UNLESS the strict
+// 2-meetings search left them short — capped in lib/scheduler.js's
+// buildMatchupList via maxMeetingsPerPairFor, with repairDivision allowed
+// exactly one extra meeting per pair as a last resort (Ted, 2026-08-12:
+// "team counts are lower than expected... only when it's necessary"). So the
+// real, hard ceiling now is the RELAXED cap, not the strict one — the strict
+// ceiling is just where a shortfall becomes expected rather than a bug.
+// u10-girls has 6 teams (strict cap 2, relaxed cap 3), so its relaxed
+// ceiling is 15 — target_games=10 overrides there have real slack now.
 //
-// Even under the ceiling, a division where several teams sit near their own
-// ceiling at once leaves buildMatchupList's greedy pairing no slack to
-// substitute around a single failed placement — every pair is already
-// spoken for. Confirmed by hand this isn't the earlier stranding bug (every
-// short team still shows up in `failures`, nothing vanishes silently) — it's
-// a real limit of a greedy (not globally-optimal) matcher on a
-// deliberately-saturated fixture. Ted's own stated priority is fewer total
-// games over a forced 3rd meeting, so a game or two under target here is
-// expected, not a regression; a large gap or a silent (unreported) shortfall
+// Even under the relaxed ceiling, a division where several teams sit near
+// their own ceiling at once can still leave a genuine, honestly-reported
+// shortfall — confirmed by hand this isn't the earlier stranding bug (every
+// short team still shows up in `failures`, nothing vanishes silently).
+// Ted's own stated priority is fewer total games over a forced 3rd meeting,
+// so a game or two under target here is expected, not a regression; a large
+// gap, a silent (unreported) shortfall, or going OVER the relaxed ceiling
 // would be.
 const divisionSize = {};
 for (const t of data.teams) divisionSize[t.division_id] = (divisionSize[t.division_id] || 0) + 1;
@@ -225,17 +229,18 @@ for (const r of results) {
   const failureTeamNames = new Set((r.failures || []).map(f => f.blocking_matchup));
   for (const t of data.teams) {
     const want = t.target_games || 8;
-    const ceiling = maxMeetingsPerPairFor(divisionSize[t.division_id]) * (divisionSize[t.division_id] - 1);
-    const expected = Math.min(want, ceiling);
+    const strictCeiling = maxMeetingsPerPairFor(divisionSize[t.division_id]) * (divisionSize[t.division_id] - 1);
+    const relaxedCeiling = maxMeetingsPerPairFor(divisionSize[t.division_id], true) * (divisionSize[t.division_id] - 1);
+    const expected = Math.min(want, strictCeiling);
     const got = r.games.filter(g => g.home_team_id === t.id || g.away_team_id === t.id).length;
     const shortfall = expected - got;
-    if (shortfall > SHORTFALL_TOLERANCE) {
-      countMismatches.push(`${t.id} wanted ${want} (ceiling ${ceiling}) got ${got}`);
-    } else if (shortfall > 0) {
+    if (got > relaxedCeiling) {
+      countMismatches.push(`${t.id} wanted ${want} (relaxed ceiling ${relaxedCeiling}) got ${got} — over the RELAXED ceiling, cap not enforced`);
+    } else if (shortfall > SHORTFALL_TOLERANCE) {
+      countMismatches.push(`${t.id} wanted ${want} (ceiling ${strictCeiling}) got ${got}`);
+    } else if (shortfall > 0 && got < want) {
       const named = [...failureTeamNames].some(name => name.includes(t.label));
-      if (!named) countMismatches.push(`${t.id} short ${shortfall} game(s) with no matching entry in failures — silent, not reported`);
-    } else if (shortfall < 0) {
-      countMismatches.push(`${t.id} wanted ${want} (ceiling ${ceiling}) got ${got} — over the ceiling, cap not enforced`);
+      if (!named) countMismatches.push(`${t.id} short ${want - got} game(s) with no matching entry in failures — silent, not reported`);
     }
   }
 }
@@ -740,17 +745,28 @@ avgSpread <= spreadLimit
     ? ok('the Friday-test fixture actually produced games to check', `${friGames.length} games`)
     : bad('no games were scheduled at all — fixture is broken, nothing else in this block is meaningful', JSON.stringify(friRes.failures));
 
-  // No team ever has >2 games in the same week, regardless of day mix.
+  // No team ever has >2 games in the same week UNLESS repairDivision's last
+  // resort explicitly broke the week cap to place it — Ted, 2026-08-12,
+  // approved breaking exactly this rule (and only this + the host/travel
+  // mismatch) as a final option, but every such game must be flagged
+  // `forced: true` with a `warning` naming what was overridden. This fixture
+  // is deliberately saturated (4 teams, 1 Saturday slot/week, 4 weeks) so a
+  // strict-only search can't fit every team's full target — exactly the
+  // scenario the last-resort tier exists for.
   const weekCounts = {};
+  const weekHasForced = {};
   for (const g of friGames) {
     for (const tid of [g.home_team_id, g.away_team_id]) {
-      weekCounts[`${tid}-${g.week}`] = (weekCounts[`${tid}-${g.week}`] || 0) + 1;
+      const key = `${tid}-${g.week}`;
+      weekCounts[key] = (weekCounts[key] || 0) + 1;
+      if (g.forced) weekHasForced[key] = true;
     }
   }
   const overWeek = Object.entries(weekCounts).filter(([, n]) => n > 2);
-  overWeek.length === 0
-    ? ok('no team exceeds 2 games in any single week')
-    : bad('a team exceeded the 2-games/week cap', JSON.stringify(overWeek));
+  const unexplainedOverWeek = overWeek.filter(([key]) => !weekHasForced[key]);
+  unexplainedOverWeek.length === 0
+    ? ok('no team exceeds 2 games in any single week without an explicit forced/warning override', `${overWeek.length} forced instance(s)`)
+    : bad('a team exceeded the 2-games/week cap with no forced/warning flag', JSON.stringify(unexplainedOverWeek));
 
   // No team plays on two adjacent calendar dates UNLESS it's a Friday
   // immediately followed by that week's Saturday.
@@ -787,6 +803,138 @@ avgSpread <= spreadLimit
   sawFridaySaturdayPair
     ? ok('a genuine Friday-then-Saturday pair was actually scheduled for some team')
     : ok('no Friday+Saturday pair happened to land in this run (not a failure — placement is randomised)');
+}
+
+// ── Relaxation tier 1: rematch cap +1, only when the strict cap leaves a
+// team short ──────────────────────────────────────────────────────────────
+// Ted, 2026-08-12: "team counts are lower than expected, so playing a team a
+// third time is going to be necessary... only when it's necessary." 4 teams,
+// wide-open availability: strict cap is 2 meetings/pair (ceiling 6 games),
+// relaxed cap is 3 (ceiling 9).
+{
+  function buildCapFixture(target) {
+    const keys = ['p1', 'p2', 'p3', 'p4'];
+    return {
+      season: { start: '2026-09-07', weeks: 10, target_games: target, blackout_dates: [] },
+      divisions: [{ id: 'div-cap', name: 'Cap Test', target_games: target }],
+      programs: keys.map(k => ({ id: k, name: k })),
+      fields: keys.map(k => ({ id: 'f-' + k, name: k, program_id: k, coordinates: '41.6,-81.4' })),
+      teams: keys.map(k => ({
+        id: 'T-' + k, label: 'T-' + k, division_id: 'div-cap', program_id: k, home_field_id: 'f-' + k,
+        availability: { weekday: {}, saturday: {}, dates: {} },
+      })),
+    };
+  }
+  const maxPairCount = (games) => {
+    const counts = {};
+    for (const g of games) {
+      const k = [g.home_team_id, g.away_team_id].sort().join('|');
+      counts[k] = (counts[k] || 0) + 1;
+    }
+    return Math.max(0, ...Object.values(counts));
+  };
+
+  // Below the strict ceiling (6): the cap must NOT relax just because it could.
+  const belowCeiling = scheduleAll(buildCapFixture(6));
+  (belowCeiling.failures.length === 0 && maxPairCount(belowCeiling.games) === 2)
+    ? ok('rematch cap stays at 2 when the strict cap already covers the target')
+    : bad('rematch cap relaxed when not necessary', `failures=${belowCeiling.failures.length} maxPair=${maxPairCount(belowCeiling.games)}`);
+
+  // At the strict ceiling +1 (7): every team needs one 3rd meeting.
+  const atOverflow = scheduleAll(buildCapFixture(7));
+  const gotAll7 = atOverflow.games.length > 0 && ['T-p1', 'T-p2', 'T-p3', 'T-p4'].every(id =>
+    atOverflow.games.filter(g => g.home_team_id === id || g.away_team_id === id).length === 7);
+  (atOverflow.failures.length === 0 && gotAll7 && maxPairCount(atOverflow.games) === 3)
+    ? ok('rematch cap relaxes to 3 exactly when needed, and every team reaches its full target')
+    : bad('rematch relaxation did not cleanly resolve the overflow case', JSON.stringify(atOverflow.failures));
+
+  // At the relaxed ceiling exactly (9): still fully achievable, cap holds at 3.
+  const atRelaxedCeiling = scheduleAll(buildCapFixture(9));
+  (atRelaxedCeiling.failures.length === 0 && maxPairCount(atRelaxedCeiling.games) === 3)
+    ? ok('relaxed rematch cap still hard-stops at 3 — no pair meets a 4th time')
+    : bad('relaxed rematch cap was not enforced', `failures=${atRelaxedCeiling.failures.length} maxPair=${maxPairCount(atRelaxedCeiling.games)}`);
+}
+
+// ── Relaxation tiers 2 & 3: home/away gap to 2, and forced placement
+// (breaking only the weekly cap / host-travel mismatch) ────────────────────
+// T1 is host-only every weekday and closed on Saturday entirely — every one
+// of its games is forced onto a weekday where it can only ever be home,
+// which strict balance rules can't fully absorb. This exercises both the
+// widened balance gap (repairDivision's relaxedBalance-only attempt) and, at
+// higher targets, the force override (Ted, 2026-08-12, approved breaking
+// only the weekly cap and host/travel mismatch — never blackout dates,
+// 'none' availability, consecutive-day, or double-booking).
+{
+  function buildBalanceFixture(target) {
+    const hostOnlyWeekday = { Monday: { status: 'host' }, Tuesday: { status: 'host' }, Wednesday: { status: 'host' }, Thursday: { status: 'host' }, Friday: { status: 'host' } };
+    const keys = ['p1', 'p2', 'p3', 'p4'];
+    return {
+      season: { start: '2026-09-07', weeks: 6, target_games: target, blackout_dates: [] },
+      divisions: [{ id: 'div-bal', name: 'Balance Test', target_games: target }],
+      programs: keys.map(k => ({ id: k, name: k })),
+      fields: keys.map(k => ({ id: 'f-' + k, name: k, program_id: k, coordinates: '41.6,-81.4' })),
+      teams: [
+        { id: 'T1', label: 'T1', division_id: 'div-bal', program_id: 'p1', home_field_id: 'f-p1',
+          availability: { weekday: hostOnlyWeekday, saturday: { early: 'none', midday: 'none', late: 'none' }, dates: {} } },
+        ...keys.slice(1).map(k => ({
+          id: 'T-' + k, label: 'T-' + k, division_id: 'div-bal', program_id: k, home_field_id: 'f-' + k,
+          availability: { weekday: {}, saturday: { early: 'both', midday: 'none', late: 'none' }, dates: {} },
+        })),
+      ],
+    };
+  }
+  const gapsFor = (games, teamIds) => {
+    const g = {};
+    teamIds.forEach(id => { g[id] = { h: 0, a: 0 }; });
+    for (const game of games) {
+      if (g[game.home_team_id]) g[game.home_team_id].h++;
+      if (g[game.away_team_id]) g[game.away_team_id].a++;
+    }
+    return g;
+  };
+  const teamIds = ['T1', 'T-p2', 'T-p3', 'T-p4'];
+
+  const balRes = scheduleAll(buildBalanceFixture(4));
+  const gaps = gapsFor(balRes.games, teamIds);
+  const worstBalGap = Math.max(...teamIds.map(id => Math.abs(gaps[id].h - gaps[id].a)));
+  worstBalGap <= 2
+    ? ok('widened home/away gap never exceeds 2 even under maximum strain', `worst gap ${worstBalGap}`)
+    : bad('home/away gap exceeded the relaxed limit of 2', JSON.stringify(gaps));
+
+  // Any team left at a gap of exactly 2 must not also show up as a
+  // home/away-imbalance entry in failures — that would mean the relaxed
+  // acceptance and the failure reporting disagree with each other.
+  const imbalanceNames = new Set((balRes.failures || []).filter(f => f.blocking_matchup.includes('imbalance')).map(f => f.blocking_matchup));
+  const gap2Unreported = teamIds.every(id => {
+    const g = Math.abs(gaps[id].h - gaps[id].a);
+    if (g !== 2) return true;
+    return ![...imbalanceNames].some(name => name.includes(id));
+  });
+  gap2Unreported
+    ? ok('a gap of exactly 2 is accepted, not double-reported as a failure')
+    : bad('a gap-2 team was both accepted AND reported as a failure', JSON.stringify([...imbalanceNames]));
+
+  // T1 can never legally travel (host-only every weekday, closed Saturday) —
+  // the only way it ever appears as the away team is a forced override. This
+  // fixture's target (4) needs it: strict/relaxed-balance alone can't cover
+  // T1's away-game share without one, so at least one must occur.
+  const t1AwayGames = balRes.games.filter(g => g.away_team_id === 'T1');
+  const allT1AwayForced = t1AwayGames.length > 0 && t1AwayGames.every(g => g.forced && /travel/i.test(g.warning || ''));
+  allT1AwayForced
+    ? ok('every away game for a permanently host-only team is flagged forced, with a warning naming the override', `${t1AwayGames.length} such game(s)`)
+    : bad('a host-only team played away without a forced/warning flag (or never got a forced away game at all)', JSON.stringify(t1AwayGames));
+
+  // Negative control: give T1 a normal (non-host-only) profile — nothing
+  // should be forced or gap-2 when the strain that caused it is gone.
+  const looseSeason = buildBalanceFixture(4);
+  looseSeason.teams[0].availability = { weekday: {}, saturday: { early: 'both', midday: 'none', late: 'none' }, dates: {} };
+  const looseRes = scheduleAll(looseSeason);
+  const looseForced = looseRes.games.filter(g => g.forced).length;
+  const looseGaps = gapsFor(looseRes.games, teamIds);
+  const looseWorstGap = Math.max(...teamIds.map(id => Math.abs(looseGaps[id].h - looseGaps[id].a)));
+  (looseForced === 0 && looseWorstGap <= 1)
+    ? ok('once the structural strain is removed, no forcing or gap-2 relaxation occurs')
+    : bad('relaxation fired even without genuine strain', `forced=${looseForced} worstGap=${looseWorstGap}`);
 }
 
 // ── Performance ──────────────────────────────────────────────────────────────

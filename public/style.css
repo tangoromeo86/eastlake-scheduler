@@ -999,6 +999,7 @@ header h1 {
   gap: 1px;
 }
 .cal-game.cal-rematch { border-left: 2px solid #f59e0b; padding-left: 3px; }
+.cal-game.cal-forced  { border-left: 2px solid #b91c1c; padding-left: 3px; background: #fef2f2; }
 .cal-opp  { font-weight: 600; color: #1a1a2e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cal-meta { color: #64748b; font-size: 10px; }
 

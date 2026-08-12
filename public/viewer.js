@@ -329,14 +329,14 @@ function renderGames(divGames) {
   document.getElementById('games-tbody').innerHTML = sorted.map(g => {
     const ctx = myRequestChangeContext(g);
     return `
-    <tr class="${g.is_rematch ? 'g-rematch' : ''}">
+    <tr class="${g.is_rematch ? 'g-rematch' : ''}"${g.forced ? ` title="${escAttr(g.warning || 'Placed as a last resort.')}"` : ''}>
       <td class="g-id">#${g.game_id}</td>
       <td>W${g.week}</td>
       <td>${formatDate(g.date)}</td>
       <td>${g.day.slice(0,3)}</td>
       <td>${formatTime12h(g.time)}</td>
       <td class="g-home">${esc(g.home_team_name)}</td>
-      <td class="g-away">${esc(g.away_team_name)} ${gameStatusBadge(g.status || 'scheduled', g.confirmations)}</td>
+      <td class="g-away">${esc(g.away_team_name)} ${gameStatusBadge(g.status || 'scheduled', g.confirmations)}${g.forced ? ' <span class="pill pill-wait">Forced</span>' : ''}</td>
       <td>${esc(g.field_name)}</td>
       <td class="g-addr">${esc(g.field_address)}${fieldMapLink(g.field_id)}</td>
       ${ctx ? `<td><button class="req-btn" data-gid="${g.game_id}" data-tid="${esc(ctx.team_id)}">Request Change</button></td>` : (wantsReqTh ? '<td></td>' : '')}
@@ -347,11 +347,12 @@ function renderGames(divGames) {
   document.getElementById('games-cards').innerHTML = sorted.map(g => {
     const ctx = myRequestChangeContext(g);
     return `
-    <div class="game-card${g.is_rematch ? ' rematch' : ''}">
+    <div class="game-card${g.is_rematch ? ' rematch' : ''}"${g.forced ? ` title="${escAttr(g.warning || 'Placed as a last resort.')}"` : ''}>
       <div class="game-card-top">
         <span>W${g.week} · ${g.day.slice(0,3)} ${formatDate(g.date)} · ${formatTime12h(g.time)}</span>
         ${g.is_rematch ? '<span class="rematch-badge">Rematch</span>' : ''}
         ${gameStatusBadge(g.status || 'scheduled', g.confirmations)}
+        ${g.forced ? '<span class="pill pill-wait">Forced</span>' : ''}
       </div>
       <div class="game-card-matchup">
         <span class="home">${esc(g.home_team_name)}</span>
@@ -648,7 +649,7 @@ function renderCalMonth(year, month, label, byDate, teamId, blackouts) {
       const isHome = g.home_team_id === teamId;
       const opp = esc(isHome ? g.away_team_name : g.home_team_name);
       const ha = isHome ? '<span class="cal-ha-label home">H</span>' : '<span class="cal-ha-label away">A</span>';
-      return `<div class="cal-game${g.is_rematch ? ' cal-rematch' : ''}">${ha}<span class="cal-opp">${opp}</span><span class="cal-meta">${formatTime12h(g.time)}</span></div>`;
+      return `<div class="cal-game${g.is_rematch ? ' cal-rematch' : ''}${g.forced ? ' cal-forced' : ''}"${g.forced ? ` title="${escAttr(g.warning || 'Placed as a last resort.')}"` : ''}>${ha}<span class="cal-opp">${opp}</span><span class="cal-meta">${formatTime12h(g.time)}</span></div>`;
     }).join('');
     let cls = 'cal-day';
     if (games.length) cls += ' has-game';
@@ -677,7 +678,7 @@ function renderCalMonthAll(year, month, label, byDate, blackouts) {
     const games = (byDate[dateStr] || []).slice().sort((a, b) => a.time.localeCompare(b.time));
     const isBlackout = blackouts.has(dateStr);
     const gameHtml = games.map(g =>
-      `<div class="cal-game${g.is_rematch ? ' cal-rematch' : ''}">
+      `<div class="cal-game${g.is_rematch ? ' cal-rematch' : ''}${g.forced ? ' cal-forced' : ''}"${g.forced ? ` title="${escAttr(g.warning || 'Placed as a last resort.')}"` : ''}>
         <span class="cal-opp">${esc(g.home_team_name)} vs ${esc(g.away_team_name)}</span>
         <span class="cal-meta">${formatTime12h(g.time)} · ${esc(g.field_name)}</span>
       </div>`

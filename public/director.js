@@ -172,6 +172,8 @@ function renderGamesList() {
   }
   const rows = games.map(dirGameRowCtx);
 
+  const forcedBadge = (g) => g.forced ? ` <span class="pill pill-wait" title="${escAttr(g.warning || 'Placed as a last resort.')}">Forced</span>` : '';
+
   const table = `<div class="mg-table-wrap table-wrap"><table class="fields-table">
     <thead><tr><th>#</th><th>Date</th><th>Home</th><th>Away</th><th>Status</th><th>Score</th><th></th></tr></thead>
     <tbody>
@@ -180,7 +182,7 @@ function renderGamesList() {
         <td>${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</td>
         <td>${esc(ctx.g.home_team_name)}</td>
         <td>${esc(ctx.g.away_team_name)}</td>
-        <td>${ctx.statusBadge}${liveStatusHtml(activeByGame[ctx.g.game_id])}</td>
+        <td>${ctx.statusBadge}${liveStatusHtml(activeByGame[ctx.g.game_id])}${forcedBadge(ctx.g)}</td>
         <td>${resultBadge(ctx.g)}</td>
         <td><div class="row-actions">${dirGameActionButtons(ctx)}</div></td>
       </tr>`).join('')}
@@ -193,7 +195,7 @@ function renderGamesList() {
           <span>#${ctx.g.game_id} &middot; ${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</span>
         </div>
         <div class="mg-card-matchup">${esc(ctx.g.home_team_name)} <span class="mg-ha">vs</span> ${esc(ctx.g.away_team_name)}</div>
-        <div class="mg-card-badges">${ctx.statusBadge}${liveStatusHtml(activeByGame[ctx.g.game_id])} ${resultBadge(ctx.g)}</div>
+        <div class="mg-card-badges">${ctx.statusBadge}${liveStatusHtml(activeByGame[ctx.g.game_id])} ${resultBadge(ctx.g)}${forcedBadge(ctx.g)}</div>
         <div class="mg-card-actions">${dirGameActionButtons(ctx)}</div>
       </div>`).join('')}
   </div>`;
