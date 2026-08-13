@@ -221,7 +221,22 @@ async function _executeRun() {
     seasonData = await fetchJSON('api/season');
     applySchedule(data);
   } catch (e) {
-    showBanner(e.message, 'error');
+    // A run that takes a while (real-sized seasons can take 30+ seconds) can
+    // outlast the browser's own connection before the response makes it
+    // back — Safari surfaces that as a bare "Load failed", which reads like
+    // the run itself failed even though it already completed and wrote
+    // schedule.json server-side. Check what's actually there before
+    // reporting a failure that may not be true.
+    try {
+      const fresh = await fetchJSON('api/schedule');
+      const justRan = fresh.generated_at && (Date.now() - new Date(fresh.generated_at).getTime()) < 3 * 60 * 1000;
+      if (justRan) {
+        seasonData = await fetchJSON('api/season');
+        applySchedule(fresh);
+        return;
+      }
+    } catch { /* fall through to the error banner below */ }
+    showBanner('Lost connection to the server. If the run was just slow, it may have finished anyway — refresh to check before trying again.', 'error');
   } finally {
     btn.disabled = false;
     hide('loading');
