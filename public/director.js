@@ -30,8 +30,13 @@ let activeByGame = {};
 
 async function loadActiveNegotiations(games) {
   activeByGame = {};
+  // Not filtered by game.status — a field change deliberately never flips a
+  // game's status (Ted: the other team "just shows up and plays," nothing
+  // is blocked on it), so unlike a reschedule there's no status value that
+  // would tell us to bother checking. Just skip games already in the past.
+  const today = new Date(new Date().toDateString());
   await Promise.all(games
-    .filter(g => (g.status || 'scheduled') === 'pending')
+    .filter(g => g.status !== 'cancelled' && new Date(g.date + 'T00:00:00') >= today)
     .map(async g => {
       try {
         const h = await fetchJSON(`api/games/${g.game_id}/history`);
@@ -111,9 +116,14 @@ function liveStatusHtml(active) {
   if (!active) return '';
   const overdue = active.response_due_at && new Date(active.response_due_at) < new Date();
   const bits = [];
-  if (active.round) bits.push(`Round ${active.round}`);
-  if (active.proposed_by && active.proposal) bits.push(`${esc(active.proposed_by)} proposed ${esc(active.proposal.date)} ${esc(active.proposal.time)}`);
-  if (active.awaiting) bits.push(`waiting on <strong>${esc(active.awaiting)}</strong>`);
+  if (active.is_field_change) {
+    const f = (seasonData?.fields || []).find(x => String(x.id) === String(active.proposal?.field_id));
+    bits.push(`${esc(active.proposed_by)} moved this to ${esc(f ? fieldDisplayName(f) : 'a new field')}`);
+  } else {
+    if (active.round) bits.push(`Round ${active.round}`);
+    if (active.proposed_by && active.proposal) bits.push(`${esc(active.proposed_by)} proposed ${esc(active.proposal.date)} ${esc(active.proposal.time)}`);
+  }
+  if (active.awaiting) bits.push(`${active.is_field_change ? 'awaiting acknowledgment from' : 'waiting on'} <strong>${esc(active.awaiting)}</strong>`);
   if (active.response_due_at) bits.push(`${overdue ? 'was due' : 'due'} ${esc(uiDue(active.response_due_at))}`);
   const flags = [];
   if (active.escalated?.director) flags.push('director notified');
@@ -132,8 +142,10 @@ function dirGameRowCtx(g) {
   const myTeamId = [g.home_team_id, g.away_team_id].find(id => myProgramTeams().some(t => String(t.id) === String(id)));
   const mySide = String(myTeamId) === String(g.home_team_id) ? 'home' : 'away';
   const confirmations = g.confirmations || {};
+  const active = activeByGame[g.game_id] || null;
+  const hasActiveRequest = active?.status === 'awaiting_response' || active?.status === 'awaiting_requester_confirm';
   return {
-    g, myTeamId, status,
+    g, myTeamId, status, active,
     statusBadge: gameStatusBadge(status, confirmations, mySide),
     canRequest: status !== 'negotiating',
     // TODO: once tested, gate this to the day before the game through 2
@@ -148,6 +160,9 @@ function dirGameRowCtx(g) {
     // Manual edit (with the force-past-the-rules authority coaches don't
     // get) — same "nothing left to touch" exclusion as Rain Out/Report Score.
     canEdit: status !== 'cancelled',
+    // Only the home team's own field is ever in play, mirroring my-team.js.
+    canChangeField: mySide === 'home' && status !== 'cancelled' && !hasActiveRequest,
+    canAcknowledgeField: !!active && active.is_field_change && active.status === 'awaiting_response' && String(active.awaiting_team_id) === String(myTeamId),
   };
 }
 
@@ -155,7 +170,9 @@ function dirGameActionButtons(ctx) {
   const g = ctx.g, tid = String(ctx.myTeamId);
   return [
     ctx.canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id},'${tid}')">Confirm</button>` : '',
+    ctx.canAcknowledgeField ? `<button class="btn btn-primary btn-sm" onclick="acknowledgeFieldChange(${g.game_id})">Acknowledge Field</button>` : '',
     ctx.canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id},'${tid}')">Request Change</button>` : '',
+    ctx.canChangeField ? `<button class="btn btn-secondary btn-sm" onclick="openFieldChange(${g.game_id},'${tid}')">Change Field</button>` : '',
     ctx.canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id},'${tid}')">Rain Out</button>` : '',
     ctx.canScore ? `<button class="btn btn-secondary btn-sm" onclick="openScore(${g.game_id},'${tid}')">${g.result ? 'Edit Score' : 'Report Score'}</button>` : '',
     ctx.canEdit ? `<button class="btn btn-secondary btn-sm" onclick="openGameEdit(${g.game_id})">Edit</button>` : '',
@@ -241,6 +258,38 @@ function openRainout(gameId, teamId) {
     refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
     mode: 'rainout',
   });
+}
+
+function openFieldChange(gameId, teamId) {
+  if (!requireVerifiedToEdit("change this game's field")) return;
+  const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
+  if (!game) return;
+  crTeamId = teamId;
+  const otherId = String(game.home_team_id) === teamId ? game.away_team_id : game.home_team_id;
+  const myTeam = teamById(teamId);
+  openChangeRequestModal({
+    game, teamId, otherTeam: teamById(otherId), fields: seasonData?.fields || [],
+    refresh: async () => {
+      scheduleData = await fetchJSON('api/schedule');
+      await loadActiveNegotiations(myProgramGames());
+      renderGamesList();
+    },
+    mode: 'field', programId: myTeam?.program_id,
+  });
+}
+
+async function acknowledgeFieldChange(gameId) {
+  if (!requireVerifiedToEdit('acknowledge this field change')) return;
+  const active = activeByGame[gameId];
+  if (!active) return;
+  try {
+    const res = await fetch(`api/change-requests/${active.change_request_id}/acknowledge`, { method: 'POST' });
+    const data = await res.json();
+    if (!data.ok) { toast(data.error || 'Could not acknowledge.', 'bad'); return; }
+    await loadActiveNegotiations(myProgramGames());
+    renderGamesList();
+    toast('Acknowledged.');
+  } catch { toast('Network error. Try again.', 'bad'); }
 }
 
 function openScore(gameId, teamId) {

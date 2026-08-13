@@ -6,6 +6,27 @@ let myTeam = null;
 let scheduleData = null;
 let seasonSlots = null;
 
+// Live negotiation/field-change state for my team's games, keyed by game_id,
+// so a coach can see what's happening (and acknowledge a field change)
+// without waiting for an escalation email. Not filtered by game.status —
+// a field change deliberately never flips a game's status (Ted: the other
+// team "just shows up and plays," nothing is blocked on it), so unlike a
+// reschedule there's no status value that would tell us to bother checking.
+let activeByGame = {};
+
+async function loadActiveNegotiations(games) {
+  activeByGame = {};
+  const today = new Date(new Date().toDateString());
+  await Promise.all(games
+    .filter(g => g.status !== 'cancelled' && new Date(g.date + 'T00:00:00') >= today)
+    .map(async g => {
+      try {
+        const h = await fetchJSON(`api/games/${g.game_id}/history`);
+        if (h.active) activeByGame[g.game_id] = h.active;
+      } catch {}
+    }));
+}
+
 function esc(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -61,6 +82,8 @@ async function init() {
 
   try { scheduleData = await fetchJSON('api/schedule'); } catch { scheduleData = { games: [] }; }
   renderGamesList();
+  await loadActiveNegotiations(myGames());
+  renderGamesList();
 
   openChangeRequestFromUrl();
   initMyTeamVerifyBanner();
@@ -93,9 +116,14 @@ function liveStatusHtml(active) {
   if (!active) return '';
   const overdue = active.response_due_at && new Date(active.response_due_at) < new Date();
   const bits = [];
-  if (active.round) bits.push(`Round ${active.round}`);
-  if (active.proposed_by && active.proposal) bits.push(`${esc(active.proposed_by)} proposed ${esc(active.proposal.date)} ${esc(active.proposal.time)}`);
-  if (active.awaiting) bits.push(`waiting on <strong>${esc(active.awaiting)}</strong>`);
+  if (active.is_field_change) {
+    const f = (seasonData?.fields || []).find(x => String(x.id) === String(active.proposal?.field_id));
+    bits.push(`${esc(active.proposed_by)} moved this to ${esc(f ? fieldDisplayName(f) : 'a new field')}`);
+  } else {
+    if (active.round) bits.push(`Round ${active.round}`);
+    if (active.proposed_by && active.proposal) bits.push(`${esc(active.proposed_by)} proposed ${esc(active.proposal.date)} ${esc(active.proposal.time)}`);
+  }
+  if (active.awaiting) bits.push(`${active.is_field_change ? 'awaiting acknowledgment from' : 'waiting on'} <strong>${esc(active.awaiting)}</strong>`);
   if (active.response_due_at) bits.push(`${overdue ? 'was due' : 'due'} ${esc(uiDue(active.response_due_at))}`);
   const flags = [];
   if (active.escalated?.director) flags.push('director notified');
@@ -116,8 +144,10 @@ function myGameRowCtx(g) {
   const confirmations = g.confirmations || {};
   const iConfirmed = !!confirmations[mySide];
   const oppName = esc(opp ? (opp.label || opp.name) : '—');
+  const active = activeByGame[g.game_id] || null;
+  const hasActiveRequest = active?.status === 'awaiting_response' || active?.status === 'awaiting_requester_confirm';
   return {
-    g, isHome, opp, status,
+    g, isHome, opp, status, active,
     // Ted: "a home game is 'vs ___', an away game is '@ ___'" — replaces a
     // separate Home/Away label, since this already says which it is. Already
     // escaped here since it's assembled with markup below, not raw text.
@@ -133,6 +163,12 @@ function myGameRowCtx(g) {
     // Scheduled/Pending-and-not-yet-my-turn both mean "I haven't confirmed
     // this game as-is yet" — Confirmed and Negotiating never show the button.
     canConfirm: (status === 'scheduled' || status === 'pending') && !iConfirmed,
+    // Only the home team's own field is ever in play (the game is played at
+    // whoever's hosting) — an away coach has nothing to change here. Blocked
+    // while anything else is already active on this game to avoid two
+    // requests landing on top of each other.
+    canChangeField: isHome && status !== 'cancelled' && !hasActiveRequest,
+    canAcknowledgeField: !!active && active.is_field_change && active.status === 'awaiting_response' && String(active.awaiting_team_id) === String(myTeam.id),
   };
 }
 
@@ -140,7 +176,9 @@ function myGameActionButtons(ctx) {
   const g = ctx.g;
   return [
     ctx.canConfirm ? `<button class="btn btn-primary btn-sm" onclick="confirmGame(${g.game_id})">Confirm</button>` : '',
+    ctx.canAcknowledgeField ? `<button class="btn btn-primary btn-sm" onclick="acknowledgeFieldChange(${g.game_id})">Acknowledge Field</button>` : '',
     ctx.canRequest ? `<button class="btn btn-secondary btn-sm" onclick="openChangeRequest(${g.game_id})">Request Change</button>` : '',
+    ctx.canChangeField ? `<button class="btn btn-secondary btn-sm" onclick="openFieldChange(${g.game_id})">Change Field</button>` : '',
     ctx.canRainout ? `<button class="btn btn-secondary btn-sm" onclick="openRainout(${g.game_id})">Rain Out</button>` : '',
     ctx.canScore ? `<button class="btn btn-secondary btn-sm" onclick="openScore(${g.game_id})">${g.result ? 'Edit Score' : 'Report Score'}</button>` : '',
     `<button class="btn btn-secondary btn-sm" onclick="showGameHistory(${g.game_id})">History</button>`,
@@ -164,7 +202,7 @@ function renderGamesList() {
         <td>#${ctx.g.game_id}</td>
         <td>${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</td>
         <td>${ctx.matchupLabel}</td>
-        <td>${ctx.statusBadge}${forcedBadge(ctx.g)}</td>
+        <td>${ctx.statusBadge}${liveStatusHtml(ctx.active)}${forcedBadge(ctx.g)}</td>
         <td>${resultBadge(ctx.g)}</td>
         <td><div class="row-actions">${myGameActionButtons(ctx)}</div></td>
       </tr>`).join('')}
@@ -178,6 +216,7 @@ function renderGamesList() {
         </div>
         <div class="mg-card-matchup">${ctx.matchupLabel}</div>
         <div class="mg-card-badges">${ctx.statusBadge} ${resultBadge(ctx.g)}${forcedBadge(ctx.g)}</div>
+        ${liveStatusHtml(ctx.active)}
         <div class="mg-card-actions">${myGameActionButtons(ctx)}</div>
       </div>`).join('')}
   </div>`;
@@ -246,6 +285,36 @@ function openRainout(gameId) {
     refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
     mode: 'rainout',
   });
+}
+
+function openFieldChange(gameId) {
+  if (!requireVerifiedToEdit("change this game's field")) return;
+  const game = myGames().find(g => g.game_id === gameId);
+  if (!game) return;
+  openChangeRequestModal({
+    game, teamId: myTeam.id, otherTeam: opponentTeam(game), fields: seasonData?.fields || [],
+    noPhoneText: '(no phone on file — contact your director)',
+    refresh: async () => {
+      scheduleData = await fetchJSON('api/schedule');
+      await loadActiveNegotiations(myGames());
+      renderGamesList();
+    },
+    mode: 'field', programId: myTeam.program_id,
+  });
+}
+
+async function acknowledgeFieldChange(gameId) {
+  if (!requireVerifiedToEdit('acknowledge this field change')) return;
+  const active = activeByGame[gameId];
+  if (!active) return;
+  try {
+    const res = await fetch(`api/change-requests/${active.change_request_id}/acknowledge`, { method: 'POST' });
+    const data = await res.json();
+    if (!data.ok) { toast(data.error || 'Could not acknowledge.', 'bad'); return; }
+    await loadActiveNegotiations(myGames());
+    renderGamesList();
+    toast('Acknowledged.');
+  } catch { toast('Network error. Try again.', 'bad'); }
 }
 
 function openScore(gameId) {

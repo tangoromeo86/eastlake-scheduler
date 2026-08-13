@@ -686,6 +686,10 @@ const ACTIVITY_DESCRIBERS = [
     describe: (req, status, prior, m) => `Rained out game #${m[1]}` },
   { method: 'POST', re: /^\/api\/change-requests$/,
     describe: (req) => `Requested a change on game #${req.body?.game_id}${req.body?.is_rainout ? ' (rain out)' : ''}` },
+  { method: 'POST', re: /^\/api\/change-requests\/field$/,
+    describe: (req) => `Requested a field change on game #${req.body?.game_id}` },
+  { method: 'POST', re: /^\/api\/change-requests\/([^/]+)\/acknowledge$/,
+    describe: (req, status, prior, m) => `Acknowledged a field change (${m[1]})` },
   { method: 'POST', re: /^\/api\/change-requests\/([^/]+)\/manual-override$/,
     describe: (req, status, prior, m) => `Manual override on game #${m[1]}` },
   { method: 'POST', re: /^\/api\/games\/([^/]+)\/result$/,
@@ -1947,9 +1951,45 @@ async function notifyTurn(req, cr, seasonData, game) {
   const proposingTeam = teams.find(t => String(t.id) === String(cr.proposing_team_id));
   if (!awaitingTeam?.email) return { ok: false, reason: 'no email for awaiting team' };
   const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
-  const isCounter = cr.round > 1;
   const proposerName = proposingTeam?.label || proposingTeam?.name || 'The other coach';
   const matchup = game ? `${game.home_team_name} vs ${game.away_team_name}` : `${proposerName} vs ${awaitingTeam.label || awaitingTeam.name || 'your team'}`;
+
+  // Field changes aren't a negotiation — the field already moved the moment
+  // the other coach confirmed. This is a heads-up with a single Acknowledge
+  // link, not Approve/Suggest-another-time.
+  if (cr.is_field_change) {
+    const subject = `${matchup}: field changed — please acknowledge`;
+    const ackUrl = `${base}/acknowledge?token=${cr.tokens.approve}`;
+    const html = emailShell(`
+      ${emailHeading(subject)}
+      ${emailP(`${emailEsc(proposerName)} moved this game to a different field — same date and time, just a nearby field. Nothing for you to approve, just let us know you've seen it so you know where to go.`)}
+      ${emailGameCard({ homeLabel: game?.home_team_name || 'Home', awayLabel: game?.away_team_name || 'Away', date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: 'New field' })}
+      ${cr.reason ? emailP(`<strong>Note from ${emailEsc(proposerName)}:</strong> ${emailEsc(cr.reason)}`) : ''}
+      ${emailContactCard(proposingTeam, `${proposerName}`)}
+      <div style="margin:18px 0 4px">${emailButton(ackUrl, 'Got it — acknowledge')}</div>
+      ${emailP(`Please acknowledge by ${emailEsc(formatDeadline(cr.response_due_at))}. If we don't hear from you by then, your director will be looped in to make sure you know about the change.`)}
+    `);
+    return sendEmail({
+      to: awaitingTeam.email,
+      subject,
+      text: [
+        `${proposerName} moved Game #${cr.game_id} to a different field — same date and time, just a nearby field.`,
+        '',
+        `New field: ${describeSlot(cr.proposal, seasonData.fields)}`,
+        cr.reason ? `Reason: ${cr.reason}` : null,
+        '',
+        proposingTeam ? `${proposerName} — ${[proposingTeam.phone, proposingTeam.email].filter(Boolean).join(' · ')}` : null,
+        '',
+        `Got it — acknowledge: ${ackUrl}`,
+        '',
+        `Please acknowledge by ${formatDeadline(cr.response_due_at)}. If we don't hear from you by then, your director will be looped in to make sure you know about the change.`,
+        '', '— Eastlake Scheduler',
+      ].filter(l => l !== null).join('\n'),
+      html,
+    });
+  }
+
+  const isCounter = cr.round > 1;
   const subject = cr.is_rainout
     ? `${matchup}: rained out — ${isCounter ? 'new makeup time proposed' : 'makeup time proposed'} — your response needed`
     : `${matchup}: ${isCounter ? 'new time proposed' : 'change requested'} — your response needed`;
@@ -2162,6 +2202,111 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
   res.json({ ok: true, change_request: cr });
 });
 
+// A field-only change: same date and time, just a different field — moving
+// within the same area, not a real relocation. Only the home team's own
+// field is ever in play (the game is played at whoever's hosting), so unlike
+// a reschedule this is never proposed by the away team, and the field has to
+// belong to the home team's own program (Ted: coaches shouldn't be able to
+// pick some other program's field). Reuses the exact same cr shape,
+// tokens, and escalation machinery as a reschedule (is_field_change: true is
+// the only real difference) so every downstream helper — describeSlot,
+// emailGameCard, checkEscalations — keeps working unmodified.
+app.post('/api/change-requests/field', requireVerified, async (req, res) => {
+  const s = getSession(req);
+  const { game_id, team_id, reason, field_id } = req.body;
+  if (!game_id) return res.status(400).json({ error: 'game_id is required' });
+  if (!field_id) return res.status(400).json({ error: 'Pick a new field' });
+
+  const ctx = loadGameContext(req, game_id);
+  if (ctx.error) return res.status(ctx.status || 500).json({ error: ctx.error });
+  const { game, seasonData, schedData, teams } = ctx;
+
+  const requestingTeamId = resolveRequestingTeam(s, game, team_id, teams);
+  if (!requestingTeamId) return res.status(403).json({ error: 'You can only request a change on your own game' });
+  if (String(requestingTeamId) !== String(game.home_team_id)) {
+    return res.status(403).json({ error: 'Only the home team can change which of their fields the game is at' });
+  }
+  const otherTeamId = game.away_team_id;
+  const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
+  const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));
+
+  if (daysBetween(new Date().toISOString(), game.date) < CHANGE_REQUEST_MIN_DAYS) {
+    return res.status(400).json({ error: `This game is within ${CHANGE_REQUEST_MIN_DAYS} days — use Manual Override instead`, lockout: true });
+  }
+  if (!requestingTeam?.email) return res.status(400).json({ error: 'No email on file for your team — contact your director' });
+
+  const fieldObj = (seasonData.fields || []).find(f => String(f.id) === String(field_id));
+  if (!fieldObj) return res.status(400).json({ error: 'Field not found' });
+  if (String(fieldObj.program_id) !== String(requestingTeam.program_id)) {
+    return res.status(400).json({ error: "That field doesn't belong to your program" });
+  }
+  if (String(fieldObj.id) === String(game.field_id)) {
+    return res.status(400).json({ error: "That's already this game's field" });
+  }
+
+  const cr = {
+    id: 'cr-' + Date.now(),
+    game_id, division_id: game.division_id,
+    initiating_team_id: requestingTeamId,
+    requesting_team_id: requestingTeamId,
+    other_team_id: otherTeamId,
+    reason: (reason || '').trim(), details: '',
+    is_rainout: false,
+    is_field_change: true,
+    proposing_team_id: requestingTeamId,
+    awaiting_team_id: null,
+    // Same date/time as the game already has — only field_id differs. Keeping
+    // the full {date,time,field_id} shape (not just field_id) means every
+    // shared helper below (describeSlot, emailGameCard, checkEscalations)
+    // needs no changes to understand a field-change proposal.
+    proposal: { date: game.date, time: game.time, field_id: fieldObj.id },
+    round: 0,
+    history: [],
+    status: 'awaiting_requester_confirm',
+    submitted_at: new Date().toISOString(), round_started_at: null, responded_at: null,
+    director_notified_at: null, admin_notified_at: null, stalemate_notified_at: null,
+    tokens: newRoundTokens(),
+    manual_override: null,
+  };
+  const list = readChangeRequests();
+  list.push(cr);
+  writeChangeRequests(list);
+
+  const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
+  const confirmSubject = `${game.home_team_name} vs ${game.away_team_name}: confirm the field change`;
+  const confirmUrl = `${base}/confirm?token=${cr.tokens.approve}`;
+  const cancelUrl = `${base}/cancel?token=${cr.tokens.cancel}`;
+  const confirmHtml = emailShell(`
+    ${emailHeading(confirmSubject)}
+    ${emailP(`Did you mean to move this game to a different field? Since it's the same date and time — just a nearby field — ${emailEsc(otherTeam?.label || otherTeam?.name || 'the other coach')} doesn't need to approve it, they'll just be notified. Nothing reaches them until you confirm below.`)}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: 'Currently scheduled' })}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: 'New field' })}
+    ${cr.reason ? emailP(`<strong>Your note:</strong> ${emailEsc(cr.reason)}`) : ''}
+    <div style="margin:18px 0 4px">${emailButton(confirmUrl, 'Yes, notify the other coach')}${emailButton(cancelUrl, 'No, cancel', 'secondary')}</div>
+    ${emailP('If you ignore this, nothing happens — the field never changes and the other coach is never notified.')}
+  `);
+  const result = await sendEmail({
+    to: requestingTeam.email,
+    subject: confirmSubject,
+    text: [
+      `Did you mean to move Game #${game_id} to a different field?`,
+      '',
+      `Currently: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}`,
+      `New field: ${describeSlot(cr.proposal, seasonData.fields)}`,
+      cr.reason ? `Reason: ${cr.reason}` : null,
+      '',
+      `Yes, notify the other coach: ${confirmUrl}`,
+      `No, cancel: ${cancelUrl}`,
+      '',
+      'If you ignore this, nothing happens — the field never changes and the other coach is never notified.',
+      '', '— Eastlake Scheduler',
+    ].filter(l => l !== null).join('\n'),
+    html: confirmHtml,
+  });
+  if (!result.ok) return res.status(500).json({ error: 'Could not send confirmation email', reason: result.reason });
+  res.json({ ok: true, change_request: cr });
+});
+
 function crActionPage(title, message, extraHtml) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
   <style>body{font-family:system-ui,-apple-system,sans-serif;background:#f4f6f8;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
@@ -2202,21 +2347,31 @@ app.get('/api/change-requests/:id/confirm', async (req, res) => {
 
   advanceRound(cr, cr.initiating_team_id, cr.other_team_id, cr.proposal);
   list[idx] = cr;
-  writeChangeRequests(list);
 
-  // The game keeps its agreed date — only the badge changes — so nobody turns up
-  // at the wrong field while the coaches are still negotiating. "negotiating"
-  // (was "pending") — renamed so it stops colliding with the dual-coach
-  // confirm-the-schedule "Pending" status below, a different concept entirely.
   const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
-  if (gameIdx !== -1) {
+  if (cr.is_field_change) {
+    // Not a negotiation — the field moves the moment the requester confirms
+    // their own request, same as Ted described: "the away team just shows up
+    // and plays." The game stays out of 'negotiating' status too, since
+    // nothing about it is actually unsettled — that status exists to stop a
+    // coach confirming a game mid-negotiation, which doesn't apply here.
+    if (gameIdx !== -1) applyFieldChangeToGame(cr, schedData, seasonData);
+  } else if (gameIdx !== -1) {
+    // The game keeps its agreed date — only the badge changes — so nobody turns up
+    // at the wrong field while the coaches are still negotiating. "negotiating"
+    // (was "pending") — renamed so it stops colliding with the dual-coach
+    // confirm-the-schedule "Pending" status below, a different concept entirely.
     schedData.games[gameIdx].status = 'negotiating';
+  }
+  if (gameIdx !== -1) {
     try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
   }
+  writeChangeRequests(list);
 
   await notifyTurn(req, cr, seasonData, gameIdx !== -1 ? schedData.games[gameIdx] : null);
-  res.send(crActionPage('Request sent',
-    `Your proposal for Game #${cr.game_id} has gone to the other coach. The game stays at its current time until you both agree.`));
+  res.send(crActionPage(cr.is_field_change ? 'Field changed' : 'Request sent', cr.is_field_change
+    ? `Game #${cr.game_id} has been moved to its new field. The other coach has been notified and just needs to acknowledge it.`
+    : `Your proposal for Game #${cr.game_id} has gone to the other coach. The game stays at its current time until you both agree.`));
 });
 
 app.get('/api/change-requests/:id/cancel', (req, res) => {
@@ -2267,6 +2422,31 @@ function applyChangeRequestToGame(cr, schedData, seasonData) {
     status: 'confirmed',
     confirmations: { home: true, away: true },
   };
+  schedData.games[gameIdx] = updatedGame;
+  schedData.total_games = schedData.games.length;
+  schedData.generated_at = new Date().toISOString();
+  return updatedGame;
+}
+
+// A field-only change is never a negotiation — the other coach has no veto,
+// they just need to know where to show up (Ted: "the away team just shows up
+// and plays, but needs to go to the right field"). So unlike
+// applyChangeRequestToGame, this runs the moment the requesting coach
+// confirms their own request, not once the other side responds — the
+// "acknowledge" step downstream is a read receipt with an escalation safety
+// net, not a gate on whether the change takes effect. Only field_id/name/
+// address move; date, time, week, status and confirmations are untouched.
+function applyFieldChangeToGame(cr, schedData, seasonData) {
+  const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
+  if (gameIdx === -1) return null;
+  const existingGame = schedData.games[gameIdx];
+  const field_id = cr.proposal.field_id;
+
+  const fieldObj = (seasonData.fields || []).find(f => f.id === field_id);
+  const resolvedFieldName    = fieldObj ? (fieldObj.sub_field ? `${fieldObj.name} – ${fieldObj.sub_field}` : (fieldObj.name || field_id)) : field_id;
+  const resolvedFieldAddress = fieldObj ? (fieldObj.address || '') : '';
+
+  const updatedGame = { ...existingGame, field_id, field_name: resolvedFieldName, field_address: resolvedFieldAddress };
   schedData.games[gameIdx] = updatedGame;
   schedData.total_games = schedData.games.length;
   schedData.generated_at = new Date().toISOString();
@@ -2326,6 +2506,46 @@ function applyRainoutToGame(schedData, seasonData, gameIdx, { date, time, field_
 
   return { cancelledGame, makeupGame };
 }
+
+// A field change already took effect when the requesting coach confirmed —
+// acknowledging it doesn't change the game, it just closes out the read
+// receipt so checkEscalations stops chasing it. Shared by the email-link
+// (token) and in-app (session) routes below so the two paths can't drift.
+function acknowledgeFieldChange(list, idx, cr) {
+  cr.status = 'acknowledged';
+  cr.responded_at = new Date().toISOString();
+  list[idx] = cr;
+  writeChangeRequests(list);
+}
+
+app.get('/api/change-requests/:id/acknowledge', (req, res) => {
+  const found = findCrByToken(req.params.id, req.query.token, 'awaiting_response', 'approve');
+  if (!found || !found.cr.is_field_change) return crAlreadyResolved(res);
+  acknowledgeFieldChange(found.list, found.idx, found.cr);
+  res.send(crActionPage('Acknowledged', `Thanks — you're all set for Game #${found.cr.game_id} at its new field.`));
+});
+
+app.post('/api/change-requests/:id/acknowledge', requireVerified, (req, res) => {
+  const s = getSession(req);
+  const list = readChangeRequests();
+  const idx = list.findIndex(c => c.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Change request not found' });
+  const cr = list[idx];
+  if (!cr.is_field_change) return res.status(400).json({ error: 'Not a field change' });
+  if (cr.status !== 'awaiting_response') return res.status(400).json({ error: 'Already resolved' });
+  if (s.role === 'coach' && String(s.team_id) !== String(cr.awaiting_team_id)) {
+    return res.status(403).json({ error: 'This field change is not awaiting your team' });
+  }
+  if (s.role === 'director') {
+    const teams = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')).teams || [];
+    const awaitingTeam = teams.find(t => String(t.id) === String(cr.awaiting_team_id));
+    if (!awaitingTeam || !canManageProgram(s, awaitingTeam.program_id)) {
+      return res.status(403).json({ error: 'This field change is not awaiting one of your teams' });
+    }
+  }
+  acknowledgeFieldChange(list, idx, cr);
+  res.json({ ok: true });
+});
 
 app.get('/api/change-requests/:id/approve', async (req, res) => {
   const found = findCrByToken(req.params.id, req.query.token, 'awaiting_response', 'approve');
@@ -3494,11 +3714,15 @@ function buildGameHistory(gameId, changes, changeRequests, seasonData) {
 
     timeline.push({
       at: cr.submitted_at, actor: nameOf(cr.initiating_team_id), kind: 'requested',
-      summary: `${nameOf(cr.initiating_team_id)} asked to change this game`,
+      summary: cr.is_field_change
+        ? `${nameOf(cr.initiating_team_id)} asked to change this game's field`
+        : `${nameOf(cr.initiating_team_id)} asked to change this game`,
       detail: cr.reason || null,
     });
 
-    // Each superseded proposal, then whatever is currently on the table.
+    // Each superseded proposal, then whatever is currently on the table. A
+    // field change never has history entries (no counter-proposal exists),
+    // so this only ever fires for a real negotiation.
     for (const h of (cr.history || [])) {
       timeline.push({
         at: h.at, actor: nameOf(h.proposing_team_id), kind: 'proposed',
@@ -3508,7 +3732,9 @@ function buildGameHistory(gameId, changes, changeRequests, seasonData) {
     if (cr.proposal && cr.round >= 1) {
       timeline.push({
         at: cr.round_started_at || cr.submitted_at, actor: nameOf(cr.proposing_team_id), kind: 'proposed',
-        summary: `${nameOf(cr.proposing_team_id)} proposed ${cr.proposal.date} at ${cr.proposal.time} (round ${cr.round})`,
+        summary: cr.is_field_change
+          ? `${nameOf(cr.proposing_team_id)} moved this game to ${fieldLabel(cr.proposal.field_id, seasonData.fields)}`
+          : `${nameOf(cr.proposing_team_id)} proposed ${cr.proposal.date} at ${cr.proposal.time} (round ${cr.round})`,
       });
     }
     if (cr.director_notified_at) {
@@ -3527,6 +3753,10 @@ function buildGameHistory(gameId, changes, changeRequests, seasonData) {
       timeline.push({ at: cr.responded_at, actor: nameOf(cr.awaiting_team_id), kind: 'agreed',
         summary: `${nameOf(cr.awaiting_team_id)} agreed — game moved to ${cr.proposal?.date} at ${cr.proposal?.time}` });
     }
+    if (cr.status === 'acknowledged') {
+      timeline.push({ at: cr.responded_at, actor: nameOf(cr.awaiting_team_id), kind: 'acknowledged',
+        summary: `${nameOf(cr.awaiting_team_id)} acknowledged the field change` });
+    }
     if (cr.status === 'cancelled') {
       timeline.push({ at: cr.responded_at || cr.submitted_at, actor: nameOf(cr.initiating_team_id), kind: 'cancelled',
         summary: `${nameOf(cr.initiating_team_id)} cancelled the request` });
@@ -3540,6 +3770,7 @@ function buildGameHistory(gameId, changes, changeRequests, seasonData) {
       active = {
         change_request_id: cr.id,
         status: cr.status,
+        is_field_change: !!cr.is_field_change,
         round: cr.round || 0,
         proposal: cr.proposal || null,
         proposed_by: cr.proposing_team_id ? nameOf(cr.proposing_team_id) : null,
@@ -3553,8 +3784,12 @@ function buildGameHistory(gameId, changes, changeRequests, seasonData) {
           stalemate: !!cr.stalemate_notified_at,
         },
         summary: cr.status === 'awaiting_requester_confirm'
-          ? `${nameOf(cr.initiating_team_id)} started a change request but hasn't confirmed it yet`
-          : `Round ${cr.round} — ${nameOf(cr.proposing_team_id)} proposed ${cr.proposal?.date} at ${cr.proposal?.time}, waiting on ${nameOf(cr.awaiting_team_id)}`,
+          ? (cr.is_field_change
+            ? `${nameOf(cr.initiating_team_id)} started a field change but hasn't confirmed it yet`
+            : `${nameOf(cr.initiating_team_id)} started a change request but hasn't confirmed it yet`)
+          : (cr.is_field_change
+            ? `Moved to ${fieldLabel(cr.proposal?.field_id, seasonData.fields)} — waiting on ${nameOf(cr.awaiting_team_id)} to acknowledge`
+            : `Round ${cr.round} — ${nameOf(cr.proposing_team_id)} proposed ${cr.proposal?.date} at ${cr.proposal?.time}, waiting on ${nameOf(cr.awaiting_team_id)}`),
       };
     }
   }
@@ -3911,24 +4146,33 @@ async function checkEscalations() {
         .filter(d => d.active !== false && d.program_id === awaitingTeam?.program_id)
         .map(d => d.email).filter(Boolean);
       if (emails.length) {
-        const subj = `${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}: unanswered change request`;
+        const subj = cr.is_field_change
+          ? `${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}: unacknowledged field change`
+          : `${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}: unanswered change request`;
+        const nudgeText = cr.is_field_change
+          ? 'The field already changed — could you make sure they know where to go?'
+          : 'Could you nudge them to either accept it or suggest another time?';
         await sendEmail({
           to: emails,
           subject: subj,
           text: [
-            `${awaitingTeam?.label || 'One of your coaches'} missed their deadline to respond to Game #${cr.game_id}.`,
+            cr.is_field_change
+              ? `${awaitingTeam?.label || 'One of your coaches'} hasn't acknowledged a field change for Game #${cr.game_id}.`
+              : `${awaitingTeam?.label || 'One of your coaches'} missed their deadline to respond to Game #${cr.game_id}.`,
             `Proposed by ${proposingTeam?.label || 'the other coach'}: ${describeSlot(cr.proposal, seasonData.fields)}`,
             `Round ${cr.round} — they had ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (due ${formatDeadline(cr.response_due_at)}), now ${daysElapsed} days on.`,
-            `Could you nudge them to either accept it or suggest another time?`,
+            nudgeText,
             '', '— Eastlake Scheduler',
           ].join('\n'),
           html: emailShell(`
             ${emailHeading(subj)}
-            ${emailP(`${emailEsc(awaitingTeam?.label || 'One of your coaches')} missed their deadline to respond.`)}
-            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: `Proposed by ${proposingTeam?.label || 'the other coach'}` })}
+            ${emailP(cr.is_field_change
+              ? `${emailEsc(awaitingTeam?.label || 'One of your coaches')} hasn't acknowledged a field change yet.`
+              : `${emailEsc(awaitingTeam?.label || 'One of your coaches')} missed their deadline to respond.`)}
+            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_field_change ? 'New field — already in effect' : `Proposed by ${proposingTeam?.label || 'the other coach'}` })}
             ${emailP(`Round ${cr.round} — they had ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (due ${emailEsc(formatDeadline(cr.response_due_at))}), now ${daysElapsed} days on.`)}
             ${emailContactCard(awaitingTeam)}
-            ${emailP('Could you nudge them to either accept it or suggest another time?')}
+            ${emailP(nudgeText)}
           `),
         });
       }
@@ -3938,12 +4182,16 @@ async function checkEscalations() {
 
     if (daysElapsed >= deadlineDays + ADMIN_ESCALATION_GRACE_DAYS && !cr.admin_notified_at) {
       if (ADMIN_EMAIL) {
-        const subj = `${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}: still unanswered — escalated`;
+        const subj = cr.is_field_change
+          ? `${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}: field change still unacknowledged — escalated`
+          : `${nameOf(cr.initiating_team_id)} vs ${nameOf(cr.other_team_id)}: still unanswered — escalated`;
         await sendEmail({
           to: ADMIN_EMAIL,
           subject: subj,
           text: [
-            `A proposed time for Game #${cr.game_id} has gone unanswered for ${daysElapsed} days (director already notified).`,
+            cr.is_field_change
+              ? `A field change for Game #${cr.game_id} has gone unacknowledged for ${daysElapsed} days (director already notified). The field already changed — this is just about making sure the other team knows.`
+              : `A proposed time for Game #${cr.game_id} has gone unanswered for ${daysElapsed} days (director already notified).`,
             `Round ${cr.round} — deadline was ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (${formatDeadline(cr.response_due_at)}).`,
             `Waiting on: ${nameOf(cr.awaiting_team_id)}`,
             `Proposed by: ${nameOf(cr.proposing_team_id)}`,
@@ -3952,8 +4200,10 @@ async function checkEscalations() {
           ].join('\n'),
           html: emailShell(`
             ${emailHeading(subj)}
-            ${emailP(`A proposed time has gone unanswered for ${daysElapsed} days (director already notified).`)}
-            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: `Proposed by ${nameOf(cr.proposing_team_id)} — waiting on ${nameOf(cr.awaiting_team_id)}` })}
+            ${emailP(cr.is_field_change
+              ? `A field change has gone unacknowledged for ${daysElapsed} days (director already notified). The field already changed — this is just about making sure the other team knows.`
+              : `A proposed time has gone unanswered for ${daysElapsed} days (director already notified).`)}
+            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_field_change ? 'New field — already in effect' : `Proposed by ${nameOf(cr.proposing_team_id)} — waiting on ${nameOf(cr.awaiting_team_id)}` })}
             ${emailP(`Round ${cr.round} — deadline was ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (${emailEsc(formatDeadline(cr.response_due_at))}).${cr.reason ? ` Reason: ${emailEsc(cr.reason)}` : ''}`)}
           `),
         });

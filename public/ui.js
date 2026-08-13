@@ -539,11 +539,14 @@ function initVerifyBanner(sessionObj, message, next) {
 // then asks for a time the same way. The old reason field survives as an
 // optional note, not the leading question.
 let crmGame = null, crmTeamId = null, crmOtherTeam = null, crmFields = null, crmRefresh = null, crmNoPhoneText = null;
-let crmMode = 'reschedule'; // 'reschedule' | 'rainout' — same negotiation pipeline either way; a
-                            // rainout skips straight to picking a new day (the whole original day
-                            // is gone) and, on agreement, cancels the original game and creates a
-                            // linked makeup rather than moving it in place.
-let crmSlots = null, crmDaysMap = null, crmSelectedDate = null, crmSelectedTime = null;
+let crmMode = 'reschedule'; // 'reschedule' | 'rainout' | 'field' — 'reschedule'/'rainout' share
+                            // the negotiation pipeline (a rainout skips straight to picking a new
+                            // day, and on agreement cancels the original game and creates a linked
+                            // makeup rather than moving it in place). 'field' is not a negotiation
+                            // at all — same date/time, just a different (nearby) field, applied the
+                            // moment the requester confirms; the other coach only acknowledges it.
+let crmProgramId = null;   // requesting team's program, for scoping the field-mode picker
+let crmSlots = null, crmDaysMap = null, crmSelectedDate = null, crmSelectedTime = null, crmSelectedField = null;
 
 function ensureChangeModal() {
   if (document.getElementById('crm-overlay')) return;
@@ -591,7 +594,7 @@ function crmGameLabel(game) {
   return `${nice} at ${game.time}`;
 }
 
-// { game, teamId, otherTeam, fields, refresh, noPhoneText, mode }
+// { game, teamId, otherTeam, fields, refresh, noPhoneText, mode, programId }
 // - game: the full game object being changed.
 // - teamId: the requesting team's id (a director may act on behalf of any of
 //   their own teams, so this is always explicit rather than inferred).
@@ -599,20 +602,26 @@ function crmGameLabel(game) {
 // - fields: seasonData.fields, for the lockout flow's field picker.
 // - refresh: called after a successful submit so the caller's own games list
 //   (whatever shape that takes on their page) reflects the new state.
-// - mode: 'reschedule' (default) or 'rainout' — either coach can report a
-//   rain out, same as either can request a change; there's no "only the
-//   home coach" restriction, matching how this already works.
-async function openChangeRequestModal({ game, teamId, otherTeam, fields, refresh, noPhoneText, mode }) {
+// - mode: 'reschedule' (default), 'rainout', or 'field' — either coach can
+//   report a rain out, same as either can request a change; there's no
+//   "only the home coach" restriction, matching how this already works. A
+//   field change is different: only the home team's own field is ever in
+//   play, so it's only ever opened with teamId === game.home_team_id.
+// - programId: the requesting team's program — used in field mode to scope
+//   the field picker to fields that program actually owns.
+async function openChangeRequestModal({ game, teamId, otherTeam, fields, refresh, noPhoneText, mode, programId }) {
   ensureChangeModal();
   crmGame = game; crmTeamId = teamId; crmOtherTeam = otherTeam; crmFields = fields || [];
   crmRefresh = refresh; crmNoPhoneText = noPhoneText || '(no phone on file)';
-  crmMode = mode === 'rainout' ? 'rainout' : 'reschedule';
-  crmSlots = null; crmDaysMap = null; crmSelectedDate = null; crmSelectedTime = null;
+  crmMode = mode === 'rainout' ? 'rainout' : mode === 'field' ? 'field' : 'reschedule';
+  crmProgramId = programId || null;
+  crmSlots = null; crmDaysMap = null; crmSelectedDate = null; crmSelectedTime = null; crmSelectedField = null;
   crmErr(null);
 
   const daysOut = Math.floor((new Date(game.date + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000);
   const locked = daysOut < 7;
   const isRainout = crmMode === 'rainout';
+  const isField = crmMode === 'field';
 
   const isHome = String(game.home_team_id) === String(teamId);
   const oppName = otherTeam ? (otherTeam.label || otherTeam.name || 'the other team') : 'the other team';
@@ -620,11 +629,15 @@ async function openChangeRequestModal({ game, teamId, otherTeam, fields, refresh
     ? `${isHome ? 'Home' : 'Away'} vs ${oppName} — was ${crmGameLabel(game)}${game.field_name ? ` at ${game.field_name}` : ''}`
     : `${isHome ? 'Home' : 'Away'} vs ${oppName} — currently ${crmGameLabel(game)}${game.field_name ? ` at ${game.field_name}` : ''}`;
   document.getElementById('crm-title').textContent = locked
-    ? (isRainout ? 'Rain Out (Inside 7 Days) — Manual Override' : 'Change Locked — Manual Override')
-    : (isRainout ? 'Report Rain Out' : 'Request Change');
+    ? (isRainout ? 'Rain Out (Inside 7 Days) — Manual Override' : isField ? 'Field Change (Inside 7 Days) — Manual Override' : 'Change Locked — Manual Override')
+    : (isRainout ? 'Report Rain Out' : isField ? 'Change Field' : 'Request Change');
   document.getElementById('crm-overlay').classList.remove('hidden');
 
   if (locked) { renderCrmLocked(); return; }
+
+  // No slots to compute — the date and time never change, only the field —
+  // so this skips the day/time picking machinery entirely.
+  if (isField) { renderCrmFieldStep(); return; }
 
   document.getElementById('crm-body').innerHTML = '<p class="muted">Finding makeup days that work for both teams…</p>';
   document.getElementById('crm-footer').innerHTML = '';
@@ -773,17 +786,74 @@ async function submitCrmRequest() {
   } catch { crmErr('Network error. Try again.'); }
 }
 
+// Field mode's only step — no day/time to pick, just which of the program's
+// own fields to move to. Scoped to crmProgramId (not every field in the
+// season) since a coach shouldn't be offered another program's field.
+function renderCrmFieldStep() {
+  crmErr(null);
+  const options = crmFields
+    .filter(f => String(f.program_id) === String(crmProgramId) && String(f.id) !== String(crmGame.field_id))
+    .sort((a, b) => (a.sub_field ? `${a.name} – ${a.sub_field}` : a.name).localeCompare(b.sub_field ? `${b.name} – ${b.sub_field}` : b.name));
+
+  if (!options.length) {
+    document.getElementById('crm-body').innerHTML =
+      `<p class="danger-text">Your program doesn't have another field registered to move this game to.</p>`;
+    document.getElementById('crm-footer').innerHTML = `<button id="crm-cancel-btn" class="btn btn-secondary" type="button">Close</button>`;
+    document.getElementById('crm-cancel-btn').addEventListener('click', closeChangeModal);
+    return;
+  }
+
+  document.getElementById('crm-body').innerHTML = `
+    <p class="field-form-hint">Same date and time — just move it to a different field. The other coach doesn't need to approve this, they'll just be notified so they know where to go.</p>
+    <div id="crm-field-list">${options.map(f =>
+      `<label class="cr-slot"><input type="radio" name="crm-field" value="${uiEsc(String(f.id))}">${uiEsc(f.sub_field ? `${f.name} – ${f.sub_field}` : f.name)}</label>`
+    ).join('')}</div>
+    <label class="field-form-row" style="margin-top:12px;display:block">
+      <span class="field-form-hint" style="margin:0 0 4px;display:block">Add a note for the other coach (optional)</span>
+      <input id="crm-note" type="text" placeholder="e.g. Field is under maintenance this week">
+    </label>`;
+  document.getElementById('crm-footer').innerHTML = `
+    <button id="crm-cancel-btn" class="btn btn-secondary" type="button">Cancel</button>
+    <button id="crm-submit-btn" class="btn btn-primary" type="button" disabled>Change Field</button>`;
+  document.getElementById('crm-cancel-btn').addEventListener('click', closeChangeModal);
+  const submitBtn = document.getElementById('crm-submit-btn');
+  document.querySelectorAll('input[name="crm-field"]').forEach(r => {
+    r.addEventListener('change', () => { crmSelectedField = r.value; submitBtn.disabled = false; });
+  });
+  submitBtn.addEventListener('click', submitCrmFieldChange);
+}
+
+async function submitCrmFieldChange() {
+  crmErr(null);
+  if (!crmSelectedField) { crmErr('Pick a field first.'); return; }
+  const body = {
+    game_id: crmGame.game_id, team_id: crmTeamId,
+    reason: (document.getElementById('crm-note')?.value || '').trim(),
+    field_id: crmSelectedField,
+  };
+  try {
+    const res = await fetch('api/change-requests/field', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { crmErr(data.error || 'Could not submit field change.'); return; }
+    closeChangeModal();
+    toast("Check your email to confirm this before the other coach is notified.", 'good');
+    if (crmRefresh) crmRefresh();
+  } catch { crmErr('Network error. Try again.'); }
+}
+
 // <7 days out — same manual-override flow as before, just relocated into the
 // modal instead of a static panel at the bottom of the page.
 function renderCrmLocked() {
   const introText = crmMode === 'rainout'
     ? "This game is less than 7 days away, so it's too late for the normal report/confirm flow. Call or text the other coach directly at"
+    : crmMode === 'field'
+    ? "This game is less than 7 days away, so it's too late for the normal notify flow. Let the other coach know directly at"
     : "This game is less than 7 days away, so it's too late for the normal request/approve flow. Call or text the other coach directly at";
   document.getElementById('crm-body').innerHTML = `
     <p class="field-form-hint">${introText} <strong>${uiEsc(crmOtherTeam?.phone || crmNoPhoneText)}</strong> to work it out, then record it here.</p>
     <div class="field-form-row">
-      <label>New Date *<input id="crm-mo-date" type="date" value="${uiEsc(crmGame.date)}"></label>
-      <label>New Time *<input id="crm-mo-time" type="text" placeholder="e.g. 18:30" value="${uiEsc(crmGame.time)}"></label>
+      <label>New Date *<input id="crm-mo-date" type="date" value="${uiEsc(crmGame.date)}"${crmMode === 'field' ? ' readonly' : ''}></label>
+      <label>New Time *<input id="crm-mo-time" type="text" placeholder="e.g. 18:30" value="${uiEsc(crmGame.time)}"${crmMode === 'field' ? ' readonly' : ''}></label>
     </div>
     <div class="field-form-row">
       <label>Field<select id="crm-mo-field"></select></label>
@@ -794,8 +864,12 @@ function renderCrmLocked() {
     <div class="field-form-row">
       <label>How did you connect? *<input id="crm-mo-how" type="text" placeholder="e.g. Phone call, text message"></label>
     </div>`;
-  const fields = [...crmFields].sort((a, b) =>
-    (a.sub_field ? `${a.name} – ${a.sub_field}` : a.name).localeCompare(b.sub_field ? `${b.name} – ${b.sub_field}` : b.name));
+  // A field-only change stays scoped to the requesting team's own program,
+  // same as the >=7-days flow — every other mode keeps the full field list,
+  // since a genuine reschedule/rainout might legitimately need a field
+  // outside the home team's usual set.
+  const fields = (crmMode === 'field' ? crmFields.filter(f => String(f.program_id) === String(crmProgramId)) : [...crmFields])
+    .sort((a, b) => (a.sub_field ? `${a.name} – ${a.sub_field}` : a.name).localeCompare(b.sub_field ? `${b.name} – ${b.sub_field}` : b.name));
   document.getElementById('crm-mo-field').innerHTML =
     '<option value="">— Keep current —</option>' +
     fields.map(f => `<option value="${String(f.id)}">${uiEsc(f.sub_field ? `${f.name} – ${f.sub_field}` : f.name)}</option>`).join('');
@@ -813,10 +887,12 @@ async function submitCrmManualOverride() {
   const how = document.getElementById('crm-mo-how').value.trim();
   const date = document.getElementById('crm-mo-date').value;
   const time = document.getElementById('crm-mo-time').value.trim();
+  const fieldId = document.getElementById('crm-mo-field').value || null;
   if (!who || !how || !date || !time) { crmErr('Date, time, who, and how are all required.'); return; }
+  if (crmMode === 'field' && !fieldId) { crmErr('Pick a new field.'); return; }
   const body = {
     team_id: crmTeamId, date, time,
-    field_id: document.getElementById('crm-mo-field').value || null,
+    field_id: fieldId,
     who_spoke_to: who, how_connected: how,
     is_rainout: crmMode === 'rainout',
   };
