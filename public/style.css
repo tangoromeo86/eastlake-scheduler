@@ -338,10 +338,20 @@ header h1 {
   margin-bottom: 24px;
 }
 
-/* ── Teams view ──────────────────────────────────────────────────────────── */
+/* ── Teams view ──────────────────────────────────────────────────────────────
+   Each card used to hold an 8-column table (#, Wk, Date, Day, Time, H/A,
+   Opponent, Field) that refused to shrink below its content's natural width
+   — a CSS Grid item's default min-width is `auto`, not 0, so the un-wrapping
+   table forced the card itself wider than its grid track and bled into the
+   next card instead of being clipped by the card's own overflow:hidden
+   (Ted, 2026-08-14, screenshot showed the bleed directly). Fixed two ways:
+   min-width:0 lets the card actually shrink to its track, and the content
+   itself is now flex/wrap/ellipsis-friendly rows (the same pattern already
+   proven to work at any width in the public viewer's team cards) instead of
+   a rigid table, so nothing needs a table's full column width to read fine. */
 #teams-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 12px;
 }
 
@@ -350,6 +360,7 @@ header h1 {
   border-radius: 7px;
   overflow: hidden;
   font-size: 12px;
+  min-width: 0;
 }
 
 .team-card-header {
@@ -358,6 +369,7 @@ header h1 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   border-bottom: 1px solid #e2e8f0;
 }
 
@@ -365,25 +377,53 @@ header h1 {
   font-weight: 700;
   font-size: 13px;
   color: #1a1a2e;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .team-card-meta {
   font-size: 11px;
   color: #94a3b8;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.team-card table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.team-card td {
-  padding: 5px 10px;
+.team-card-game {
+  padding: 8px 12px;
   border-bottom: 1px solid #f1f5f9;
-  vertical-align: middle;
 }
-
-.team-card tr:last-child td { border-bottom: none; }
+.team-card-game:last-child { border-bottom: none; }
+.team-card-game-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.team-card-game-opp {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a1a2e;
+}
+.team-card-game-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #64748b;
+}
+.team-card-game-field {
+  margin-top: 1px;
+  font-size: 11px;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-card-game.no-games { color: #94a3b8; font-style: italic; }
 
 .ha-badge {
   display: inline-block;
@@ -395,9 +435,6 @@ header h1 {
 }
 .ha-badge.home { background: #dbeafe; color: #1d4ed8; }
 .ha-badge.away { background: #f1f5f9; color: #475569; }
-
-.opp-name { font-weight: 500; color: #1a1a2e; }
-.field-small { color: #94a3b8; font-size: 11px; }
 
 /* ── Matrix view ─────────────────────────────────────────────────────────── */
 .matrix-scroll {
@@ -1444,14 +1481,6 @@ input.has-error:focus, select.has-error:focus {
 }
 .crm-time-chip input[type="radio"] { display: none; }
 
-.team-card-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.team-card-table th, .team-card-table td {
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--line);
-  text-align: left;
-}
-.team-card-table th { color: var(--ink-3); font-weight: 600; font-size: 12px; }
-.team-card-table tr:last-child td { border-bottom: none; }
 
 /* ── Typed confirmation ──────────────────────────────────────────────────────
    Seen on a phone, the prompt and the input label were saying the same thing

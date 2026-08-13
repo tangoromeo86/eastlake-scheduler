@@ -199,6 +199,46 @@ async function verifyPage(page, email, srv) {
       ok('no team/games available in this fixture to exercise the team filter (not a failure)');
     }
 
+    // ── Teams view: cards must not overflow their grid track (Ted, 2026-08-14)
+    // ─────────────────────────────────────────────────────────────────────
+    // The old card held a rigid 8-column table (#, Wk, Date, Day, Time, H/A,
+    // Opponent, Field) with no per-cell truncation. Once a grid track gets
+    // squeezed down near its minmax() floor, that many columns can't all fit
+    // — table-layout:auto fights for space and cells clip mid-word (Ted's
+    // screenshot: "Eastlake U15 (Sp..."), read as the card bleeding into its
+    // neighbor. Checked two ways: the grid container's own content must
+    // never need to scroll sideways, and no card's table content should be
+    // wider than the card itself has to offer.
+    // The default 1280px viewport only ever gives 3 wide (~370px) tracks for
+    // this fixture's team count — comfortably hiding the bug. It reliably
+    // reproduces at 1000px, where the same fixture is squeezed into 3 tracks
+    // right at the ~300px minmax() floor. Restored right after.
+    const defaultViewport = p.viewportSize();
+    await p.setViewportSize({ width: 1000, height: 800 });
+    const teamsBtn = p.locator('.view-btn[data-view="teams"]').first();
+    if (await teamsBtn.count()) {
+      await teamsBtn.click();
+      await p.waitForTimeout(400);
+      const grid = p.locator('#teams-grid');
+      const gridOverflow = await grid.evaluate(el => el.scrollWidth - el.clientWidth);
+      gridOverflow <= 1
+        ? ok('the Teams-view grid never scrolls sideways', `overflow=${gridOverflow}px`)
+        : bad('the Teams-view grid overflows horizontally', `${gridOverflow}px of horizontal overflow`);
+
+      const cards = await p.locator('.team-card').all();
+      let anyCardOverflows = false;
+      for (const card of cards) {
+        const overflows = await card.evaluate(el => el.scrollWidth > el.clientWidth + 1);
+        if (overflows) anyCardOverflows = true;
+      }
+      (cards.length > 0 && !anyCardOverflows)
+        ? ok('no individual team card overflows its own box', `${cards.length} cards checked`)
+        : bad(cards.length === 0 ? 'no team cards rendered to check' : 'at least one team card overflows its own box', '');
+    } else {
+      bad('Teams view button not found', '');
+    }
+    if (defaultViewport) await p.setViewportSize(defaultViewport);
+
     // ── Matrix view: cells must differ, not all show the division total ────
     const matrixBtn = p.locator('button:has-text("Matrix"), [data-view="matrix"]').first();
     if (await matrixBtn.count()) {

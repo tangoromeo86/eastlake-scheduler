@@ -722,22 +722,23 @@ function renderTeamsView(divGames, divTeams) {
     const homeCount = myGames.filter(g => g.home_team_id === id).length;
     const awayCount = myGames.filter(g => g.away_team_id === id).length;
 
+    // Rows used to be an 8-column table, which refused to shrink below its
+    // content's width and bled into the next card in the grid — flex rows
+    // that truncate/wrap instead, same pattern already proven at any width
+    // in the public viewer's team cards (Ted, 2026-08-14).
     const rows = myGames.map(g => {
       const isHome = g.home_team_id === id;
       const opponent = isHome ? g.away_team_name : g.home_team_name;
       const haBadge = isHome
         ? `<span class="ha-badge home">H</span>`
         : `<span class="ha-badge away">A</span>`;
-      return `<tr>
-        <td class="game-id-cell">#${g.game_id}</td>
-        <td>W${g.week}</td>
-        <td>${formatDate(g.date)}</td>
-        <td>${g.day.slice(0,3)}</td>
-        <td>${formatTime12h(g.time)}</td>
-        <td>${haBadge}</td>
-        <td class="opp-name">${esc(opponent)}</td>
-        <td class="field-small">${esc(g.field_name)}</td>
-      </tr>`;
+      return `<div class="team-card-game">
+        <div class="team-card-game-main">
+          ${haBadge}<span class="team-card-game-opp">${esc(opponent)}</span>
+        </div>
+        <div class="team-card-game-meta">#${g.game_id} · W${g.week} · ${g.day.slice(0,3)} ${formatDate(g.date)} · ${formatTime12h(g.time)}</div>
+        <div class="team-card-game-field">${esc(g.field_name)}</div>
+      </div>`;
     }).join('');
 
     return `<div class="team-card">
@@ -745,10 +746,7 @@ function renderTeamsView(divGames, divTeams) {
         <span class="team-card-name">${esc(name)}</span>
         <span class="team-card-meta">${myGames.length} games · ${homeCount}H ${awayCount}A</span>
       </div>
-      <table class="team-card-table">
-        <thead><tr><th>#</th><th>Wk</th><th>Date</th><th>Day</th><th>Time</th><th></th><th>Opponent</th><th>Field</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      ${rows || '<div class="team-card-game no-games">No games scheduled</div>'}
     </div>`;
   }).join('');
 
