@@ -355,11 +355,17 @@ avgSpread <= spreadLimit
 // Ted: a team's target game count matters more than a clean round-robin — if
 // two teams can never share a slot (not contention, a hard zero-overlap
 // dead end), route each of them to a different opponent instead of leaving
-// both a game short. Team A can only ever host (Saturday-early only, and
-// only its own field is open then); Team B can only ever host too
-// (Saturday-late only) — since neither can ever be the traveling side, A vs
-// B is mathematically impossible regardless of which week or how many
-// shuffle attempts. C and D are flexible enough to fill in for both.
+// both a game short. Team A can only ever play at Saturday-early (and only
+// its own field is open then); Team B can only ever play at Saturday-late
+// (same for its field) — the two slots never overlap, so A vs B is
+// mathematically impossible regardless of which week or how many shuffle
+// attempts, while C and D (open at every slot) are flexible enough to fill
+// in for both. Deliberately 'both' rather than 'host'-only for A and B
+// themselves — a team that can literally never be the away side has its own
+// separate, real balance-cap story (see the "permanently host-only" fixture
+// elsewhere in this file), which would otherwise tangle up with the thing
+// this fixture exists to isolate: an impossible PAIRING, not an
+// impossible TEAM.
 {
   const subSeason = {
     season: { start: '2026-09-07', weeks: 6, target_games: 2, blackout_dates: [] },
@@ -374,17 +380,22 @@ avgSpread <= spreadLimit
       { id: 'field-d', name: 'Field D', program_id: 'prog-sub', coordinates: '41.63,-81.43' },
     ],
     teams: [
+      // Friday is deliberately included among the closed days here — it's a
+      // real, independently schedulable weekday (see the Friday fixture
+      // elsewhere in this file) and defaults to 'both' when left unset, so
+      // omitting it would leave exactly the kind of loophole this fixture
+      // exists to rule out entirely.
       { id: 'team-sub-a', label: 'Team A', division_id: 'div-sub', program_id: 'prog-sub', home_field_id: 'field-a',
-        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' } },
-                        saturday: { early: 'host', midday: 'none', late: 'none' }, dates: {} } },
+        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' }, Friday: { status: 'none' } },
+                        saturday: { early: 'both', midday: 'none', late: 'none' }, dates: {} } },
       { id: 'team-sub-b', label: 'Team B', division_id: 'div-sub', program_id: 'prog-sub', home_field_id: 'field-b',
-        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' } },
-                        saturday: { early: 'none', midday: 'none', late: 'host' }, dates: {} } },
+        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' }, Friday: { status: 'none' } },
+                        saturday: { early: 'none', midday: 'none', late: 'both' }, dates: {} } },
       { id: 'team-sub-c', label: 'Team C', division_id: 'div-sub', program_id: 'prog-sub', home_field_id: 'field-c',
-        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' } },
+        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' }, Friday: { status: 'none' } },
                         saturday: { early: 'both', midday: 'both', late: 'both' }, dates: {} } },
       { id: 'team-sub-d', label: 'Team D', division_id: 'div-sub', program_id: 'prog-sub', home_field_id: 'field-d',
-        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' } },
+        availability: { weekday: { Monday: { status: 'none' }, Tuesday: { status: 'none' }, Wednesday: { status: 'none' }, Thursday: { status: 'none' }, Friday: { status: 'none' } },
                         saturday: { early: 'both', midday: 'both', late: 'both' }, dates: {} } },
     ],
   };
@@ -935,6 +946,114 @@ avgSpread <= spreadLimit
   (looseForced === 0 && looseWorstGap <= 1)
     ? ok('once the structural strain is removed, no forcing or gap-2 relaxation occurs')
     : bad('relaxation fired even without genuine strain', `forced=${looseForced} worstGap=${looseWorstGap}`);
+}
+
+// ── Distance as a matchup tiebreaker, and lowest-travel among valid
+// attempts — both "only when the fairness rules are already indifferent"
+// ──────────────────────────────────────────────────────────────────────────
+// Ted, 2026-08-13: "two teams who are close together playing vs not playing
+// could reduce overall travel" — buildMatchupList now breaks ties (after
+// urgency, opponent freshness, cross-program preference, and need) toward
+// the closer pair, and searchDivisionOnce keeps searching its shuffle
+// attempts for the lowest-average-travel valid schedule instead of stopping
+// at the first one that works.
+//
+// 4 teams, all same program, fully open availability, each wanting 2 games:
+// with everyone needing exactly 2 games each, ANY valid non-rematch season
+// is one of exactly 3 possible pairings (a 2-regular graph on 4 nodes is
+// K4 minus a perfect matching — there are only 3 perfect matchings to
+// remove). A and B are neighbors; C and D are each tens of miles from the
+// close cluster AND from each other. That makes the total-travel ranking of
+// the 3 possible pairings unambiguous: the one that excludes the
+// near-zero-distance A-B pair is provably the worst of the three,
+// regardless of exactly how the other two are ranked against each other —
+// so instead of trying to predict the single "best" pairing (genuinely
+// path-dependent, since which of the other two wins can depend on minor
+// ordering effects elsewhere), this only asserts the schedule is never the
+// one demonstrably-worst option.
+{
+  function haversineMi(c1, c2) {
+    const [la, lo] = c1.split(',').map(Number), [lb, lo2] = c2.split(',').map(Number);
+    const R = 3958.8;
+    const dla = (lb - la) * Math.PI / 180, dlo = (lo2 - lo) * Math.PI / 180;
+    const s1 = Math.sin(dla / 2), s2 = Math.sin(dlo / 2);
+    const h = s1 * s1 + Math.cos(la * Math.PI / 180) * Math.cos(lb * Math.PI / 180) * s2 * s2;
+    return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+  // C and D are close to EACH OTHER (not spread apart) while both far from
+  // A/B — by the triangle inequality, d(A,C)+d(A,D) >= d(C,D) always, and
+  // putting C/D close together (rather than on opposite sides of A/B)
+  // maximizes that gap instead of leaving it razor-thin, which is what an
+  // earlier version of this fixture did by accident (C and D spread wide
+  // apart happened to put A/B almost exactly on the straight line between
+  // them, making "exclude A-B" only barely worse than the alternatives).
+  const coords = { A: '41.600,-81.400', B: '41.601,-81.401', C: '40.000,-82.000', D: '40.010,-82.010' };
+  const dist = (x, y) => haversineMi(coords[x], coords[y]);
+
+  // The 3 possible full pairings and their known total distance, computed
+  // directly from the fixture's own coordinates — independent of the
+  // scheduler entirely, so this is a fixed yardstick, not a moving target.
+  const pairings = {
+    excludesAB: dist('A', 'C') + dist('A', 'D') + dist('B', 'C') + dist('B', 'D'),
+    excludesAC: dist('A', 'B') + dist('A', 'D') + dist('B', 'C') + dist('C', 'D'),
+    excludesAD: dist('A', 'B') + dist('A', 'C') + dist('B', 'D') + dist('C', 'D'),
+  };
+  const worst = Math.max(...Object.values(pairings));
+  (pairings.excludesAB === worst && pairings.excludesAB > pairings.excludesAC && pairings.excludesAB > pairings.excludesAD)
+    ? ok('fixture sanity check: excluding the near-zero A-B pair is unambiguously the worst of the 3 possible pairings')
+    : bad('fixture design assumption is wrong — excluding A-B is not clearly the worst option', JSON.stringify(pairings));
+
+  function buildTravelPrefFixture() {
+    return {
+      season: { start: '2026-09-07', weeks: 10, target_games: 2, blackout_dates: [] },
+      divisions: [{ id: 'div-tp', name: 'Travel Pref Test', target_games: 2 }],
+      programs: [{ id: 'prog-tp', name: 'TP' }],
+      fields: Object.keys(coords).map(k => ({ id: 'f-' + k, name: k, program_id: 'prog-tp', coordinates: coords[k] })),
+      // Team array order matters here: the greedy picker falls back to
+      // array position whenever every scoring term ties, so this specific
+      // order (verified by hand, not arbitrary) is one where that fallback
+      // ALONE would land on the worst pairing (excluding A-B) — confirming
+      // that avoiding it below is really the distance tiebreaker at work,
+      // not a coincidence of some other tiebreaker or array position.
+      teams: ['A', 'C', 'D', 'B'].map(k => ({
+        id: 'T-' + k, label: 'T-' + k, division_id: 'div-tp', program_id: 'prog-tp', home_field_id: 'f-' + k,
+        availability: { weekday: {}, saturday: {}, dates: {} },
+      })),
+    };
+  }
+  const hasGame = (games, a, b) => games.some(g =>
+    (g.home_team_id === a && g.away_team_id === b) || (g.home_team_id === b && g.away_team_id === a));
+
+  let worstCaseCount = 0;
+  const TRAVEL_PREF_RUNS = 15;
+  for (let r = 0; r < TRAVEL_PREF_RUNS; r++) {
+    const res = scheduleAll(buildTravelPrefFixture());
+    if (!hasGame(res.games, 'T-A', 'T-B')) worstCaseCount++;
+  }
+  worstCaseCount === 0
+    ? ok('the provably-worst pairing (excluding the near-zero-distance A-B pair) is never chosen', `0/${TRAVEL_PREF_RUNS} runs`)
+    : bad('the distance tiebreaker let the worst possible pairing through', `${worstCaseCount}/${TRAVEL_PREF_RUNS} runs excluded A-B`);
+
+  // Flip which pair is close (swap A/B's coordinates with C/D's) — if this
+  // is genuinely tracking distance rather than some fixed bias toward
+  // whichever team happens to be named "A" or positioned first, the
+  // avoided pairing should flip to match: now it's excluding C-D that
+  // should never happen.
+  function buildFlippedFixture() {
+    const f = buildTravelPrefFixture();
+    const byId = Object.fromEntries(f.fields.map(fl => [fl.id, fl]));
+    [byId['f-A'].coordinates, byId['f-C'].coordinates] = [byId['f-C'].coordinates, byId['f-A'].coordinates];
+    [byId['f-B'].coordinates, byId['f-D'].coordinates] = [byId['f-D'].coordinates, byId['f-B'].coordinates];
+    return f;
+  }
+  let flippedWorstCaseCount = 0;
+  for (let r = 0; r < TRAVEL_PREF_RUNS; r++) {
+    const res = scheduleAll(buildFlippedFixture());
+    if (!hasGame(res.games, 'T-C', 'T-D')) flippedWorstCaseCount++;
+  }
+  flippedWorstCaseCount === 0
+    ? ok('flipping which pair is close flips the avoided pairing to match — this tracks real distance, not a fixed bias', `0/${TRAVEL_PREF_RUNS} runs`)
+    : bad('flipping which pair is close did not flip the avoided pairing — suspicious of a fixed bias unrelated to distance', `${flippedWorstCaseCount}/${TRAVEL_PREF_RUNS} runs`);
 }
 
 // ── Missing home field is a hard block, caught by name, up front ───────────
