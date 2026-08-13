@@ -205,7 +205,7 @@ function renderGamesList() {
 
 // Confirm on behalf of whichever of the director's own teams is in this game.
 async function confirmGame(gameId, teamId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('confirm this game')) return;
   try {
     const res = await fetch(`api/games/${gameId}/confirm`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ team_id: teamId }),
@@ -219,7 +219,7 @@ async function confirmGame(gameId, teamId) {
 }
 
 function openChangeRequest(gameId, teamId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('open a change request for this game')) return;
   const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
   if (!game) return;
   crTeamId = teamId;
@@ -231,7 +231,7 @@ function openChangeRequest(gameId, teamId) {
 }
 
 function openRainout(gameId, teamId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('report a rainout for this game')) return;
   const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
   if (!game) return;
   crTeamId = teamId;
@@ -244,7 +244,7 @@ function openRainout(gameId, teamId) {
 }
 
 function openScore(gameId, teamId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('report the score for this game')) return;
   const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
   if (!game) return;
   openScoreModal({
@@ -330,7 +330,7 @@ function dgePopulateFields(selectedFieldId) {
 }
 
 function openGameAdd() {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('add a new game')) return;
   if (!seasonSlots || !seasonData) return;
   dgeAdding = true; dgeGameId = null;
 
@@ -350,7 +350,7 @@ function openGameAdd() {
 }
 
 function openGameEdit(gameId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('edit this game')) return;
   const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
   if (!game || !seasonSlots) return;
   dgeAdding = false; dgeGameId = gameId;
@@ -558,11 +558,24 @@ function renderTeamsList() {
   </table></div>`;
 }
 
+// Demo deployments mirror dev's live data for visitors to look around, but a
+// director/coach account there must never actually change anything — the
+// server enforces this independently (any mutating request from that role
+// is a no-op there too), this is just the friendly, no-round-trip path that
+// tells the visitor what the button would have done. Admin is exempt: that's
+// how Ted himself manages the data demo is mirroring.
+function demoBlocked(what) {
+  if (!session?.demoMode || session.role === 'admin') return false;
+  toast(`This is a demo — clicking here would ${what}, but nothing is actually changed.`);
+  return true;
+}
+
 // Opening any editor when unverified means a director can fill in the whole
 // form and lose it all at Save, since requireVerified only rejects the write —
 // it never stops the form from being filled in first. Gating here instead
 // means the only thing that gets interrupted is a click, not typed-in work.
-function requireVerifiedToEdit() {
+function requireVerifiedToEdit(what) {
+  if (demoBlocked(what)) return false;
   if (session?.verified) return true;
   toast('Verify your email first — send the link or enter the code in the banner above.', 'bad');
   document.getElementById('verify-banner')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -570,7 +583,7 @@ function requireVerifiedToEdit() {
 }
 
 function openTeamAdd() {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('add a new team')) return;
   if (!(seasonData?.divisions || []).length) { toast('No divisions exist yet — ask the admin to set them up first.', 'bad'); return; }
   editingTeamId = null;
   document.getElementById('team-form-title').textContent = 'Add Team';
@@ -592,7 +605,7 @@ function openTeamAdd() {
 }
 
 function openTeamEdit(teamId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('edit this team')) return;
   const team = myProgramTeams().find(t => String(t.id) === teamId);
   if (!team) return;
   editingTeamId = teamId;
@@ -677,6 +690,7 @@ document.getElementById('tfe-save').addEventListener('click', async () => {
 });
 
 async function deleteTeam(teamId, teamName) {
+  if (demoBlocked('delete this team')) return;
   try {
     if (!await deleteWithBlockers(`api/teams/${teamId}`, teamName, 'delete')) return;
     seasonData = await fetchJSON('api/season');
@@ -723,7 +737,7 @@ function renderFieldsList() {
 }
 
 function openFieldAdd() {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('add a new field')) return;
   editingFieldId = null;
   document.getElementById('field-form-title').textContent = 'Add Field';
   document.getElementById('ffe-name').value = '';
@@ -739,7 +753,7 @@ function openFieldAdd() {
 }
 
 function openFieldEdit(fieldId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('edit this field')) return;
   const field = myProgramFields().find(f => String(f.id) === fieldId);
   if (!field) return;
   editingFieldId = fieldId;
@@ -795,6 +809,7 @@ document.getElementById('ffe-save').addEventListener('click', async () => {
 });
 
 async function deleteField(fieldId, fieldName) {
+  if (demoBlocked('delete this field')) return;
   try {
     if (!await deleteWithBlockers(`api/season/fields/${fieldId}`, fieldName, 'delete')) return;
     seasonData = await fetchJSON('api/season');

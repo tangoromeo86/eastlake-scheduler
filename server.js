@@ -49,6 +49,11 @@ const SESSION_COOKIE = 'el_sess';
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days in seconds
 const IS_HTTPS = process.env.FORCE_HTTPS_COOKIE === '1' || process.env.NODE_ENV === 'production';
 
+// The demo deployment mirrors dev's live data files (same season.json etc.)
+// so visitors see a real, current schedule, but coach/director accounts
+// there must never be able to touch it — see the demo-mode gate below.
+const DEMO_MODE = process.env.DEMO_MODE === 'true';
+
 // ── Email config ──────────────────────────────────────────────────────────────
 const RESEND_API_KEY  = process.env.RESEND_API_KEY  || '';
 const EMAIL_FROM      = process.env.EMAIL_FROM      || 'schedule@tedriolo.com';
@@ -569,6 +574,22 @@ app.get('/my-team', requireAuth, (req, res) => {
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
+// ── Demo-mode gate ───────────────────────────────────────────────────────────
+// Blocks every mutating write from coach/director sessions in one place, so
+// no individual route needs its own demo-awareness, and it still holds even
+// if a request bypasses the UI entirely (curl, devtools). Admin stays fully
+// functional in demo — that account is how Ted actually manages the data
+// demo is mirroring. /api/auth/* is exempt so logging in and verifying still
+// works; nothing there touches season/schedule data.
+app.use((req, res, next) => {
+  if (!DEMO_MODE) return next();
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  if (req.path.startsWith('/api/auth/')) return next();
+  const s = getSession(req);
+  if (s?.role !== 'coach' && s?.role !== 'director') return next();
+  res.json({ ok: true, demo: true, message: 'This is a read-only demo — no changes were made.' });
+});
+
 // ── Activity log ─────────────────────────────────────────────────────────────
 // Ted, 2026-08-07: "when someone says 'I was doing ___ and it didn't work' I
 // want to be able to see what they were doing." Before this, the app had
@@ -848,6 +869,7 @@ app.get('/api/auth/me', (req, res) => {
     program_id: s.program_id || null,
     verified:   !!s.verified,
     request_to: ADMIN_EMAIL,  // only exposed to authenticated users
+    demoMode:   DEMO_MODE,
   });
 });
 

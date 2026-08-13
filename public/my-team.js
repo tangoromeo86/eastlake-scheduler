@@ -185,11 +185,23 @@ function renderGamesList() {
   list.innerHTML = table + cards;
 }
 
+// Demo deployments mirror dev's live data for visitors to look around, but a
+// coach account there must never actually change anything — the server
+// enforces this independently (any mutating request from this role is a
+// no-op there too), this is just the friendly, no-round-trip path that tells
+// the visitor what the button would have done.
+function demoBlocked(what) {
+  if (!session?.demoMode) return false;
+  toast(`This is a demo — clicking here would ${what}, but nothing is actually changed.`);
+  return true;
+}
+
 // Every write action below hits a requireVerified route — gating here means
 // the failure is an immediate, clear toast on the click, not a modal that
 // opens fine and then silently fails (or worse, misreports itself as "no
 // time works" — see openChangeRequestModal in ui.js) once you try to submit.
-function requireVerifiedToEdit() {
+function requireVerifiedToEdit(what) {
+  if (demoBlocked(what)) return false;
   if (session?.verified) return true;
   toast('Verify your email first — send the link or enter the code in the banner above.', 'bad');
   document.getElementById('verify-banner')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -200,7 +212,7 @@ function requireVerifiedToEdit() {
 // from and unrelated to requesting a change. POSTs directly rather than
 // opening a form, since there's nothing to fill in.
 async function confirmGame(gameId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('confirm this game')) return;
   try {
     const res = await fetch(`api/games/${gameId}/confirm`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
@@ -214,7 +226,7 @@ async function confirmGame(gameId) {
 }
 
 function openChangeRequest(gameId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('open a change request for this game')) return;
   const game = myGames().find(g => g.game_id === gameId);
   if (!game) return;
   openChangeRequestModal({
@@ -225,7 +237,7 @@ function openChangeRequest(gameId) {
 }
 
 function openRainout(gameId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('report a rainout for this game')) return;
   const game = myGames().find(g => g.game_id === gameId);
   if (!game) return;
   openChangeRequestModal({
@@ -237,7 +249,7 @@ function openRainout(gameId) {
 }
 
 function openScore(gameId) {
-  if (!requireVerifiedToEdit()) return;
+  if (!requireVerifiedToEdit('report the score for this game')) return;
   const game = myGames().find(g => g.game_id === gameId);
   if (!game) return;
   openScoreModal({
@@ -275,6 +287,7 @@ document.getElementById('mte-earliest').addEventListener('change', (e) => {
 });
 
 document.getElementById('mte-save').addEventListener('click', async () => {
+  if (demoBlocked('save your team info')) return;
   const errEl = document.getElementById('mte-error');
   const okEl  = document.getElementById('mte-success');
   errEl.classList.add('hidden');
