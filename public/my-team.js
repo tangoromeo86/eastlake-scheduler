@@ -48,7 +48,6 @@ async function init() {
   document.getElementById('mte-earliest').value = myTeam.earliest_date || '';
   populateFieldSelect();
   renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots, myTeam.earliest_date);
-  renderRestrictionsEditor('mte-restrictions', myTeam, seasonData.teams, seasonData.programs, myTeam.restrictions);
   renderMyAvailabilityCalendar();
 
   // Info this once-per-season and rarely revisited — collapsed once it's
@@ -289,7 +288,8 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     target_games:  document.getElementById('mte-target').value || undefined,
     earliest_date: document.getElementById('mte-earliest').value || undefined,
     availability:  readAvailabilityGrid('mte-availability'),
-    restrictions:  readRestrictionsEditor('mte-restrictions'),
+    // No restrictions field — Teams to Avoid is admin-only now; even if this
+    // were sent, PUT /api/teams/:id ignores it from a non-admin caller.
   };
   clearFieldErrors('mte-form');
   if (!validateForm([
@@ -309,7 +309,6 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     myTeam = data.team;
     document.getElementById('team-title').textContent = myTeam.label || 'My Team';
     renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots, myTeam.earliest_date);
-    renderRestrictionsEditor('mte-restrictions', myTeam, seasonData.teams, seasonData.programs, myTeam.restrictions);
     renderMyAvailabilityCalendar();
     if (data.email_change_pending) {
       okEl.textContent = data.email_change_sent

@@ -93,10 +93,27 @@ async function verifyPage(page, email, srv) {
   const { scheduleAll } = require(path.join(ROOT, 'lib/scheduler'));
   const seasonData = JSON.parse(fs.readFileSync(path.join(ROOT, 'season.json'), 'utf8'));
   const res = scheduleAll(seasonData);
-  fs.writeFileSync(path.join(ROOT, 'schedule.json'), JSON.stringify({
-    games: res.games, failures: res.failures || [], warnings: res.warnings || [],
+  // A synthetic failure appended regardless of what this real run actually
+  // produced — guarantees the Scheduling Conflicts banner (and the Dismiss
+  // button test below) has something deterministic to work with, rather
+  // than depending on this particular seed happening to leave a real
+  // shortfall behind.
+  const fixtureFailures = [...(res.failures || []), {
+    division_id: 'div-fixture', division_name: 'Fixture Division',
+    blocking_matchup: 'BROWSER-TEST-FIXTURE — not enough eligible opponents left',
+    team_a_id: 'team-fixture', team_b_id: null,
+    reason: 'Synthetic failure injected for the Dismiss-button browser test.',
+  }];
+  // Re-callable so the Dismiss-button test can restore this exact
+  // (un-dismissed) state afterward, directly via the filesystem — not a
+  // real /api/run, which would regenerate schedule.json with a brand new
+  // random schedule and break the games/team ids every other test in this
+  // file relies on.
+  const writeFixtureSchedule = () => fs.writeFileSync(path.join(ROOT, 'schedule.json'), JSON.stringify({
+    games: res.games, failures: fixtureFailures, warnings: res.warnings || [],
     generated_at: new Date().toISOString(), total_games: (res.games || []).length,
   }, null, 2));
+  writeFixtureSchedule();
 
   const srv = await startServer();
   const browser = await chromium.launch();
@@ -122,6 +139,65 @@ async function verifyPage(page, email, srv) {
 
     await gotoRetry(p, `${BASE}/admin`);
     await p.waitForTimeout(500);
+
+    // ── Scheduling Conflicts banner: Dismiss persists, reappears on a fresh
+    // run (Ted, 2026-08-13: "they should be there until cleared") ─────────
+    const conflictVisible = await p.locator('#conflict-section:not(.hidden)').count();
+    conflictVisible > 0
+      ? ok('the Scheduling Conflicts banner shows on load when failures exist')
+      : bad('conflict banner did not show despite a failure being present in the fixture', '');
+    if (conflictVisible > 0) {
+      await p.click('#btn-dismiss-conflicts');
+      await p.waitForTimeout(400);
+      (await p.locator('#conflict-section:not(.hidden)').count()) === 0
+        ? ok('clicking Dismiss hides the conflicts banner immediately')
+        : bad('conflict banner still visible right after clicking Dismiss', '');
+
+      await p.reload({ waitUntil: 'networkidle' });
+      await p.waitForTimeout(500);
+      (await p.locator('#conflict-section:not(.hidden)').count()) === 0
+        ? ok('the dismissal survives a page reload — it is not just in-memory UI state')
+        : bad('conflict banner reappeared after reload despite being dismissed', '');
+
+      // "Running the scheduler again resets the dismissal" is covered at the
+      // API level in test/e2e.sh (STEP 24), in its own isolated fixture —
+      // deliberately not repeated here with a REAL /api/run: this suite's
+      // games/team ids are relied on by unrelated tests later in this same
+      // file, and a real re-run would regenerate schedule.json out from
+      // under them. Restore the pre-dismiss fixture state directly instead,
+      // so this check's side effect (the dismissal) doesn't leak into
+      // whatever runs next.
+      writeFixtureSchedule();
+    }
+
+    // ── Team filter (Games view) actually filters (Ted, 2026-08-13) ────────
+    // renderGames used to run the filter's value through parseInt(), which
+    // silently returns NaN for the string team ids this app actually uses
+    // ("team-<timestamp>"), making the dropdown a no-op for every team that
+    // isn't a legacy numeric id.
+    const beforeFilterCount = (await p.locator('#schedule-body tr.game-row').count());
+    const filterOptions = await p.locator('#team-filter option').all();
+    let pickedTeamId = null, pickedTeamName = null;
+    for (const opt of filterOptions) {
+      const val = await opt.getAttribute('value');
+      if (val) { pickedTeamId = val; pickedTeamName = (await opt.textContent()).trim(); break; }
+    }
+    if (pickedTeamId && beforeFilterCount > 0) {
+      await p.selectOption('#team-filter', pickedTeamId);
+      await p.waitForTimeout(300);
+      const afterRows = await p.locator('#schedule-body tr.game-row').all();
+      const afterCount = afterRows.length;
+      const allRowsMatch = afterCount > 0 && (await Promise.all(
+        afterRows.map(async r => (await r.locator('.team-cell').allTextContents()).some(t => t.includes(pickedTeamName)))
+      )).every(Boolean);
+      (afterCount > 0 && afterCount < beforeFilterCount && allRowsMatch)
+        ? ok('team filter actually filters the games list', `${beforeFilterCount} -> ${afterCount} rows, all involving "${pickedTeamName}"`)
+        : bad('team filter did not filter anything', `before=${beforeFilterCount} after=${afterCount} team=${pickedTeamName}`);
+      await p.selectOption('#team-filter', '');
+      await p.waitForTimeout(300);
+    } else {
+      ok('no team/games available in this fixture to exercise the team filter (not a failure)');
+    }
 
     // ── Matrix view: cells must differ, not all show the division total ────
     const matrixBtn = p.locator('button:has-text("Matrix"), [data-view="matrix"]').first();
@@ -563,6 +639,14 @@ async function verifyPage(page, email, srv) {
     await verifyPage(cp, someTeam.email, srv);
     await cp.goto(`${BASE}/my-team`, { waitUntil: 'networkidle' });
     await cp.waitForTimeout(500);
+
+    // Teams to Avoid is admin-only now (Ted, 2026-08-13) — a coach must not
+    // see it anywhere on their own team page.
+    const coachSeesRestrictions = (await cp.locator('#mte-restrictions-details').count()) + (await cp.getByText('Teams to Avoid').count());
+    coachSeesRestrictions === 0
+      ? ok('a coach does not see Teams to Avoid anywhere on their own team page')
+      : bad('Teams to Avoid is still visible to a coach', `${coachSeesRestrictions} match(es)`);
+
     const reqBtn = cp.locator('button:has-text("Request Change")').first();
     if (await reqBtn.count()) {
       await reqBtn.click();
@@ -672,6 +756,15 @@ async function verifyPage(page, email, srv) {
       // force logic is covered at the API level in test/e2e.sh.
       await dp.goto(`${BASE}/director`, { waitUntil: 'networkidle' });
       await dp.waitForTimeout(500);
+
+      // Teams to Avoid is admin-only now (Ted, 2026-08-13) — the markup was
+      // removed from the page entirely, not just hidden, so this is a
+      // genuine absence check, not a visibility check.
+      const directorSeesRestrictions = (await dp.locator('#tfe-restrictions-details').count()) + (await dp.getByText('Teams to Avoid').count());
+      directorSeesRestrictions === 0
+        ? ok('a director does not see Teams to Avoid anywhere on the director page')
+        : bad('Teams to Avoid is still present on the director page', `${directorSeesRestrictions} match(es)`);
+
       const addGameBtn = dp.locator('#btn-add-game');
       if (await addGameBtn.count()) {
         await addGameBtn.click();

@@ -1564,18 +1564,29 @@ echo "$R5" | python3 -c "import sys,json;d=json.load(sys.stdin);print('ok' if d.
   && pass "a team-level exclusion saves and round-trips" \
   || fail "team-level exclusion did not persist correctly: $R5"
 
-# A coach can set this on their own team too — not director/admin only.
+# Teams to Avoid is admin-only now (Ted, 2026-08-13) — a coach's own PUT
+# still succeeds (every other field in the body is still valid), but any
+# restrictions they send must be silently ignored, not applied. This is a
+# real permission boundary, not just a hidden UI element: verified by
+# calling the API directly, bypassing the UI entirely.
 curl -s -c restricta.txt -X POST "$BASE/api/auth/login" -H "$J" -d '{"email":"restricta@example.com"}' > /dev/null
 verify_session restricta.txt restricta@example.com
 R6=$(curl -s -o /dev/null -w "%{http_code}" -b restricta.txt -X PUT "$BASE/api/teams/$RT1" -H "$J" \
   -d "{\"label\":\"Restrict Test A\",\"email\":\"restricta@example.com\",\"restrictions\":[]}")
-[ "$R6" = "200" ] && pass "a coach can clear their own team's restrictions" || fail "coach clearing restrictions = $R6 (wanted 200)"
+[ "$R6" = "200" ] && pass "a coach's own team save still succeeds even though it tried to touch restrictions" || fail "coach save = $R6 (wanted 200)"
 R6B=$(curl -s -b admin.txt "$BASE/api/season" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 t=[x for x in d['teams'] if x['id']=='$RT1'][0]
-print('cleared' if t.get('restrictions')==[] else 'not cleared: '+json.dumps(t.get('restrictions')))")
-[ "$R6B" = "cleared" ] && pass "the cleared restrictions actually persisted, not just accepted" || fail "restrictions still present after clearing: $R6B"
+print('unchanged' if t.get('restrictions')==[{'type':'no_matchup','opponent_team_id':'$RT2'}] else 'CHANGED: '+json.dumps(t.get('restrictions')))")
+[ "$R6B" = "unchanged" ] && pass "a coach cannot clear (or otherwise touch) restrictions via a direct API call — admin-only is enforced server-side" || fail "coach was able to modify restrictions: $R6B"
+
+# Admin retains full control — the same clear a coach can no longer do.
+R6C=$(curl -s -b admin.txt -X PUT "$BASE/api/teams/$RT1" -H "$J" \
+  -d "{\"label\":\"Restrict Test A\",\"email\":\"restricta@example.com\",\"division_id\":\"div-restrict-e2e\",\"restrictions\":[]}")
+echo "$R6C" | python3 -c "import sys,json;d=json.load(sys.stdin);print('ok' if d.get('ok') and d['team']['restrictions']==[] else 'bad: '+json.dumps(d))" | grep -q '^ok' \
+  && pass "admin can still clear a team's restrictions directly" \
+  || fail "admin could not clear restrictions: $R6C"
 
 echo
 echo "=============================================="
@@ -1670,6 +1681,59 @@ print('ok' if has_c_pair else 'bad: no pair found for $FD_C_ID')
 " | grep -q '^ok' \
   && pass "saving a field with coordinates auto-refreshes the cache in the background, with no manual trigger" \
   || echo "  (note) auto-refresh pair not found within 5s — either OSRM is unavailable or timing-dependent, not a hard failure"
+
+echo
+echo "=============================================="
+echo "STEP 24 — Dismissible scheduling conflicts (Ted, 2026-08-13)"
+echo "=============================================="
+
+# NFT1 from STEP 22, and RT1/RT2 from STEP 21, all have no home field and
+# would otherwise hard-block every run from here on — mark them unconfirmed
+# (scheduleAll skips those) so this step can actually produce a real,
+# partial-failure schedule to dismiss, rather than a full block.
+curl -s -b admin.txt -X PATCH "$BASE/api/team/$NFT1" -H "$J" -d '{"confirmed":false}' > /dev/null
+curl -s -b admin.txt -X PATCH "$BASE/api/team/$RT1" -H "$J" -d '{"confirmed":false}' > /dev/null
+curl -s -b admin.txt -X PATCH "$BASE/api/team/$RT2" -H "$J" -d '{"confirmed":false}' > /dev/null
+
+# Self-contained fixture, same reasoning as STEP 21/22/23 — 4 teams sharing
+# one program and a real field, target_games set well beyond what even the
+# relaxed cap can reach (relaxed cap 3 meetings x 3 opponents = 9 max),
+# guaranteeing a real, honestly-reported shortfall failure to dismiss.
+DP1=$(curl -s -b admin.txt -X POST "$BASE/api/season/programs" -H "$J" -d '{"name":"Dismiss Program"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['program']['id'])")
+curl -s -b admin.txt -X POST "$BASE/api/season/divisions" -H "$J" -d '{"id":"div-dismiss-e2e","name":"Dismiss Division","target_games":12}' > /dev/null
+DF1=$(curl -s -b admin.txt -X POST "$BASE/api/season/fields" -H "$J" -d '{"name":"Dismiss Field"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['field']['id'])")
+for n in 1 2 3 4; do
+  curl -s -b admin.txt -X POST "$BASE/api/teams" -H "$J" \
+    -d "{\"label\":\"Dismiss Team $n\",\"email\":\"dismiss$n@example.com\",\"division_id\":\"div-dismiss-e2e\",\"program_id\":\"$DP1\",\"home_field_id\":\"$DF1\",\"target_games\":12}" > /dev/null
+done
+
+RUN1=$(curl -s -X POST -b admin.txt "$BASE/api/run")
+RUN1_FAILS=$(echo "$RUN1" | python3 -c "import sys,json;print(len(json.load(sys.stdin).get('failures',[])))" 2>/dev/null)
+[ "${RUN1_FAILS:-0}" -gt 0 ] 2>/dev/null && pass "fixture produces a real, non-empty failures list to test dismissal against" || fail "fixture did not produce any failures: $RUN1"
+
+SCHED1=$(curl -s -b admin.txt "$BASE/api/schedule")
+echo "$SCHED1" | python3 -c "import sys,json;d=json.load(sys.stdin);print('ok' if not d.get('conflicts_dismissed') else 'bad')" | grep -q '^ok' \
+  && pass "a freshly generated schedule starts un-dismissed" \
+  || fail "freshly generated schedule was already marked dismissed"
+
+DISMISS_COACH=$(curl -s -o /dev/null -w "%{http_code}" -X POST -b restricta.txt "$BASE/api/schedule/dismiss-conflicts")
+[ "$DISMISS_COACH" = "403" ] && pass "a coach cannot dismiss the conflicts banner (403)" || fail "coach dismiss = $DISMISS_COACH (wanted 403)"
+
+DISMISS_ADMIN=$(curl -s -X POST -b admin.txt "$BASE/api/schedule/dismiss-conflicts")
+echo "$DISMISS_ADMIN" | python3 -c "import sys,json;print('ok' if json.load(sys.stdin).get('ok') else 'bad')" | grep -q '^ok' \
+  && pass "admin can dismiss the conflicts banner" \
+  || fail "admin dismiss failed: $DISMISS_ADMIN"
+
+SCHED2=$(curl -s -b admin.txt "$BASE/api/schedule")
+echo "$SCHED2" | python3 -c "import sys,json;print('ok' if json.load(sys.stdin).get('conflicts_dismissed') else 'bad')" | grep -q '^ok' \
+  && pass "the dismissal persists — GET /api/schedule reflects it, not just the POST response" \
+  || fail "dismissal did not persist: $SCHED2"
+
+RUN2=$(curl -s -X POST -b admin.txt "$BASE/api/run")
+SCHED3=$(curl -s -b admin.txt "$BASE/api/schedule")
+echo "$SCHED3" | python3 -c "import sys,json;print('ok' if not json.load(sys.stdin).get('conflicts_dismissed') else 'bad')" | grep -q '^ok' \
+  && pass "running the scheduler again resets the dismissal — a new schedule is a new thing to review" \
+  || fail "dismissal incorrectly carried over into a freshly generated schedule"
 
 PRINTED=$(grep -c "\*\* FAIL" "$OUTLOG" 2>/dev/null || true)
 PASSES=$(grep -c "PASS:" "$OUTLOG" 2>/dev/null || true)

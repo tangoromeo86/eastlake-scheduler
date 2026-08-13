@@ -671,6 +671,10 @@ const ACTIVITY_DESCRIBERS = [
     describe: (req, status, prior, m) => `Reported a score for game #${m[1]}` },
   { method: 'POST', re: /^\/api\/run$/,
     describe: () => 'Ran the scheduler' },
+  { method: 'POST', re: /^\/api\/schedule\/dismiss-conflicts$/,
+    describe: () => 'Dismissed the scheduling conflicts banner' },
+  { method: 'POST', re: /^\/api\/field-distances\/refresh$/,
+    describe: () => 'Refreshed driving distances' },
   { method: 'POST', re: /^\/api\/upload-season$/,
     describe: () => 'Uploaded a new season.json' },
   { method: 'POST', re: /^\/api\/season\/new$/,
@@ -1167,6 +1171,25 @@ app.post('/api/run', requireAdmin, (req, res) => {
   try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(result, null, 2)); }
   catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
   res.json(result);
+});
+
+// Scheduling Conflicts banner (Ted, 2026-08-13): "they should be there until
+// cleared since sometimes there's nothing that can be done" — it must not
+// auto-hide, but it also can't be stuck forever with no way to acknowledge
+// it. `conflicts_dismissed` lives on schedule.json itself, right next to
+// the failures it applies to, so a fresh /api/run (which always writes a
+// whole new schedule.json) naturally starts un-dismissed again — a new
+// schedule is a new thing to review, dismissing the old one shouldn't carry
+// forward to it.
+app.post('/api/schedule/dismiss-conflicts', requireAdmin, (req, res) => {
+  if (!fs.existsSync(SCHEDULE_FILE)) return res.status(404).json({ error: 'No schedule has been generated yet' });
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` }); }
+  data.conflicts_dismissed = true;
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
+  res.json({ ok: true });
 });
 
 app.post('/api/upload-season', requireAdmin, (req, res) => {
@@ -3025,7 +3048,13 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   if (!vTarget.ok) return res.status(400).json({ error: vTarget.error, field: 'target_games' });
   const vEarliest = V.validateEarliestDate(earliest_date);
   if (!vEarliest.ok) return res.status(400).json({ error: vEarliest.error, field: 'earliest_date' });
-  const vRestrictions = validateRestrictions(restrictions, {
+  // Teams to Avoid (Ted, 2026-08-13): admin-only now — coaches and directors
+  // can no longer see or set it, even by calling this route directly rather
+  // than through the UI. Passing undefined here (instead of skipping
+  // validateRestrictions outright) means a non-admin request just leaves
+  // the team's existing restrictions untouched — matches every other field
+  // in this route that isn't in the incoming body.
+  const vRestrictions = validateRestrictions(s.role === 'admin' ? restrictions : undefined, {
     ownTeamId: existing.id, ownProgramId: existing.program_id, teams: data.teams, programs: data.programs,
   });
   if (!vRestrictions.ok) return res.status(400).json({ error: vRestrictions.error, field: 'restrictions' });

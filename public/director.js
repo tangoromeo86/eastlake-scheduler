@@ -586,10 +586,6 @@ function openTeamAdd() {
   // Collapsed by default on Add — setting availability is the coach's job,
   // later. A director who genuinely needs to set it now can still open this.
   document.getElementById('tfe-availability-details').open = false;
-  // Restrictions need a division to know which other teams are even
-  // candidates, and the team doesn't have one until this first save — hide
-  // rather than show a picker that can't do anything useful yet.
-  document.getElementById('tfe-restrictions-details').classList.add('hidden');
   document.getElementById('tfe-error').classList.add('hidden');
   document.getElementById('team-editor-form').classList.remove('hidden');
   document.getElementById('tfe-label').focus();
@@ -614,8 +610,6 @@ function openTeamEdit(teamId) {
   renderAvailabilityGrid('tfe-availability', team.availability, seasonSlots, team.earliest_date);
   // Open on Edit — this is the director deliberately going looking for it.
   document.getElementById('tfe-availability-details').open = true;
-  document.getElementById('tfe-restrictions-details').classList.remove('hidden');
-  renderRestrictionsEditor('tfe-restrictions', team, seasonData.teams, seasonData.programs, team.restrictions);
   document.getElementById('tfe-error').classList.add('hidden');
   document.getElementById('team-editor-form').classList.remove('hidden');
   document.getElementById('tfe-label').focus();
@@ -649,7 +643,8 @@ document.getElementById('tfe-save').addEventListener('click', async () => {
     target_games:  document.getElementById('tfe-target').value || undefined,
     earliest_date: document.getElementById('tfe-earliest').value || undefined,
     availability:  readAvailabilityGrid('tfe-availability'),
-    restrictions:  editingTeamId ? readRestrictionsEditor('tfe-restrictions') : undefined,
+    // No restrictions field — Teams to Avoid is admin-only now; even if this
+    // were sent, PUT /api/teams/:id ignores it from a non-admin caller.
   };
   clearFieldErrors('team-editor-form');
   if (!validateForm([

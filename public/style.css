@@ -117,6 +117,13 @@ header h1 {
   color: #c2410c;
   margin-bottom: 10px;
 }
+.conflict-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.conflict-section-header h2 { margin-bottom: 0; }
 .conflict-card {
   background: #fff;
   border: 1px solid #fed7aa;

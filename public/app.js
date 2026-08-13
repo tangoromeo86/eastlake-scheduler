@@ -250,7 +250,7 @@ document.getElementById('run-confirm-input').addEventListener('keydown', (e) => 
 // ── Apply schedule ────────────────────────────────────────────────────────────
 function applySchedule(data) {
   scheduleData = data;
-  renderConflicts(data.failures || []);
+  renderConflicts(data.failures || [], data.conflicts_dismissed);
   renderWarnings(data.warnings || []);
 
   if (!(data.games || []).length && !(data.failures || []).length) {
@@ -274,8 +274,14 @@ function applySchedule(data) {
 function countDivisions(games) { return new Set(games.map(g => g.division_id)).size; }
 
 // ── Conflicts ─────────────────────────────────────────────────────────────────
-function renderConflicts(failures) {
-  if (!failures.length) { hide('conflict-section'); return; }
+// Ted, 2026-08-13: "they should be there until cleared since sometimes
+// there's nothing that can be done" — never auto-hides on its own, but a
+// Dismiss button lets the admin acknowledge and clear it once reviewed.
+// Dismissal is stored server-side on schedule.json itself (conflicts_dismissed
+// on GET /api/schedule), so it survives a reload — and running the scheduler
+// again always starts fresh, since /api/run writes a whole new schedule.json.
+function renderConflicts(failures, dismissed) {
+  if (!failures.length || dismissed) { hide('conflict-section'); return; }
   show('conflict-section');
   document.getElementById('conflict-list').innerHTML = failures.map(f => `
     <div class="conflict-card">
@@ -285,6 +291,23 @@ function renderConflicts(failures) {
     </div>
   `).join('');
 }
+
+async function dismissConflicts() {
+  const btn = document.getElementById('btn-dismiss-conflicts');
+  btn.disabled = true;
+  try {
+    const res = await fetch('api/schedule/dismiss-conflicts', { method: 'POST' });
+    const data = await res.json();
+    if (!data.ok) { toast(data.error || 'Could not dismiss conflicts.', 'bad'); return; }
+    if (scheduleData) scheduleData.conflicts_dismissed = true;
+    hide('conflict-section');
+  } catch {
+    toast('Network error — could not reach the server.', 'bad');
+  } finally {
+    btn.disabled = false;
+  }
+}
+document.getElementById('btn-dismiss-conflicts').addEventListener('click', dismissConflicts);
 
 // Non-blocking, but likely to cause a wall of confusing scheduling
 // conflicts if ignored — e.g. a team with no home field, which fails
@@ -645,7 +668,11 @@ document.getElementById('team-filter').addEventListener('change', () => {
 
 // ── GAMES VIEW ────────────────────────────────────────────────────────────────
 function renderGames(divGames) {
-  const teamId = parseInt(document.getElementById('team-filter').value) || null;
+  // Team ids are strings (director-created teams are "team-<timestamp>"),
+  // not always numeric — parseInt() used to run on this value, which
+  // silently returns NaN for any non-numeric id, making the filter a no-op
+  // for exactly the teams most likely to need it (Ted, 2026-08-13).
+  const teamId = document.getElementById('team-filter').value || null;
   const filtered = teamId
     ? divGames.filter(g => g.home_team_id === teamId || g.away_team_id === teamId)
     : divGames;
