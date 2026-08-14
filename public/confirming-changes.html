@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Confirming Games &amp; Requesting Changes — Eastlake League Scheduler</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .guide { max-width: 780px; margin: 0 auto; padding: 24px 20px 80px; }
+    .guide h2 { font-size: 1.35rem; margin: 40px 0 6px; color: #1a1a2e; padding-top: 14px; border-top: 2px solid #e2e8f0; }
+    .guide h2:first-of-type { border-top: none; padding-top: 0; margin-top: 22px; }
+    .guide h3 { font-size: 1.02rem; margin: 22px 0 8px; color: #1a1a2e; }
+    .guide p, .guide li { font-size: 14.5px; line-height: 1.65; color: #334155; }
+    .guide ul, .guide ol { margin: 8px 0 8px 22px; }
+    .guide li { margin-bottom: 5px; }
+    .guide strong { color: #1a1a2e; }
+    .lede { font-size: 15.5px; color: #475569; line-height: 1.6; }
+    .callout { border-left: 3px solid #2d6cf0; background: #f8fafc; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+    .callout.warn { border-left-color: #f59e0b; background: #fffbeb; }
+    .callout.key { border-left-color: #16a34a; background: #f0fdf4; }
+    .callout p { margin: 0; font-size: 14px; }
+    .callout p + p { margin-top: 8px; }
+    .banner { border: 1.5px solid #f59e0b; background: #fffbeb; border-radius: 12px; padding: 18px 20px; margin: 22px 0 6px; }
+    .banner .eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #b45309; margin-bottom: 4px; }
+    .banner p { margin: 0; font-size: 15px; line-height: 1.55; color: #1a1a2e; }
+    .steps { counter-reset: s; list-style: none; margin-left: 0; }
+    .steps > li { counter-increment: s; position: relative; padding-left: 38px; margin-bottom: 14px; }
+    .steps > li::before { content: counter(s); position: absolute; left: 0; top: -1px; width: 26px; height: 26px;
+      background: #2d6cf0; color: #fff; border-radius: 50%; display: flex; align-items: center;
+      justify-content: center; font-size: 13px; font-weight: 700; }
+    .gtable { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
+    .gtable th, .gtable td { border: 1px solid #e2e8f0; padding: 8px 11px; text-align: left; vertical-align: top; }
+    .gtable th { background: #f8fafc; font-weight: 700; color: #334155; }
+    .toc { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; margin: 22px 0; }
+    .toc .label { font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #94a3b8; margin-bottom: 6px; }
+    .toc ul { margin: 0; list-style: none; padding: 0; }
+    .toc li { margin-bottom: 4px; }
+    .toc a { color: #2d6cf0; text-decoration: none; font-size: 14px; }
+    .toc a:hover { text-decoration: underline; }
+    .shot { margin: 14px 0 18px; }
+    .shot img { max-width: 380px; width: 100%; display: block; border: 1px solid #e2e8f0; border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(15,23,42,.08); }
+    .shot .cap { font-size: 12.5px; color: #64748b; margin-top: 6px; }
+    .shot-row { display: flex; gap: 18px; flex-wrap: wrap; }
+    .shot-row .shot { flex: 1; min-width: 260px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Confirming Your Games &amp; Requesting Changes</h1>
+    <div class="header-actions">
+      <a href="guide.html" class="btn btn-secondary">Full Guide</a>
+      <a href="./" class="btn btn-secondary">&#8592; Back to schedule</a>
+    </div>
+  </header>
+
+  <div class="guide">
+    <p class="lede">The season schedule is published. This page covers the handful of things you'll actually
+      do with it: confirming a game as-is, and — if something doesn't work — asking to move it, swap its field,
+      or report a rain out. Everyone (coaches and directors) uses the same buttons.</p>
+
+    <div class="banner">
+      <div class="eyebrow">The one thing to know before anything else</div>
+      <p>Whenever <strong>you</strong> start a change — a reschedule, a field swap, or a rain-out makeup — the
+        very first email goes to <strong>you</strong>, not the other team. Nothing reaches them until you open
+        that email and confirm it. If you don't see a confirmation land in your own inbox, the other coach hasn't
+        been told anything either.</p>
+    </div>
+
+    <div class="toc">
+      <div class="label">On this page</div>
+      <ul>
+        <li><a href="#confirm">Confirming a game</a></li>
+        <li><a href="#reschedule">Requesting a different day or time</a></li>
+        <li><a href="#field">Requesting a field-only change</a></li>
+        <li><a href="#rainout">Reporting a rain out</a></li>
+        <li><a href="#deadlines">How long you have to respond</a></li>
+      </ul>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════════ -->
+    <h2 id="confirm">Confirming a game</h2>
+    <p>Every game starts out <strong>Scheduled</strong>. If the date, time and field all work for you as they
+      are, open the game and click <strong>Confirm</strong>. That's it — no email round-trip, it's just a
+      heads-up signal for your director and the other side. The game moves to <strong>Pending</strong> until
+      the other coach also confirms, then <strong>Confirmed</strong> once you both have.</p>
+    <div class="callout">
+      <p>Confirming isn't a lock. You can still request a change on a game at any point, confirmed or not — it
+        just tells everyone you're not expecting one.</p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════════ -->
+    <h2 id="reschedule">Requesting a different day or time</h2>
+    <p>Open the game and click <strong>Request Change</strong>. You'll be asked one question first:</p>
+    <ul>
+      <li><strong>Just the time</strong> — the day's fine, you need a different kickoff. You'll see every legal
+        time that day that doesn't clash with anything else on the field.</li>
+      <li><strong>The day</strong> — pick from every day that genuinely fits <em>both</em> teams' availability,
+        then do the same time step for whichever day you land on.</li>
+    </ul>
+    <p>Pick a time, add a short note if you want, and send.</p>
+    <ol class="steps">
+      <li>We email <strong>you</strong> first to confirm you meant it. Nothing reaches the other coach yet.</li>
+      <li>Once you confirm, the other coach gets your proposal with <strong>Approve</strong> and <strong>Suggest
+        another time</strong>, plus your contact info.</li>
+      <li>If they approve, the game moves and you're both told. Done.</li>
+      <li>If it doesn't work for them, they propose a different time the same way and it comes back to you —
+        that continues until one of you accepts.</li>
+    </ol>
+    <div class="shot-row">
+      <div class="shot">
+        <img src="img/guide/email-reschedule-self-confirm.png" alt="Email asking the requesting coach to confirm their reschedule request before it's sent to the other coach">
+        <div class="cap">What lands in <strong>your</strong> inbox the moment you submit a request — confirm here first.</div>
+      </div>
+      <div class="shot">
+        <img src="img/guide/email-reschedule-other-coach.png" alt="Email to the other coach with Approve and Suggest another time buttons">
+        <div class="cap">What the <strong>other coach</strong> sees, once you've confirmed — this starts their clock.</div>
+      </div>
+    </div>
+    <div class="callout key">
+      <p><strong>The game does not move until you both agree.</strong> It stays exactly where it is, flagged
+        <strong>Negotiating</strong>, so nobody turns up at the wrong place mid-discussion.</p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════════ -->
+    <h2 id="field">Requesting a field-only change</h2>
+    <p>Date and time are fine, only the <strong>field</strong> needs to change — your regular field is closed for
+      maintenance, say. Click <strong>Change Field</strong> on the game and pick the new one. This is lighter
+      than a full reschedule: it's your call, not something the other coach has to approve — you're just
+      required to let them know.</p>
+    <ol class="steps">
+      <li>Same pattern: we email <strong>you</strong> first to confirm you meant it.</li>
+      <li>Once you confirm, the field changes <strong>immediately</strong> — no waiting on the other coach.</li>
+      <li>The other coach gets a notice with the new field and a single <strong>Got it — acknowledge</strong>
+        button. If they don't acknowledge in time, their director is looped in to make sure it got through.</li>
+    </ol>
+    <div class="shot-row">
+      <div class="shot">
+        <img src="img/guide/email-fieldchange-self-confirm.png" alt="Email asking the requesting coach to confirm a field-only change before it takes effect">
+        <div class="cap">Your confirmation email — the field doesn't move until you click through here.</div>
+      </div>
+      <div class="shot">
+        <img src="img/guide/email-fieldchange-acknowledge.png" alt="Email telling the other coach the field already changed, with an acknowledge button">
+        <div class="cap">The other coach's notice — the field has <em>already</em> changed; this is just an acknowledgement.</div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════════ -->
+    <h2 id="rainout">Reporting a rain out</h2>
+    <p>Either coach can report it — click <strong>Rain Out</strong> on the game instead of Request Change. It
+      skips straight to picking a new day (no "just the time" option, since the whole day is out), then goes
+      through the same back-and-forth as a normal change: the other coach approves or suggests a different
+      makeup date, and it's not final until you both agree.</p>
+    <p>Once you do agree, the original game is marked <strong>Rained Out</strong> and stays in the schedule as
+      history, and a new game is created on the makeup date. Nothing is deleted.</p>
+    <div class="shot">
+      <img src="img/guide/email-rainout-self-confirm.png" alt="Email asking the requesting coach to confirm a rainout makeup date before it's sent to the other coach">
+      <div class="cap">Same self-confirm pattern as a normal reschedule — confirm here before it reaches the other coach.</div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════════ -->
+    <h2 id="deadlines">How long you have to respond</h2>
+    <p>Every request email states the date you need to respond by. The window tightens as the conversation goes
+      on, because by then you're both already engaged:</p>
+    <table class="gtable">
+      <tr><th>First proposal</th><td>3 days</td></tr>
+      <tr><th>Second</th><td>2 days</td></tr>
+      <tr><th>Third onwards</th><td>1 day</td></tr>
+    </table>
+    <p>Miss it and your director gets a nudge; keep missing it and the league admin hears. Nothing is cancelled —
+      it just stops being only your problem.</p>
+    <div class="callout warn">
+      <p><strong>Inside 7 days of the game?</strong> Email back-and-forth is too slow at that point. The tool
+        shows you the other coach's phone number instead — call or text, agree it directly, then record it with
+        <strong>Manual Override</strong> on the game. That applies immediately and both directors are notified.</p>
+    </div>
+
+    <p style="margin-top:40px;color:#94a3b8;font-size:13px">Need something not covered here — setting your
+      availability, adding a team, reporting a score? See the <a href="guide.html">full guide</a>. Still stuck?
+      Coaches — ask your program director. Directors — ask the league admin.</p>
+  </div>
+</body>
+</html>
