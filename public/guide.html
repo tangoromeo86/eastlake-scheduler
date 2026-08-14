@@ -40,6 +40,12 @@
     .toc a { color: #2d6cf0; text-decoration: none; font-size: 14px; }
     .toc a:hover { text-decoration: underline; }
     .toc li { margin-bottom: 3px; }
+    .shot { margin: 14px 0 18px; }
+    .shot img { max-width: 380px; width: 100%; display: block; border: 1px solid #e2e8f0; border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(15,23,42,.08); }
+    .shot .cap { font-size: 12.5px; color: #64748b; margin-top: 6px; }
+    .shot-row { display: flex; gap: 18px; flex-wrap: wrap; }
+    .shot-row .shot { flex: 1; min-width: 260px; }
   </style>
 </head>
 <body>
@@ -103,6 +109,18 @@
         toggle between team and field view, filtered to your own program — so you can spot a gap without opening
         every team's editor one at a time.</li>
     </ol>
+
+    <h3>Viewing your field schedule</h3>
+    <p>Two views cover this, and they answer different questions:</p>
+    <ul>
+      <li><strong>Games</strong> lists every game involving your teams, and each row shows the field it's booked
+        on. This is the one to check "what's happening, and where" for a specific team or date.</li>
+      <li><strong>Availability &rarr; Calendar</strong> has a <strong>team / field</strong> toggle. Switch it to
+        <em>field</em> and pick one of your fields to see every game booked there laid out on the calendar, across
+        every one of your teams at once — the view to use for "is this field free that week" or spotting a
+        double-booking before it happens.</li>
+    </ul>
+    <p>Both are scoped to your own program automatically — you'll never see another program's games mixed in.</p>
 
     <h3>Keeping an eye on things</h3>
     <p>The <strong>Games</strong> section lists every game involving your teams. Each one carries a status:
@@ -233,9 +251,48 @@
       <li>If it doesn't work for them, they pick a different time the same way and it comes back to you.
         That continues until one of you accepts.</li>
     </ol>
+    <div class="callout warn">
+      <p><strong>Check your own inbox first.</strong> Submitting the form doesn't send anything to the other coach
+        yet — it sends a confirmation email to <em>you</em>. The change only goes out once you click
+        <strong>Yes, send it to the other coach</strong> in that email. If you don't see it land, nothing has
+        happened on the other end either.</p>
+    </div>
+    <div class="shot-row">
+      <div class="shot">
+        <img src="img/guide/email-reschedule-self-confirm.png" alt="Email asking the requesting coach to confirm their reschedule request before it's sent to the other coach">
+        <div class="cap">What lands in <strong>your</strong> inbox the moment you submit a request — confirm here first.</div>
+      </div>
+      <div class="shot">
+        <img src="img/guide/email-reschedule-other-coach.png" alt="Email to the other coach with Approve and Suggest another time buttons">
+        <div class="cap">What the <strong>other coach</strong> sees, once you've confirmed — this is the one that starts their clock.</div>
+      </div>
+    </div>
     <div class="callout key">
       <p><strong>The game does not move until you both agree.</strong> It stays exactly where it is, flagged
         <strong>Negotiating</strong>, so nobody turns up at the wrong field mid-discussion.</p>
+    </div>
+
+    <h3>Requesting a field-only change</h3>
+    <p>Sometimes the date and time are fine and only the <strong>field</strong> needs to change — your regular
+      field is closed for maintenance, say. Click <strong>Change Field</strong> on the game (next to Request
+      Change) and pick the new field. This is a lighter process than a full reschedule: it's your call to make,
+      not something the other coach has to approve — you're just required to let them know.</p>
+    <ol class="steps">
+      <li>Same as any change: we email <strong>you</strong> first to confirm you meant it.</li>
+      <li>Once you confirm, the field changes <strong>immediately</strong> — there's no waiting on the other coach.</li>
+      <li>The other coach gets a notice with the new field and a single <strong>Got it — acknowledge</strong>
+        button, just so we know they've seen it. If they don't acknowledge in time, their director is looped in
+        to make sure the message actually got through.</li>
+    </ol>
+    <div class="shot-row">
+      <div class="shot">
+        <img src="img/guide/email-fieldchange-self-confirm.png" alt="Email asking the requesting coach to confirm a field-only change before it takes effect">
+        <div class="cap">Your confirmation email — the field doesn't move until you click through here.</div>
+      </div>
+      <div class="shot">
+        <img src="img/guide/email-fieldchange-acknowledge.png" alt="Email telling the other coach the field already changed, with an acknowledge button">
+        <div class="cap">What the other coach gets — the field has <em>already</em> changed; this is just an acknowledgement.</div>
+      </div>
     </div>
 
     <h3>How long you have to reply</h3>
@@ -263,6 +320,14 @@
     <p>The difference is what happens once you do agree: the original game is marked <strong>Rained Out</strong>
       and stays in the schedule as history, and a new game is created on the makeup date. Nothing is deleted —
       you can always see what the game originally was.</p>
+    <div class="callout warn">
+      <p>Same rule as any change: the makeup date isn't sent to the other coach until <strong>you</strong> confirm
+        it in your own inbox first.</p>
+    </div>
+    <div class="shot">
+      <img src="img/guide/email-rainout-self-confirm.png" alt="Email asking the requesting coach to confirm a rainout makeup date before it's sent to the other coach">
+      <div class="cap">The self-confirm email for a rainout — same pattern as a normal reschedule.</div>
+    </div>
 
     <h3>Reporting a score</h3>
     <p>Once a game's been played, either coach — or either team's director — can click <strong>Report Score</strong>
