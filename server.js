@@ -2372,6 +2372,12 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
 
   const requestingTeamId = resolveRequestingTeam(s, game, team_id, teams);
   if (!requestingTeamId) return res.status(403).json({ error: 'You can only request a change on your own game' });
+  // A rain out is always the home team's to reschedule — they're the ones who
+  // have to find and rebook a makeup slot at one of their own fields, same
+  // reasoning as the field-only-change restriction below.
+  if (is_rainout && String(requestingTeamId) !== String(game.home_team_id)) {
+    return res.status(403).json({ error: 'Only the home team can report a rain out and propose a makeup' });
+  }
   const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
   const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
   const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));
@@ -2606,13 +2612,17 @@ app.get('/api/change-requests/:id/confirm', async (req, res) => {
   list[idx] = cr;
 
   const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
+  let fieldChangeBeforeGame = null, fieldChangeUpdatedGame = null;
   if (cr.is_field_change) {
     // Not a negotiation — the field moves the moment the requester confirms
     // their own request, same as Ted described: "the away team just shows up
     // and plays." The game stays out of 'negotiating' status too, since
     // nothing about it is actually unsettled — that status exists to stop a
     // coach confirming a game mid-negotiation, which doesn't apply here.
-    if (gameIdx !== -1) applyFieldChangeToGame(cr, schedData, seasonData);
+    if (gameIdx !== -1) {
+      fieldChangeBeforeGame = { ...schedData.games[gameIdx] };
+      fieldChangeUpdatedGame = applyFieldChangeToGame(cr, schedData, seasonData);
+    }
   } else if (gameIdx !== -1) {
     // The game keeps its agreed date — only the badge changes — so nobody turns up
     // at the wrong field while the coaches are still negotiating. "negotiating"
@@ -2624,6 +2634,13 @@ app.get('/api/change-requests/:id/confirm', async (req, res) => {
     try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
   }
   writeChangeRequests(list);
+
+  // A field change is finalized right here (no other-side approval to wait
+  // on), so the home director's ref-rebooking notice goes out now rather
+  // than at some later /approve step, unlike a reschedule/rainout.
+  if (cr.is_field_change) {
+    await notifyHomeDirectorOfRefChange('field', cr, seasonData, fieldChangeBeforeGame, fieldChangeUpdatedGame);
+  }
 
   await notifyTurn(req, cr, seasonData, gameIdx !== -1 ? schedData.games[gameIdx] : null);
   res.send(crActionPage(cr.is_field_change ? 'Field changed' : 'Request sent', cr.is_field_change
@@ -2764,6 +2781,52 @@ function applyRainoutToGame(schedData, seasonData, gameIdx, { date, time, field_
   return { cancelledGame, makeupGame };
 }
 
+// Alert the HOME team's director specifically — not both teams' directors,
+// the way manual-override does — because refs are booked by whoever hosts,
+// and only the home program has anything to rebook. home_team_id never
+// changes through any of these three kinds of change (only date/time/field
+// do), so beforeGame and updatedGame always agree on who that is. Shared by
+// the reschedule/rainout approve route and the field-change confirm route so
+// every kind of finalized day/time/location change reaches the home
+// director the same way (Ted: "any change to a game day/time/location needs
+// to also be sent to the home team's director once confirmed and finalized
+// so they can update ref information").
+async function notifyHomeDirectorOfRefChange(kind, cr, seasonData, beforeGame, updatedGame) {
+  if (!updatedGame) return;
+  const teamsForRefNotice = seasonData.teams || [];
+  const homeTeamForNotice = teamsForRefNotice.find(t => String(t.id) === String(updatedGame.home_team_id));
+  const homeDirector = (seasonData.directors || []).find(d =>
+    d.active !== false && d.program_id && d.program_id === homeTeamForNotice?.program_id);
+  if (!homeDirector?.email) return;
+
+  const actionPhrase = kind === 'rainout' ? 'a rain-out makeup'
+    : kind === 'field' ? 'a new field'
+    : 'to move';
+  const whatChanged = kind === 'field' ? 'the field' : 'referees booked for the original time';
+  const refSubject = `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: ` +
+    (kind === 'field' ? 'field changed — update refs' : 'reschedule refs — game moved');
+  const beforeCaption = kind === 'rainout' ? 'Rained out — was scheduled' : 'Original';
+  const afterCaption = kind === 'rainout' ? 'Makeup game' : kind === 'field' ? 'New field' : 'New date & time';
+  const refHtml = emailShell(`
+    ${emailHeading(refSubject)}
+    ${emailP(`${kind === 'field' ? 'The requesting coach confirmed' : 'Both coaches agreed to'} ${actionPhrase} for Game #${cr.game_id}. This is a home game for your program, so ${whatChanged} will need to be moved.`)}
+    ${emailGameCard({ homeLabel: beforeGame.home_team_name, awayLabel: beforeGame.away_team_name, date: beforeGame.date, time: beforeGame.time, fieldName: beforeGame.field_name, fieldAddress: beforeGame.field_address, fieldCoordinates: fieldCoordinatesOf(beforeGame.field_id, seasonData.fields), caption: beforeCaption })}
+    ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, fieldCoordinates: fieldCoordinatesOf(updatedGame.field_id, seasonData.fields), caption: afterCaption })}
+  `);
+  await sendEmail({
+    to: homeDirector.email,
+    subject: refSubject,
+    text: [
+      `${kind === 'field' ? 'The requesting coach confirmed' : 'Both coaches agreed to'} ${actionPhrase} for Game #${cr.game_id}. This is a home game for your program, so ${whatChanged} will need to be moved.`,
+      '',
+      `Original: ${beforeGame.day} ${beforeGame.date} at ${beforeGame.time} — ${beforeGame.field_name}`,
+      `New: ${updatedGame.day} ${updatedGame.date} at ${updatedGame.time} — ${updatedGame.field_name}`,
+      '', '— Eastlake Scheduler',
+    ].join('\n'),
+    html: refHtml,
+  });
+}
+
 // A field change already took effect when the requesting coach confirmed —
 // acknowledging it doesn't change the game, it just closes out the read
 // receipt so checkEscalations stops chasing it. Shared by the email-link
@@ -2871,38 +2934,7 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
   list[idx] = cr;
   writeChangeRequests(list);
 
-  // Alert the HOME team's director specifically — not both teams' directors,
-  // the way manual-override does — because refs are booked by whoever hosts,
-  // and only the home program has anything to rebook. home_team_id never
-  // changes through a negotiation (only date/time/field do), so beforeGame
-  // and updatedGame always agree on who that is.
-  if (updatedGame) {
-    const teamsForRefNotice = seasonData.teams || [];
-    const homeTeamForNotice = teamsForRefNotice.find(t => String(t.id) === String(updatedGame.home_team_id));
-    const homeDirector = (seasonData.directors || []).find(d =>
-      d.active !== false && d.program_id && d.program_id === homeTeamForNotice?.program_id);
-    if (homeDirector?.email) {
-      const refSubject = `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: reschedule refs — game moved`;
-      const refHtml = emailShell(`
-        ${emailHeading(refSubject)}
-        ${emailP(`Both coaches agreed to ${cr.is_rainout ? 'a rain-out makeup' : 'move'} Game #${cr.game_id}. This is a home game for your program, so referees booked for the original time will need to be moved.`)}
-        ${emailGameCard({ homeLabel: beforeGame.home_team_name, awayLabel: beforeGame.away_team_name, date: beforeGame.date, time: beforeGame.time, fieldName: beforeGame.field_name, fieldAddress: beforeGame.field_address, fieldCoordinates: fieldCoordinatesOf(beforeGame.field_id, seasonData.fields), caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Original' })}
-        ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, fieldCoordinates: fieldCoordinatesOf(updatedGame.field_id, seasonData.fields), caption: cr.is_rainout ? 'Makeup game' : 'New date & time' })}
-      `);
-      await sendEmail({
-        to: homeDirector.email,
-        subject: refSubject,
-        text: [
-          `Both coaches agreed to ${cr.is_rainout ? 'a rain-out makeup for' : 'move'} Game #${cr.game_id}. This is a home game for your program, so referees booked for the original time will need to be moved.`,
-          '',
-          `Original: ${beforeGame.day} ${beforeGame.date} at ${beforeGame.time} — ${beforeGame.field_name}`,
-          `New: ${updatedGame.day} ${updatedGame.date} at ${updatedGame.time} — ${updatedGame.field_name}`,
-          '', '— Eastlake Scheduler',
-        ].join('\n'),
-        html: refHtml,
-      });
-    }
-  }
+  await notifyHomeDirectorOfRefChange(cr.is_rainout ? 'rainout' : 'reschedule', cr, seasonData, beforeGame, updatedGame);
 
   // Tell the coach who proposed it that it's locked in.
   const teams = seasonData.teams || [];
@@ -3054,6 +3086,11 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
   const teams = seasonData.teams || [];
   const requestingTeamId = resolveRequestingTeam(s, game, team_id, teams);
   if (!requestingTeamId) return res.status(403).json({ error: 'You can only override a change on your own game' });
+  // Same rule as the >=7-days rain-out path: only the home team reschedules
+  // a rain out, since they're the ones who have to rebook a makeup slot.
+  if (is_rainout && String(requestingTeamId) !== String(game.home_team_id)) {
+    return res.status(403).json({ error: 'Only the home team can report a rain out and propose a makeup' });
+  }
   const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
   const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
   const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));

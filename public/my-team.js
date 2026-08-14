@@ -158,9 +158,11 @@ function myGameRowCtx(g) {
     matchupLabel: `${isHome ? 'vs' : '@'} ${oppName}`,
     statusBadge: gameStatusBadge(status, confirmations, mySide),
     canRequest: status !== 'negotiating',
-    // TODO: once tested, gate this to the day before the game through 2
-    // weeks after it — for now it's shown on every eligible game per Ted.
-    canRainout: status !== 'negotiating' && status !== 'cancelled',
+    // Only the home team reschedules a rainout — they're the ones who have
+    // to find and rebook a makeup slot at one of their own fields. TODO:
+    // once tested, gate this to the day before the game through 2 weeks
+    // after it — for now it's shown on every eligible game per Ted.
+    canRainout: isHome && status !== 'negotiating' && status !== 'cancelled',
     // TODO: once tested, only show this once the game's kickoff has passed
     // — for now it's shown on every eligible game per Ted, same as rainout.
     canScore: status !== 'cancelled',
