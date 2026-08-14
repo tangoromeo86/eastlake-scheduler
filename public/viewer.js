@@ -335,8 +335,8 @@ function renderGames(divGames) {
       <td>${formatDate(g.date)}</td>
       <td>${g.day.slice(0,3)}</td>
       <td>${formatTime12h(g.time)}</td>
-      <td class="g-home">${esc(g.home_team_name)}</td>
-      <td class="g-away">${esc(g.away_team_name)} ${gameStatusBadge(g.status || 'scheduled', g.confirmations)}${g.forced ? ' <span class="pill pill-wait">Forced</span>' : ''}</td>
+      <td class="g-home">${esc(g.home_team_name)}${jerseyTagHtml(g.home_jersey_color, g.home_jersey_label)}</td>
+      <td class="g-away">${esc(g.away_team_name)}${jerseyTagHtml(g.away_jersey_color, g.away_jersey_label)} ${gameStatusBadge(g.status || 'scheduled', g.confirmations)}${g.forced ? ' <span class="pill pill-wait">Forced</span>' : ''}</td>
       <td>${esc(g.field_name)}</td>
       <td class="g-addr">${esc(g.field_address)}${fieldMapLink(g.field_id)}</td>
       ${ctx ? `<td><button class="req-btn" data-gid="${g.game_id}" data-tid="${esc(ctx.team_id)}">Request Change</button></td>` : (wantsReqTh ? '<td></td>' : '')}
@@ -359,6 +359,9 @@ function renderGames(divGames) {
         <span class="vs">vs</span>
         <span class="away">${esc(g.away_team_name)}</span>
       </div>
+      ${(g.home_jersey_color || g.home_jersey_label || g.away_jersey_color || g.away_jersey_label)
+        ? `<div style="margin-top:2px;display:flex;gap:12px">${jerseyTagHtml(g.home_jersey_color, g.home_jersey_label)}${jerseyTagHtml(g.away_jersey_color, g.away_jersey_label)}</div>`
+        : ''}
       <div class="game-card-field">📍 ${esc(g.field_name)}${g.field_address ? ' — ' + esc(g.field_address) : ''}${fieldMapLink(g.field_id)}</div>
       ${ctx ? `<div class="game-card-req"><button class="req-btn" data-gid="${g.game_id}" data-tid="${esc(ctx.team_id)}">Request Change</button></div>` : ''}
     </div>`;

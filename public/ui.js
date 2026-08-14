@@ -27,6 +27,37 @@ function formatDateUS(dateStr) {
   return (y && m && d) ? `${m}-${d}-${y}` : (dateStr || '');
 }
 
+// A jersey swatch + label, shared by every page that shows a game (public
+// viewer, coach, director, admin) so they can't drift apart from each other.
+// Renders nothing at all if neither a color nor a label is set — most teams
+// won't have set one, and an empty swatch would just be visual noise.
+function jerseyTagHtml(color, label) {
+  if (!color && !label) return '';
+  const swatch = color ? `<span class="jersey-swatch" style="background:${uiEsc(color)}"></span>` : '';
+  return `<span class="jersey-tag">${swatch}${label ? uiEsc(label) : ''}</span>`;
+}
+
+// Both sides' jersey info for a game row, when set — the whole point is
+// spotting a clash before kickoff, so it's worth showing the opponent's
+// alongside your own. Shared by the coach and director games lists, which
+// both compute the same myJerseyColor/myJerseyLabel/oppJerseyColor/
+// oppJerseyLabel shape onto their row context.
+// clickOnJersey: an inline onclick expression (e.g. "openJerseyChange(261001)")
+// for the "your" side — clicking sets/changes it. Deliberately NOT a button
+// in the action row: these mobile cards already carry up to 7 buttons before
+// Jersey, and a wrapped 2-column grid costs a whole extra row per button
+// (Ted found this exact issue with the original Score/action-button
+// crowding). Riding on the matchup line instead costs nothing.
+function jerseyRowHtml(ctx, clickOnJersey) {
+  const mineTag = jerseyTagHtml(ctx.myJerseyColor, ctx.myJerseyLabel ? `You: ${ctx.myJerseyLabel}` : (ctx.myJerseyColor ? 'You' : ''));
+  const theirs = jerseyTagHtml(ctx.oppJerseyColor, ctx.oppJerseyLabel ? `Them: ${ctx.oppJerseyLabel}` : (ctx.oppJerseyColor ? 'Them' : ''));
+  const mine = clickOnJersey
+    ? `<a href="javascript:void(0)" onclick="${uiEsc(clickOnJersey)}" style="text-decoration:none">${mineTag || '<span class="jersey-tag" style="color:#94a3b8">+ Jersey</span>'}</a>`
+    : mineTag;
+  if (!mine && !theirs) return '';
+  return `<span style="margin-left:8px;display:inline-flex;gap:8px;vertical-align:middle">${mine}${theirs}</span>`;
+}
+
 // Transient confirmation. Non-blocking, unlike alert().
 function toast(message, kind) {
   let host = document.getElementById('toast-host');
@@ -949,6 +980,7 @@ function resultIsFinal(result) {
 // negotiation, just "whoever gets there first enters it, the other side can
 // correct it." No approve/counter round-trip.
 let srmGame = null, srmTeamId = null, srmRefresh = null;
+let jrmGame = null, jrmTeamId = null, jrmRefresh = null;
 
 function ensureScoreModal() {
   if (document.getElementById('srm-overlay')) return;
@@ -1035,6 +1067,95 @@ async function submitScore() {
     toast('Score saved.', 'good');
     if (srmRefresh) srmRefresh();
   } catch { srmErr('Network error. Try again.'); }
+}
+
+// ── Per-game jersey color ─────────────────────────────────────────────────────
+// Deliberately not a change-request/negotiation like a reschedule or field
+// change — a jersey color is purely informational (Ted: "direct edit, no
+// confirmation needed"), so this is a single POST with nothing to approve or
+// acknowledge, same shape as score reporting.
+function ensureJerseyModal() {
+  if (document.getElementById('jrm-overlay')) return;
+  const el = document.createElement('div');
+  el.id = 'jrm-overlay';
+  el.className = 'modal-overlay hidden';
+  el.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h3 id="jrm-title">Jersey Color</h3>
+          <p id="jrm-subtitle" class="field-form-hint" style="margin-top:2px"></p>
+        </div>
+        <button id="jrm-close" class="modal-close" type="button">&times;</button>
+      </div>
+      <div id="jrm-body" class="modal-body"></div>
+      <div id="jrm-error" class="field-form-error hidden" style="margin:0 20px 14px"></div>
+      <div id="jrm-footer" class="modal-footer"></div>
+    </div>`;
+  document.body.appendChild(el);
+  document.getElementById('jrm-close').addEventListener('click', closeJerseyModal);
+  el.addEventListener('click', e => { if (e.target === el) closeJerseyModal(); });
+}
+
+function closeJerseyModal() {
+  document.getElementById('jrm-overlay')?.classList.add('hidden');
+}
+
+function jrmErr(msg) {
+  const el = document.getElementById('jrm-error');
+  if (!el) return;
+  if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+// { game, teamId, myTeam, refresh } — myTeam is the acting team's own record,
+// used to pre-fill the picker with whatever's already in effect for this game
+// (the per-game override if one exists, else the team's own default).
+function openJerseyModal({ game, teamId, myTeam, refresh }) {
+  ensureJerseyModal();
+  jrmGame = game; jrmTeamId = teamId; jrmRefresh = refresh;
+  jrmErr(null);
+  const isHome = String(game.home_team_id) === String(teamId);
+  const currentColor = (isHome ? game.home_jersey_color : game.away_jersey_color) || myTeam?.jersey_color || '#1a2e6e';
+  const currentLabel = (isHome ? game.home_jersey_label : game.away_jersey_label) || myTeam?.jersey_label || '';
+  const overridden = isHome ? !!game.home_jersey_overridden : !!game.away_jersey_overridden;
+
+  document.getElementById('jrm-title').textContent = 'Jersey Color';
+  document.getElementById('jrm-subtitle').textContent = `${uiEsc(game.home_team_name)} vs ${uiEsc(game.away_team_name)} — ${crmGameLabel(game)}`;
+
+  document.getElementById('jrm-body').innerHTML = `
+    <p class="field-form-hint">Just for this game — shows on the schedule so the other team knows what to expect. This doesn't change your team's regular default.</p>
+    <div class="jersey-input-row">
+      <input id="jrm-color" type="color" value="${uiEsc(currentColor)}">
+      <input id="jrm-label" type="text" maxlength="30" placeholder="e.g. Navy, Away White" value="${uiEsc(currentLabel)}">
+    </div>
+    ${overridden ? `<p class="field-form-hint" style="margin-top:10px">This game already has its own color set, different from your team's default.</p>` : ''}`;
+  document.getElementById('jrm-footer').innerHTML = `
+    <button id="jrm-cancel-btn" class="btn btn-secondary" type="button">Cancel</button>
+    ${overridden ? `<button id="jrm-clear-btn" class="btn btn-secondary" type="button">Revert to Default</button>` : ''}
+    <button id="jrm-submit-btn" class="btn btn-primary" type="button">Save</button>`;
+  document.getElementById('jrm-cancel-btn').addEventListener('click', closeJerseyModal);
+  document.getElementById('jrm-submit-btn').addEventListener('click', () => submitJersey(false));
+  document.getElementById('jrm-clear-btn')?.addEventListener('click', () => submitJersey(true));
+  document.getElementById('jrm-overlay').classList.remove('hidden');
+}
+
+async function submitJersey(clear) {
+  jrmErr(null);
+  const body = {
+    team_id: jrmTeamId,
+    jersey_color: clear ? '' : document.getElementById('jrm-color').value,
+    jersey_label: clear ? '' : document.getElementById('jrm-label').value.trim(),
+  };
+  try {
+    const res = await fetch(`api/games/${jrmGame.game_id}/jersey`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { jrmErr(data.error || 'Could not save.'); return; }
+    closeJerseyModal();
+    toast(clear ? 'Reverted to the team default.' : 'Jersey color saved.', 'good');
+    if (jrmRefresh) jrmRefresh();
+  } catch { jrmErr('Network error. Try again.'); }
 }
 
 // ── Field availability summary ───────────────────────────────────────────────

@@ -1,5 +1,11 @@
 'use strict';
 
+// A native color input always has some value (browsers default to black),
+// so this is the suggested starting point when a team hasn't set one yet —
+// saveTeamForm compares against it to tell "never touched" from "genuinely
+// picked this."
+const DEFAULT_JERSEY_COLOR = '#1a2e6e';
+
 let scheduleData = null;
 let seasonData = null;
 let activeDivision = null;
@@ -709,8 +715,8 @@ function renderGames(divGames) {
       <td>${formatDate(g.date)}</td>
       <td>${g.day}</td>
       <td>${formatTime12h(g.time)}</td>
-      <td class="team-cell home">${esc(g.home_team_name)}</td>
-      <td class="team-cell away">${esc(g.away_team_name)}</td>
+      <td class="team-cell home">${esc(g.home_team_name)}${jerseyTagHtml(g.home_jersey_color, g.home_jersey_label)}</td>
+      <td class="team-cell away">${esc(g.away_team_name)}${jerseyTagHtml(g.away_jersey_color, g.away_jersey_label)}</td>
       <td>${esc(g.field_name)}</td>
       <td class="address">${esc(g.field_address)}</td>
       <td>${gameStatusBadge(g.status || 'scheduled', g.confirmations)}${g.is_makeup ? ' <span class="pill pill-good">Makeup of #' + g.rescheduled_from_game_id + '</span>' : ''}${g.rescheduled_to_game_id ? ' <span class="pill pill-neutral">&rarr; #' + g.rescheduled_to_game_id + '</span>' : ''}${g.forced ? ` <span class="pill pill-wait" title="${escAttr(g.warning || 'Placed as a last resort.')}">Forced</span>` : ''} ${resultBadge(g)}</td>
@@ -1932,6 +1938,12 @@ function buildTeamEditorRow(team, fieldOptions) {
         <label class="editor-label">First available day <span class="editor-hint">blank = whole season</span>
           <input type="date" id="ef-earliest-${id}" value="${esc(team.earliest_date || '')}">
         </label>
+        <label class="editor-label editor-label-wide">Jersey Color <span class="editor-hint">shows on the schedule so the other team knows what to expect</span>
+          <div class="jersey-input-row">
+            <input type="color" id="ef-jerseycolor-${id}" data-original="${esc(team.jersey_color || '')}" value="${esc(team.jersey_color || DEFAULT_JERSEY_COLOR)}">
+            <input type="text" maxlength="30" id="ef-jerseylabel-${id}" value="${esc(team.jersey_label || '')}" placeholder="e.g. Navy, Away White">
+          </div>
+        </label>
       </div>
       <details id="ef-avail-details-${id}" class="av-group" style="margin:14px 0" open>
         <summary>Weekly Availability</summary>
@@ -2029,12 +2041,19 @@ async function saveTeamForm(teamId) {
   const blackout_dates = blackoutRaw.split('\n').map(s => s.trim()).filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
   const availability = readAvailabilityGrid(`ef-availability-${teamId}`);
   const restrictions = readRestrictionsEditor(`ef-restrictions-${teamId}`);
+  const jerseyColorInput = document.getElementById(`ef-jerseycolor-${teamId}`);
+  // Only send it once this team already had a color on file, or it's been
+  // moved off the suggested starting point — same "can't tell untouched
+  // from genuinely picked" issue the color input has everywhere else.
+  const jersey_color = (jerseyColorInput?.dataset.original || jerseyColorInput?.value !== DEFAULT_JERSEY_COLOR)
+    ? jerseyColorInput?.value : undefined;
+  const jersey_label = document.getElementById(`ef-jerseylabel-${teamId}`)?.value.trim();
 
   try {
     const res = await fetch(`api/team/${teamId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label, coach, phone, email, home_field_id, confirmed, earliest_date, blackout_dates, availability, restrictions }),
+      body: JSON.stringify({ label, coach, phone, email, home_field_id, confirmed, earliest_date, blackout_dates, availability, restrictions, jersey_color, jersey_label }),
     });
     const data = await res.json();
     if (!res.ok) {

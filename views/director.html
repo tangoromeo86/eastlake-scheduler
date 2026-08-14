@@ -43,6 +43,14 @@
         <div class="field-form-row">
           <label>Team's first available day <span class="field-form-hint">(blank = whole season — only set this if this team starts later than everyone else)</span><input id="tfe-earliest" type="date"></label>
         </div>
+        <div class="field-form-row">
+          <label>Jersey Color <span class="field-form-hint">shows on the schedule so the other team knows what to expect</span>
+            <div class="jersey-input-row">
+              <input id="tfe-jersey-color" type="color" value="#1a2e6e">
+              <input id="tfe-jersey-label" type="text" maxlength="30" placeholder="e.g. Navy, Away White">
+            </div>
+          </label>
+        </div>
         <details id="tfe-availability-details" class="av-group" style="margin-top:20px">
           <summary>Weekly Availability <span class="field-form-hint">(usually set by the coach later — open this only if you need to set it now)</span></summary>
           <p class="field-form-hint" style="margin:10px 0">Fields left blank default to "Available for both."</p>

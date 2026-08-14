@@ -7,6 +7,7 @@ let editingFieldId = null;
 let scheduleData = null;
 let crTeamId = null;
 let seasonSlots = null;
+let tfeJerseyTouched = false;
 
 function esc(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -163,7 +164,26 @@ function dirGameRowCtx(g) {
     // Only the home team's own field is ever in play, mirroring my-team.js.
     canChangeField: mySide === 'home' && status !== 'cancelled' && !hasActiveRequest,
     canAcknowledgeField: !!active && active.is_field_change && active.status === 'awaiting_response' && String(active.awaiting_team_id) === String(myTeamId),
+    canChangeJersey: status !== 'cancelled',
+    myJerseyColor: (mySide === 'home' ? g.home_jersey_color : g.away_jersey_color) || teamById(myTeamId)?.jersey_color,
+    myJerseyLabel: (mySide === 'home' ? g.home_jersey_label : g.away_jersey_label) || teamById(myTeamId)?.jersey_label,
+    oppJerseyColor: mySide === 'home' ? g.away_jersey_color : g.home_jersey_color,
+    oppJerseyLabel: mySide === 'home' ? g.away_jersey_label : g.home_jersey_label,
   };
+}
+
+// Table view shows Home/Away as separate columns rather than "mine/theirs",
+// so only the column matching this director's own team in that game gets a
+// click-to-edit link; the other side's tag (if any) is just informational.
+function dirJerseyCellHtml(ctx, side) {
+  const isMine = String(side === 'home' ? ctx.g.home_team_id : ctx.g.away_team_id) === String(ctx.myTeamId);
+  const color = side === 'home' ? ctx.g.home_jersey_color : ctx.g.away_jersey_color;
+  const label = side === 'home' ? ctx.g.home_jersey_label : ctx.g.away_jersey_label;
+  if (isMine && ctx.canChangeJersey) {
+    const tag = jerseyTagHtml(color, label) || '<span class="jersey-tag" style="color:#94a3b8">+ Jersey</span>';
+    return `<a href="javascript:void(0)" onclick="openJerseyChange(${ctx.g.game_id},'${ctx.myTeamId}')" style="text-decoration:none">${tag}</a>`;
+  }
+  return jerseyTagHtml(color, label);
 }
 
 function dirGameActionButtons(ctx) {
@@ -197,8 +217,8 @@ function renderGamesList() {
     ${rows.map(ctx => `<tr>
         <td>#${ctx.g.game_id}</td>
         <td>${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</td>
-        <td>${esc(ctx.g.home_team_name)}</td>
-        <td>${esc(ctx.g.away_team_name)}</td>
+        <td>${esc(ctx.g.home_team_name)}${dirJerseyCellHtml(ctx, 'home')}</td>
+        <td>${esc(ctx.g.away_team_name)}${dirJerseyCellHtml(ctx, 'away')}</td>
         <td>${ctx.statusBadge}${liveStatusHtml(activeByGame[ctx.g.game_id])}${forcedBadge(ctx.g)}</td>
         <td>${resultBadge(ctx.g)}</td>
         <td><div class="row-actions">${dirGameActionButtons(ctx)}</div></td>
@@ -211,7 +231,7 @@ function renderGamesList() {
         <div class="mg-card-top">
           <span>#${ctx.g.game_id} &middot; ${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</span>
         </div>
-        <div class="mg-card-matchup">${esc(ctx.g.home_team_name)} <span class="mg-ha">vs</span> ${esc(ctx.g.away_team_name)}</div>
+        <div class="mg-card-matchup">${esc(ctx.g.home_team_name)} <span class="mg-ha">vs</span> ${esc(ctx.g.away_team_name)}${jerseyRowHtml(ctx, ctx.canChangeJersey ? `openJerseyChange(${ctx.g.game_id},'${ctx.myTeamId}')` : null)}</div>
         <div class="mg-card-badges">${ctx.statusBadge}${liveStatusHtml(activeByGame[ctx.g.game_id])} ${resultBadge(ctx.g)}${forcedBadge(ctx.g)}</div>
         <div class="mg-card-actions">${dirGameActionButtons(ctx)}</div>
       </div>`).join('')}
@@ -290,6 +310,16 @@ async function acknowledgeFieldChange(gameId) {
     renderGamesList();
     toast('Acknowledged.');
   } catch { toast('Network error. Try again.', 'bad'); }
+}
+
+function openJerseyChange(gameId, teamId) {
+  if (!requireVerifiedToEdit('set the jersey color for this game')) return;
+  const game = (scheduleData?.games || []).find(g => g.game_id === gameId);
+  if (!game) return;
+  openJerseyModal({
+    game, teamId, myTeam: teamById(teamId),
+    refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
+  });
 }
 
 function openScore(gameId, teamId) {
@@ -642,6 +672,9 @@ function openTeamAdd() {
   document.getElementById('tfe-phone').value = '';
   document.getElementById('tfe-target').value = '';
   document.getElementById('tfe-earliest').value = '';
+  document.getElementById('tfe-jersey-color').value = '#1a2e6e';
+  document.getElementById('tfe-jersey-label').value = '';
+  tfeJerseyTouched = false;
   populateDivisionSelect();
   populateFieldSelect();
   renderAvailabilityGrid('tfe-availability', null, seasonSlots, '');
@@ -665,6 +698,9 @@ function openTeamEdit(teamId) {
   document.getElementById('tfe-phone').value = team.phone || '';
   document.getElementById('tfe-target').value = team.target_games || '';
   document.getElementById('tfe-earliest').value = team.earliest_date || '';
+  document.getElementById('tfe-jersey-color').value = team.jersey_color || '#1a2e6e';
+  document.getElementById('tfe-jersey-label').value = team.jersey_label || '';
+  tfeJerseyTouched = false;
   populateDivisionSelect();
   populateFieldSelect();
   document.getElementById('tfe-division').value = String(team.division_id || '');
@@ -692,9 +728,12 @@ document.getElementById('tfe-earliest').addEventListener('change', (e) => {
   renderAvailabilityGrid('tfe-availability', current, seasonSlots, e.target.value);
 });
 
+document.getElementById('tfe-jersey-color').addEventListener('input', () => { tfeJerseyTouched = true; });
+
 document.getElementById('tfe-save').addEventListener('click', async () => {
   const errEl = document.getElementById('tfe-error');
   errEl.classList.add('hidden');
+  const editingTeam = editingTeamId ? myProgramTeams().find(t => String(t.id) === editingTeamId) : null;
   const body = {
     label:         document.getElementById('tfe-label').value.trim(),
     coach:         document.getElementById('tfe-coach').value.trim(),
@@ -705,6 +744,11 @@ document.getElementById('tfe-save').addEventListener('click', async () => {
     target_games:  document.getElementById('tfe-target').value || undefined,
     earliest_date: document.getElementById('tfe-earliest').value || undefined,
     availability:  readAvailabilityGrid('tfe-availability'),
+    // Same "can't tell untouched from genuinely black" issue as my-team.js's
+    // color picker — only send it once this team already had a color on
+    // file, or this session actually opened the picker.
+    jersey_color: (editingTeam?.jersey_color || tfeJerseyTouched) ? document.getElementById('tfe-jersey-color').value : undefined,
+    jersey_label: document.getElementById('tfe-jersey-label').value.trim(),
     // No restrictions field — Teams to Avoid is admin-only now; even if this
     // were sent, PUT /api/teams/:id ignores it from a non-admin caller.
   };

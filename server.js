@@ -694,6 +694,8 @@ const ACTIVITY_DESCRIBERS = [
     describe: (req, status, prior, m) => `Manual override on game #${m[1]}` },
   { method: 'POST', re: /^\/api\/games\/([^/]+)\/result$/,
     describe: (req, status, prior, m) => `Reported a score for game #${m[1]}` },
+  { method: 'POST', re: /^\/api\/games\/([^/]+)\/jersey$/,
+    describe: (req, status, prior, m) => `Set jersey color for game #${m[1]}` },
   { method: 'POST', re: /^\/api\/run$/,
     describe: () => 'Ran the scheduler' },
   { method: 'POST', re: /^\/api\/schedule\/dismiss-conflicts$/,
@@ -1702,7 +1704,17 @@ app.patch('/api/team/:id', requireAdmin, async (req, res) => {
     const vEarliest = V.validateEarliestDate(req.body.earliest_date);
     if (!vEarliest.ok) return res.status(400).json({ error: vEarliest.error, field: 'earliest_date' });
   }
-  const allowed = ['label', 'name', 'coach', 'phone', 'home_field_id', 'confirmed', 'blackout_dates', 'program_id', 'availability', 'target_games', 'earliest_date', 'restrictions'];
+  if ('jersey_color' in req.body) {
+    const vJerseyColor = V.validateJerseyColor(req.body.jersey_color);
+    if (!vJerseyColor.ok) return res.status(400).json({ error: vJerseyColor.error, field: 'jersey_color' });
+    req.body.jersey_color = vJerseyColor.value;
+  }
+  if ('jersey_label' in req.body) {
+    const vJerseyLabel = V.validateJerseyLabel(req.body.jersey_label);
+    if (!vJerseyLabel.ok) return res.status(400).json({ error: vJerseyLabel.error, field: 'jersey_label' });
+    req.body.jersey_label = vJerseyLabel.value;
+  }
+  const allowed = ['label', 'name', 'coach', 'phone', 'home_field_id', 'confirmed', 'blackout_dates', 'program_id', 'availability', 'target_games', 'earliest_date', 'restrictions', 'jersey_color', 'jersey_label'];
   for (const field of allowed) {
     if (!(field in req.body)) continue;
     team[field] = req.body[field];
@@ -1712,6 +1724,9 @@ app.patch('/api/team/:id', requireAdmin, async (req, res) => {
 
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(seasonData, null, 2)); }
   catch (err) { return res.status(500).json({ error: `Could not write season.json: ${err.message}` }); }
+  if ('jersey_color' in req.body || 'jersey_label' in req.body) {
+    cascadeJerseyDefaultToSchedule(team.id, team.jersey_color || '', team.jersey_label || '');
+  }
 
   const newEmail = ('email' in req.body ? (req.body.email || '') : '').toLowerCase().trim();
   if (newEmail && newEmail !== existingEmail) {
@@ -3177,7 +3192,7 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
   catch (err) { return res.status(500).json({ error: 'Could not read season.json' }); }
   const s = getSession(req);
-  const { label, coach, email, phone, division_id, home_field_id, program_id, target_games, earliest_date } = req.body;
+  const { label, coach, email, phone, division_id, home_field_id, program_id, target_games, earliest_date, jersey_color, jersey_label } = req.body;
   const vLabel = V.validateName(label, { label: 'Team name' });
   if (!vLabel.ok) return res.status(400).json({ error: vLabel.error, field: 'label' });
   const vCoach = V.validateName(coach, { label: 'Coach name', required: false });
@@ -3191,6 +3206,10 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
   if (!vTarget.ok) return res.status(400).json({ error: vTarget.error, field: 'target_games' });
   const vEarliest = V.validateEarliestDate(earliest_date);
   if (!vEarliest.ok) return res.status(400).json({ error: vEarliest.error, field: 'earliest_date' });
+  const vJerseyColor = V.validateJerseyColor(jersey_color);
+  if (!vJerseyColor.ok) return res.status(400).json({ error: vJerseyColor.error, field: 'jersey_color' });
+  const vJerseyLabel = V.validateJerseyLabel(jersey_label);
+  if (!vJerseyLabel.ok) return res.status(400).json({ error: vJerseyLabel.error, field: 'jersey_label' });
   if (!division_id || !(data.divisions || []).some(d => String(d.id) === String(division_id))) {
     return res.status(400).json({ error: 'A valid division_id is required', field: 'division_id' });
   }
@@ -3227,6 +3246,8 @@ app.post('/api/teams', requireDirector, requireVerified, (req, res) => {
     confirmed: true,
     ...(vTarget.value !== undefined ? { target_games: vTarget.value } : {}),
     ...(vEarliest.value !== undefined ? { earliest_date: vEarliest.value } : {}),
+    ...(vJerseyColor.value ? { jersey_color: vJerseyColor.value } : {}),
+    ...(vJerseyLabel.value ? { jersey_label: vJerseyLabel.value } : {}),
   };
   data.teams = [...(data.teams || []), t];
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
@@ -3269,6 +3290,34 @@ function validateRestrictions(raw, { ownTeamId, ownProgramId, teams, programs })
   return { ok: true, value: out };
 }
 
+// A team changing its default jersey color mid-season should show up on the
+// schedule going forward without needing a full re-run — sweeps every
+// upcoming (not yet played, not cancelled), non-overridden game this team
+// is in and updates its snapshotted color/label to match. A game where the
+// coach already set a per-game override (home_jersey_overridden /
+// away_jersey_overridden) is left alone — that override was a deliberate
+// choice for that one game, not something a later default change should
+// silently clobber.
+function cascadeJerseyDefaultToSchedule(teamId, jerseyColor, jerseyLabel) {
+  let schedData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { return; }
+  const today = new Date(new Date().toDateString());
+  let changed = false;
+  for (const g of schedData.games || []) {
+    if (g.status === 'cancelled') continue;
+    if (new Date(g.date + 'T00:00:00') < today) continue;
+    if (String(g.home_team_id) === String(teamId) && !g.home_jersey_overridden) {
+      g.home_jersey_color = jerseyColor; g.home_jersey_label = jerseyLabel; changed = true;
+    }
+    if (String(g.away_team_id) === String(teamId) && !g.away_jersey_overridden) {
+      g.away_jersey_color = jerseyColor; g.away_jersey_label = jerseyLabel; changed = true;
+    }
+  }
+  if (changed) {
+    try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
+  }
+}
+
 app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   let data;
   try { data = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
@@ -3278,7 +3327,7 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   if (idx === -1) return res.status(404).json({ error: 'Team not found' });
   const existing = data.teams[idx];
   if (!canEditTeam(s, existing)) return res.status(403).json({ error: 'You can only edit your own team' });
-  const { label, coach, email, phone, home_field_id, availability, target_games, earliest_date, restrictions } = req.body;
+  const { label, coach, email, phone, home_field_id, availability, target_games, earliest_date, restrictions, jersey_color, jersey_label } = req.body;
   // Coaches can't move their own team to a different division — only a director/admin can.
   const division_id = s.role === 'coach' ? existing.division_id : req.body.division_id;
   const vLabel = V.validateName(label, { label: 'Team name' });
@@ -3290,6 +3339,10 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
   if (!vTarget.ok) return res.status(400).json({ error: vTarget.error, field: 'target_games' });
   const vEarliest = V.validateEarliestDate(earliest_date);
   if (!vEarliest.ok) return res.status(400).json({ error: vEarliest.error, field: 'earliest_date' });
+  const vJerseyColor = V.validateJerseyColor(jersey_color);
+  if (!vJerseyColor.ok) return res.status(400).json({ error: vJerseyColor.error, field: 'jersey_color' });
+  const vJerseyLabel = V.validateJerseyLabel(jersey_label);
+  if (!vJerseyLabel.ok) return res.status(400).json({ error: vJerseyLabel.error, field: 'jersey_label' });
   // Teams to Avoid (Ted, 2026-08-13): admin-only now — coaches and directors
   // can no longer see or set it, even by calling this route directly rather
   // than through the UI. Passing undefined here (instead of skipping
@@ -3345,10 +3398,15 @@ app.put('/api/teams/:id', requireAuth, requireVerified, async (req, res) => {
     ...(target_games !== undefined ? { target_games: vTarget.value } : {}),
     ...(earliest_date !== undefined ? { earliest_date: vEarliest.value } : {}),
     ...(vRestrictions.value !== undefined ? { restrictions: vRestrictions.value } : {}),
+    ...(jersey_color !== undefined ? { jersey_color: vJerseyColor.value } : {}),
+    ...(jersey_label !== undefined ? { jersey_label: vJerseyLabel.value } : {}),
     // email is intentionally left as-is here — see confirm-email flow below
   };
   try { fs.writeFileSync(SEASON_FILE, JSON.stringify(data, null, 2)); }
   catch (err) { return res.status(500).json({ error: 'Could not write season.json' }); }
+  if (jersey_color !== undefined || jersey_label !== undefined) {
+    cascadeJerseyDefaultToSchedule(existing.id, data.teams[idx].jersey_color || '', data.teams[idx].jersey_label || '');
+  }
 
   if (emailChanged) {
     const result = await sendTeamEmailChangeConfirmation(req, data.teams[idx], newEmail);
@@ -4039,6 +4097,43 @@ app.post('/api/games/:id/confirm', requireVerified, (req, res) => {
   catch (err) { return res.status(500).json({ error: 'Could not write schedule.json' }); }
 
   res.json({ ok: true, status: newStatus, confirmations });
+});
+
+// A per-game jersey override — same idea as a team's default color/label
+// (server.js's cascadeJerseyDefaultToSchedule), but pinned to just this one
+// game. Either side can set their own team's color for their own game,
+// unlike a field change which is home-only. Marks *_jersey_overridden so a
+// later team-default change doesn't silently overwrite this game's choice.
+// Sending an empty color/label clears the override and reverts to whatever
+// the team's current default is.
+app.post('/api/games/:id/jersey', requireVerified, (req, res) => {
+  const s = getSession(req);
+  const gameId = parseInt(req.params.id, 10);
+  const ctx = loadGameContext(req, gameId);
+  if (ctx.error) return res.status(ctx.status || 500).json({ error: ctx.error });
+
+  const myTeamId = resolveRequestingTeam(s, ctx.game, req.body?.team_id, ctx.teams);
+  if (!myTeamId) return res.status(403).json({ error: 'You can only set jersey color for your own game' });
+
+  const vColor = V.validateJerseyColor(req.body?.jersey_color);
+  if (!vColor.ok) return res.status(400).json({ error: vColor.error, field: 'jersey_color' });
+  const vLabel = V.validateJerseyLabel(req.body?.jersey_label);
+  if (!vLabel.ok) return res.status(400).json({ error: vLabel.error, field: 'jersey_label' });
+
+  const side = String(myTeamId) === String(ctx.game.home_team_id) ? 'home' : 'away';
+  const cleared = !vColor.value && !vLabel.value;
+  const myTeam = ctx.teams.find(t => String(t.id) === String(myTeamId));
+  const gameIdx = ctx.schedData.games.findIndex(g => g.game_id === gameId);
+  ctx.schedData.games[gameIdx] = {
+    ...ctx.game,
+    [`${side}_jersey_color`]: cleared ? (myTeam?.jersey_color || '') : vColor.value,
+    [`${side}_jersey_label`]: cleared ? (myTeam?.jersey_label || '') : vLabel.value,
+    [`${side}_jersey_overridden`]: !cleared,
+  };
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(ctx.schedData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: 'Could not write schedule.json' }); }
+
+  res.json({ ok: true, game: ctx.schedData.games[gameIdx] });
 });
 
 // ── Score reporting ──────────────────────────────────────────────────────────

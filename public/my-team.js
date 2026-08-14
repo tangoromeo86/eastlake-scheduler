@@ -5,6 +5,7 @@ let seasonData = null;
 let myTeam = null;
 let scheduleData = null;
 let seasonSlots = null;
+let mteJerseyTouched = false;
 
 // Live negotiation/field-change state for my team's games, keyed by game_id,
 // so a coach can see what's happening (and acknowledge a field change)
@@ -67,6 +68,9 @@ async function init() {
   document.getElementById('mte-phone').value = myTeam.phone || '';
   document.getElementById('mte-target').value = myTeam.target_games || '';
   document.getElementById('mte-earliest').value = myTeam.earliest_date || '';
+  document.getElementById('mte-jersey-color').value = myTeam.jersey_color || '#1a2e6e';
+  document.getElementById('mte-jersey-label').value = myTeam.jersey_label || '';
+  mteJerseyTouched = false;
   populateFieldSelect();
   renderAvailabilityGrid('mte-availability', myTeam.availability, seasonSlots, myTeam.earliest_date);
   renderMyAvailabilityCalendar();
@@ -169,6 +173,11 @@ function myGameRowCtx(g) {
     // requests landing on top of each other.
     canChangeField: isHome && status !== 'cancelled' && !hasActiveRequest,
     canAcknowledgeField: !!active && active.is_field_change && active.status === 'awaiting_response' && String(active.awaiting_team_id) === String(myTeam.id),
+    canChangeJersey: status !== 'cancelled',
+    myJerseyColor: (isHome ? g.home_jersey_color : g.away_jersey_color) || myTeam.jersey_color,
+    myJerseyLabel: (isHome ? g.home_jersey_label : g.away_jersey_label) || myTeam.jersey_label,
+    oppJerseyColor: isHome ? g.away_jersey_color : g.home_jersey_color,
+    oppJerseyLabel: isHome ? g.away_jersey_label : g.home_jersey_label,
   };
 }
 
@@ -201,7 +210,7 @@ function renderGamesList() {
     ${rows.map(ctx => `<tr>
         <td>#${ctx.g.game_id}</td>
         <td>${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</td>
-        <td>${ctx.matchupLabel}</td>
+        <td>${ctx.matchupLabel}${jerseyRowHtml(ctx, ctx.canChangeJersey ? `openJerseyChange(${ctx.g.game_id})` : null)}</td>
         <td>${ctx.statusBadge}${liveStatusHtml(ctx.active)}${forcedBadge(ctx.g)}</td>
         <td>${resultBadge(ctx.g)}</td>
         <td><div class="row-actions">${myGameActionButtons(ctx)}</div></td>
@@ -214,7 +223,7 @@ function renderGamesList() {
         <div class="mg-card-top">
           <span>#${ctx.g.game_id} &middot; ${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</span>
         </div>
-        <div class="mg-card-matchup">${ctx.matchupLabel}</div>
+        <div class="mg-card-matchup">${ctx.matchupLabel}${jerseyRowHtml(ctx, ctx.canChangeJersey ? `openJerseyChange(${ctx.g.game_id})` : null)}</div>
         <div class="mg-card-badges">${ctx.statusBadge} ${resultBadge(ctx.g)}${forcedBadge(ctx.g)}</div>
         ${liveStatusHtml(ctx.active)}
         <div class="mg-card-actions">${myGameActionButtons(ctx)}</div>
@@ -327,6 +336,16 @@ function openScore(gameId) {
   });
 }
 
+function openJerseyChange(gameId) {
+  if (!requireVerifiedToEdit('set the jersey color for this game')) return;
+  const game = myGames().find(g => g.game_id === gameId);
+  if (!game) return;
+  openJerseyModal({
+    game, teamId: myTeam.id, myTeam,
+    refresh: async () => { scheduleData = await fetchJSON('api/schedule'); renderGamesList(); },
+  });
+}
+
 function populateFieldSelect() {
   const sel = document.getElementById('mte-field');
   // Fields owned by this team's program; if the team has no program_id (legacy/admin-uploaded), show all fields.
@@ -355,6 +374,8 @@ document.getElementById('mte-earliest').addEventListener('change', (e) => {
   renderAvailabilityGrid('mte-availability', current, seasonSlots, e.target.value);
 });
 
+document.getElementById('mte-jersey-color').addEventListener('input', () => { mteJerseyTouched = true; });
+
 document.getElementById('mte-save').addEventListener('click', async () => {
   if (demoBlocked('save your team info')) return;
   const errEl = document.getElementById('mte-error');
@@ -370,6 +391,12 @@ document.getElementById('mte-save').addEventListener('click', async () => {
     target_games:  document.getElementById('mte-target').value || undefined,
     earliest_date: document.getElementById('mte-earliest').value || undefined,
     availability:  readAvailabilityGrid('mte-availability'),
+    // A native color input always has SOME value (browsers default to
+    // #000000), so it can't distinguish "never touched" from "genuinely
+    // picked black" — only send it once the team already had a color on
+    // file, or this session's coach actually opened the picker.
+    jersey_color: (myTeam.jersey_color || mteJerseyTouched) ? document.getElementById('mte-jersey-color').value : undefined,
+    jersey_label: document.getElementById('mte-jersey-label').value.trim(),
     // No restrictions field — Teams to Avoid is admin-only now; even if this
     // were sent, PUT /api/teams/:id ignores it from a non-admin caller.
   };
