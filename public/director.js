@@ -425,6 +425,9 @@ function openGameAdd() {
   document.getElementById('dge-violations').classList.add('hidden');
   document.getElementById('dge-violations').innerHTML = '';
   document.getElementById('dge-force').classList.add('hidden');
+  document.getElementById('dge-approval-notice').classList.add('hidden');
+  document.getElementById('dge-reason-row').classList.add('hidden');
+  document.getElementById('dge-reason').value = '';
   document.getElementById('dge-modal').classList.remove('hidden');
 }
 
@@ -443,11 +446,19 @@ function openGameEdit(gameId) {
   dgePopulateFields(game.field_id);
   document.getElementById('dge-suggest-btn').classList.remove('hidden');
 
+  // Editing an existing game is no longer a direct apply for a director —
+  // it goes to admin for approval (see the modal comment in director.html).
+  // Admin's own game-edit modal in app.js is a completely separate code
+  // path and is unaffected by any of this.
+  const isAdmin = session?.role === 'admin';
   document.getElementById('dge-title').textContent = `Edit Game #${game.game_id}`;
-  document.getElementById('dge-save').textContent = 'Save Changes';
+  document.getElementById('dge-save').textContent = isAdmin ? 'Save Changes' : 'Send to Admin for Approval';
   document.getElementById('dge-violations').classList.add('hidden');
   document.getElementById('dge-violations').innerHTML = '';
   document.getElementById('dge-force').classList.add('hidden');
+  document.getElementById('dge-approval-notice').classList.toggle('hidden', isAdmin);
+  document.getElementById('dge-reason-row').classList.toggle('hidden', isAdmin);
+  document.getElementById('dge-reason').value = '';
   document.getElementById('dge-modal').classList.remove('hidden');
 }
 
@@ -494,6 +505,16 @@ async function dgeSave(force) {
 
   if (home_team_id === away_team_id) { dgeShowViolations(['Home team and away team cannot be the same.']); return; }
 
+  // A director editing an existing game goes through admin approval instead
+  // of applying directly — admin editing (either from this same page, or
+  // adding a brand-new game either role) is unaffected.
+  const needsApproval = !dgeAdding && session?.role !== 'admin';
+  let reason = '';
+  if (needsApproval) {
+    reason = document.getElementById('dge-reason').value.trim();
+    if (!reason) { dgeShowViolations(['Explain why this needs a direct edit — it\'s sent to admin along with the change.']); return; }
+  }
+
   try {
     let res, data;
     if (dgeAdding) {
@@ -501,6 +522,11 @@ async function dgeSave(force) {
       res = await fetch('api/game', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ division_id, date, time, field_id, home_team_id, away_team_id, force: !!force }),
+      });
+    } else if (needsApproval) {
+      res = await fetch(`api/game/${dgeGameId}/override-request`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, time, field_id, home_team_id, away_team_id, force: !!force, reason }),
       });
     } else {
       res = await fetch(`api/game/${dgeGameId}`, {
@@ -511,6 +537,11 @@ async function dgeSave(force) {
     data = await res.json();
     if (res.status === 409) { dgeShowViolations(data.violations || ['Unknown conflict.']); return; }
     if (!res.ok) { toast(data.error || 'Save failed.', 'bad'); return; }
+    if (needsApproval) {
+      closeGameEditModal();
+      toast('Sent to admin for approval — the game stays as-is until they approve it.', 'good');
+      return;
+    }
     scheduleData = await fetchJSON('api/schedule');
     renderGamesList();
     closeGameEditModal();

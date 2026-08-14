@@ -30,6 +30,7 @@ const SCHEDULE_FILE = path.join(__dirname, 'schedule.json');
 const SEASON_FILE   = path.join(__dirname, 'season.json');
 const CHANGES_FILE  = path.join(__dirname, 'changes.json');
 const CHANGE_REQUESTS_FILE = path.join(__dirname, 'change_requests.json');
+const GAME_OVERRIDES_FILE = path.join(__dirname, 'game_overrides.json');
 const ACTIVITY_LOG_FILE = path.join(__dirname, 'activity_log.json');
 const FIELD_DISTANCES_FILE = path.join(__dirname, 'field_distances.json');
 
@@ -303,6 +304,15 @@ function readChangeRequests() {
 }
 function writeChangeRequests(list) {
   fs.writeFileSync(CHANGE_REQUESTS_FILE, JSON.stringify(list, null, 2));
+}
+
+function readGameOverrides() {
+  if (!fs.existsSync(GAME_OVERRIDES_FILE)) return [];
+  try { return JSON.parse(fs.readFileSync(GAME_OVERRIDES_FILE, 'utf8')); }
+  catch { return []; }
+}
+function writeGameOverrides(list) {
+  fs.writeFileSync(GAME_OVERRIDES_FILE, JSON.stringify(list, null, 2));
 }
 function newActionToken() {
   return crypto.randomBytes(24).toString('base64url');
@@ -680,6 +690,8 @@ const ACTIVITY_DESCRIBERS = [
     describe: (req) => `Manually scheduled a game${req.body?.force ? ' (forced past a violation)' : ''}` },
   { method: 'PUT', re: /^\/api\/game\/([^/]+)$/,
     describe: (req, status, prior, m) => `Edited game #${m[1]}${req.body?.force ? ' (forced past a violation)' : ''}` },
+  { method: 'POST', re: /^\/api\/game\/([^/]+)\/override-request$/,
+    describe: (req, status, prior, m) => `Requested admin approval to edit game #${m[1]}${req.body?.force ? ' (forced past a violation)' : ''}` },
   { method: 'DELETE', re: /^\/api\/game\/([^/]+)$/,
     describe: (req, status, prior, m) => `Deleted game "${prior || ('#' + m[1])}"` },
   { method: 'POST', re: /^\/api\/game\/([^/]+)\/rainout$/,
@@ -1352,39 +1364,23 @@ app.post('/api/game', requireDirector, requireVerified, (req, res) => {
   res.json({ ok: true, game: newGame, violations, change: changeRecord });
 });
 
-app.put('/api/game/:id', requireDirector, requireVerified, (req, res) => {
-  const s = getSession(req);
-  const gameId = parseInt(req.params.id, 10);
-  const { date, time, force } = req.body;
-  // Coerce the same way POST /api/game does — ids come from the client as
-  // whatever type its <select> produced, and a raw type mismatch here would
-  // silently fail every downstream .find(t => t.id === ...) lookup instead
-  // of erroring, since both branches already handle "no team object found".
-  const rawHome = req.body.home_team_id, rawAway = req.body.away_team_id, rawField = req.body.field_id;
-  const home_team_id = isNaN(parseInt(rawHome, 10)) ? rawHome : parseInt(rawHome, 10);
-  const away_team_id = isNaN(parseInt(rawAway, 10)) ? rawAway : parseInt(rawAway, 10);
-  const field_id = isNaN(parseInt(rawField, 10)) ? rawField : parseInt(rawField, 10);
+function teamContact(t) {
+  if (!t) return null;
+  return { id: t.id, name: teamName(t), coach: t.coach || '', email: t.email || '', phone: t.phone || '' };
+}
 
-  let schedData;
-  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
-  catch (err) { return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` }); }
-
-  let seasonData;
-  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
-  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
-
+// The actual mechanics of "move this game" — shared by the admin's direct
+// PUT below and the approve-handler for a director's override request, so
+// the two paths can never quietly drift apart. Writes schedule.json and a
+// changes.json record; does not send any email (callers decide who, if
+// anyone, needs to hear about it — a plain admin edit stays silent, an
+// approved director override notifies both coaches).
+function applyGameFieldEdit(schedData, seasonData, gameId, { date, time, field_id, home_team_id, away_team_id }, opts) {
+  opts = opts || {};
+  const force = opts.force, extra = opts.extra;
   const gameIdx = schedData.games.findIndex(g => g.game_id === gameId);
-  if (gameIdx === -1) return res.status(404).json({ error: `Game ${gameId} not found` });
-
+  if (gameIdx === -1) return null;
   const existingGame = schedData.games[gameIdx];
-
-  if (s.role === 'director') {
-    const teams = seasonData.teams || [];
-    const homeT = teams.find(t => t.id === existingGame.home_team_id);
-    const awayT = teams.find(t => t.id === existingGame.away_team_id);
-    const owns = (homeT && canManageProgram(s, homeT.program_id)) || (awayT && canManageProgram(s, awayT.program_id));
-    if (!owns) return res.status(403).json({ error: 'You can only edit games involving one of your own program\'s teams' });
-  }
 
   const beforeSnap = {
     date: existingGame.date, day: existingGame.day, time: existingGame.time,
@@ -1393,11 +1389,6 @@ app.put('/api/game/:id', requireDirector, requireVerified, (req, res) => {
     away_team_id: existingGame.away_team_id, away_team_name: existingGame.away_team_name,
     week: existingGame.week,
   };
-
-  const editedGame = { id: gameId, date, time, field_id, home_team_id, away_team_id, division_id: existingGame.division_id, week: existingGame.week };
-  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [], _fields: seasonData.fields || [], _divisions: seasonData.divisions || [] };
-  const violations = validateGameEdit(editedGame, schedData.games, seasonForValidation);
-  if (violations.length && !force) return res.status(409).json({ violations });
 
   let newWeek = existingGame.week;
   for (const wk of buildSeasonWeeks(seasonData.season)) {
@@ -1408,7 +1399,7 @@ app.put('/api/game/:id', requireDirector, requireVerified, (req, res) => {
   const homeTeam = (seasonData.teams || []).find(t => t.id === home_team_id);
   const awayTeam = (seasonData.teams || []).find(t => t.id === away_team_id);
 
-  const resolvedFieldName    = fieldObj ? (fieldObj.sub_field ? `${fieldObj.name} – ${fieldObj.sub_field}` : (fieldObj.name || field_id)) : field_id;
+  const resolvedFieldName    = fieldObj ? (fieldObj.sub_field ? `${fieldObj.name} \u2013 ${fieldObj.sub_field}` : (fieldObj.name || field_id)) : field_id;
   const resolvedFieldAddress = fieldObj ? (fieldObj.address || '') : '';
 
   const updatedGame = {
@@ -1425,9 +1416,6 @@ app.put('/api/game/:id', requireDirector, requireVerified, (req, res) => {
   schedData.total_games = schedData.games.length;
   schedData.generated_at = new Date().toISOString();
 
-  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
-  catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
-
   const changedFields = [];
   if (beforeSnap.date !== updatedGame.date)          changedFields.push({ field: 'date',      from: beforeSnap.date,           to: updatedGame.date });
   if (beforeSnap.time !== updatedGame.time)          changedFields.push({ field: 'time',      from: beforeSnap.time,           to: updatedGame.time });
@@ -1435,12 +1423,7 @@ app.put('/api/game/:id', requireDirector, requireVerified, (req, res) => {
   if (beforeSnap.home_team_id !== updatedGame.home_team_id) changedFields.push({ field: 'home_team', from: beforeSnap.home_team_name, to: updatedGame.home_team_name });
   if (beforeSnap.away_team_id !== updatedGame.away_team_id) changedFields.push({ field: 'away_team', from: beforeSnap.away_team_name, to: updatedGame.away_team_name });
 
-  function teamContact(t) {
-    if (!t) return null;
-    return { id: t.id, name: teamName(t), coach: t.coach || '', email: t.email || '', phone: t.phone || '' };
-  }
-
-  const changeRecord = {
+  const changeRecord = Object.assign({
     id: Date.now(),
     timestamp: new Date().toISOString(),
     game_id: gameId,
@@ -1455,14 +1438,259 @@ app.put('/api/game/:id', requireDirector, requireVerified, (req, res) => {
     home_team: teamContact(homeTeam),
     away_team: teamContact(awayTeam),
     forced: !!force,
-  };
+  }, extra || {});
 
+  return { updatedGame, beforeSnap, homeTeam, awayTeam, changedFields, changeRecord };
+}
+
+function writeChangeRecord(changeRecord) {
   let allChanges = [];
   try { if (fs.existsSync(CHANGES_FILE)) allChanges = JSON.parse(fs.readFileSync(CHANGES_FILE, 'utf8')); } catch {}
   allChanges.push(changeRecord);
   try { fs.writeFileSync(CHANGES_FILE, JSON.stringify(allChanges, null, 2)); } catch {}
+}
 
-  res.json({ ok: true, game: updatedGame, violations, change: changeRecord });
+// Admin-only \u2014 a director's equivalent (POST /api/game/:id/override-request,
+// below) no longer applies directly. Ted, 2026-08-14: "it should require
+// admin approval to be used... ensures directors are not abusing their
+// power instead of going through the proper process."
+app.put('/api/game/:id', requireAdmin, requireVerified, (req, res) => {
+  const gameId = parseInt(req.params.id, 10);
+  const { date, time, force } = req.body;
+  // Coerce the same way POST /api/game does \u2014 ids come from the client as
+  // whatever type its <select> produced, and a raw type mismatch here would
+  // silently fail every downstream .find(t => t.id === ...) lookup instead
+  // of erroring, since both branches already handle "no team object found".
+  const rawHome = req.body.home_team_id, rawAway = req.body.away_team_id, rawField = req.body.field_id;
+  const home_team_id = isNaN(parseInt(rawHome, 10)) ? rawHome : parseInt(rawHome, 10);
+  const away_team_id = isNaN(parseInt(rawAway, 10)) ? rawAway : parseInt(rawAway, 10);
+  const field_id = isNaN(parseInt(rawField, 10)) ? rawField : parseInt(rawField, 10);
+
+  let schedData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` }); }
+
+  let seasonData;
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
+
+  const existingGame = schedData.games.find(g => g.game_id === gameId);
+  if (!existingGame) return res.status(404).json({ error: `Game ${gameId} not found` });
+
+  const editedGame = { id: gameId, date, time, field_id, home_team_id, away_team_id, division_id: existingGame.division_id, week: existingGame.week };
+  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [], _fields: seasonData.fields || [], _divisions: seasonData.divisions || [] };
+  const violations = validateGameEdit(editedGame, schedData.games, seasonForValidation);
+  if (violations.length && !force) return res.status(409).json({ violations });
+
+  const result = applyGameFieldEdit(schedData, seasonData, gameId, { date, time, field_id, home_team_id, away_team_id }, { force });
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); }
+  catch (err) { return res.status(500).json({ error: `Could not write schedule.json: ${err.message}` }); }
+  writeChangeRecord(result.changeRecord);
+
+  res.json({ ok: true, game: result.updatedGame, violations, change: result.changeRecord });
+});
+
+// A director's manual game edit — same date/time/field/team fields as the
+// admin PUT above, but never applies directly. Ted, 2026-08-14: "they can
+// make the change, but then that change gets sent to the admin to approve
+// via a link like the others... once approved, it should notify both
+// coaches." Reason is required — it's shown to admin alongside the change
+// so they can judge it, not just rubber-stamp it.
+app.post('/api/game/:id/override-request', requireDirector, requireVerified, async (req, res) => {
+  const s = getSession(req);
+  const gameId = parseInt(req.params.id, 10);
+  const { date, time, force, reason } = req.body;
+  const rawHome = req.body.home_team_id, rawAway = req.body.away_team_id, rawField = req.body.field_id;
+  const home_team_id = isNaN(parseInt(rawHome, 10)) ? rawHome : parseInt(rawHome, 10);
+  const away_team_id = isNaN(parseInt(rawAway, 10)) ? rawAway : parseInt(rawAway, 10);
+  const field_id = isNaN(parseInt(rawField, 10)) ? rawField : parseInt(rawField, 10);
+  if (!reason || !reason.trim()) return res.status(400).json({ error: 'Explain why this needs a direct edit' });
+
+  let schedData, seasonData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read schedule.json: ${err.message}` }); }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); }
+  catch (err) { return res.status(500).json({ error: `Could not read season.json: ${err.message}` }); }
+
+  const existingGame = schedData.games.find(g => g.game_id === gameId);
+  if (!existingGame) return res.status(404).json({ error: `Game ${gameId} not found` });
+
+  if (s.role === 'director') {
+    const teams = seasonData.teams || [];
+    const homeT = teams.find(t => t.id === existingGame.home_team_id);
+    const awayT = teams.find(t => t.id === existingGame.away_team_id);
+    const owns = (homeT && canManageProgram(s, homeT.program_id)) || (awayT && canManageProgram(s, awayT.program_id));
+    if (!owns) return res.status(403).json({ error: 'You can only edit games involving one of your own program\'s teams' });
+  }
+
+  const editedGame = { id: gameId, date, time, field_id, home_team_id, away_team_id, division_id: existingGame.division_id, week: existingGame.week };
+  const seasonForValidation = { ...seasonData.season, _teams: seasonData.teams || [], _fields: seasonData.fields || [], _divisions: seasonData.divisions || [] };
+  const violations = validateGameEdit(editedGame, schedData.games, seasonForValidation);
+  if (violations.length && !force) return res.status(409).json({ violations });
+
+  const homeTeam = (seasonData.teams || []).find(t => t.id === existingGame.home_team_id);
+  const awayTeam = (seasonData.teams || []).find(t => t.id === existingGame.away_team_id);
+  const newHomeTeam = (seasonData.teams || []).find(t => t.id === home_team_id);
+  const newAwayTeam = (seasonData.teams || []).find(t => t.id === away_team_id);
+  const newFieldObj = (seasonData.fields || []).find(f => f.id === field_id);
+
+  const override = {
+    id: 'ov-' + Date.now(),
+    game_id: gameId,
+    division_id: existingGame.division_id,
+    requested_by: { name: s.name || '', email: s.email || '', program_id: s.program_id || null },
+    reason: reason.trim(),
+    before: {
+      date: existingGame.date, time: existingGame.time,
+      field_id: existingGame.field_id, field_name: existingGame.field_name, field_address: existingGame.field_address,
+      home_team_id: existingGame.home_team_id, home_team_name: existingGame.home_team_name,
+      away_team_id: existingGame.away_team_id, away_team_name: existingGame.away_team_name,
+    },
+    proposed: {
+      date, time, field_id,
+      field_name: newFieldObj ? (newFieldObj.sub_field ? `${newFieldObj.name} – ${newFieldObj.sub_field}` : newFieldObj.name) : field_id,
+      field_address: newFieldObj?.address || '',
+      home_team_id, home_team_name: newHomeTeam ? teamName(newHomeTeam) : String(home_team_id),
+      away_team_id, away_team_name: newAwayTeam ? teamName(newAwayTeam) : String(away_team_id),
+    },
+    violations, forced: !!force,
+    status: 'pending_approval',
+    submitted_at: new Date().toISOString(), responded_at: null,
+    tokens: { approve: newActionToken(), reject: newActionToken() },
+  };
+  const list = readGameOverrides();
+  list.push(override);
+  writeGameOverrides(list);
+
+  if (!ADMIN_EMAIL) return res.json({ ok: true, pending: true, override, warning: 'No admin email configured — nothing was sent.' });
+
+  const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/game-overrides/${override.id}`;
+  const approveUrl = `${base}/approve?token=${override.tokens.approve}`;
+  const rejectUrl = `${base}/reject?token=${override.tokens.reject}`;
+  const subject = `${override.before.home_team_name} vs ${override.before.away_team_name}: director override needs approval`;
+  const violationsHtml = violations.length
+    ? emailP(`<strong>Rules this bypasses (forced through):</strong><br>${violations.map(v => emailEsc(v)).join('<br>')}`)
+    : '';
+  const html = emailShell(`
+    ${emailHeading(subject)}
+    ${emailP(`${emailEsc(override.requested_by.name || override.requested_by.email)} used the manual game editor on Game #${gameId} and needs your approval before it takes effect.`)}
+    ${emailGameCard({ homeLabel: override.before.home_team_name, awayLabel: override.before.away_team_name, date: override.before.date, time: override.before.time, fieldName: override.before.field_name, fieldAddress: override.before.field_address, fieldCoordinates: fieldCoordinatesOf(override.before.field_id, seasonData.fields), caption: 'Currently scheduled' })}
+    ${emailGameCard({ homeLabel: override.proposed.home_team_name, awayLabel: override.proposed.away_team_name, date: override.proposed.date, time: override.proposed.time, fieldName: override.proposed.field_name, fieldAddress: override.proposed.field_address, fieldCoordinates: fieldCoordinatesOf(override.proposed.field_id, seasonData.fields), caption: 'Director proposed' })}
+    ${emailP(`<strong>Reason given:</strong> ${emailEsc(override.reason)}`)}
+    ${violationsHtml}
+    <div style="margin:18px 0 4px">${emailButton(approveUrl, 'Approve — apply the change')}${emailButton(rejectUrl, 'Reject', 'secondary')}</div>
+    ${emailP('Approving notifies both coaches by email. Rejecting notifies the director; nothing changes.')}
+  `);
+  const result = await sendEmail({
+    to: ADMIN_EMAIL,
+    subject,
+    text: [
+      `${override.requested_by.name || override.requested_by.email} used the manual game editor on Game #${gameId} and needs your approval.`,
+      '',
+      `Currently: ${describeSlot({ date: override.before.date, time: override.before.time, field_id: override.before.field_id }, seasonData.fields)} — ${override.before.home_team_name} vs ${override.before.away_team_name}`,
+      `Proposed: ${describeSlot({ date: override.proposed.date, time: override.proposed.time, field_id: override.proposed.field_id }, seasonData.fields)} — ${override.proposed.home_team_name} vs ${override.proposed.away_team_name}`,
+      `Reason: ${override.reason}`,
+      violations.length ? `Bypasses: ${violations.join('; ')}` : null,
+      '',
+      `Approve: ${approveUrl}`,
+      `Reject: ${rejectUrl}`,
+      '', '— Eastlake Scheduler',
+    ].filter(l => l !== null).join('\n'),
+    html,
+  });
+  if (!result.ok) return res.status(500).json({ error: 'Could not send the approval email', reason: result.reason });
+  res.json({ ok: true, pending: true, override });
+});
+
+function gameOverrideByToken(id, token, tokenKey) {
+  const list = readGameOverrides();
+  const idx = list.findIndex(o => o.id === id);
+  if (idx === -1) return null;
+  const override = list[idx];
+  if (override.status !== 'pending_approval') return null;
+  if (!token || override.tokens?.[tokenKey] !== token) return null;
+  return { list, idx, override };
+}
+
+app.get('/api/game-overrides/:id/approve', async (req, res) => {
+  const found = gameOverrideByToken(req.params.id, req.query.token, 'approve');
+  if (!found) return crAlreadyResolved(res);
+  const { list, idx, override } = found;
+
+  let schedData, seasonData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [], fields: [] }; }
+
+  const result = applyGameFieldEdit(schedData, seasonData, override.game_id, override.proposed, {
+    force: override.forced,
+    extra: { director_override: true, override_id: override.id, requested_by: override.requested_by, reason: override.reason, approved_by: 'admin' },
+  });
+  if (!result) return res.send(crActionPage('Game not found', 'This game no longer exists — nothing was changed.'));
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
+  writeChangeRecord(result.changeRecord);
+
+  override.status = 'approved';
+  override.responded_at = new Date().toISOString();
+  list[idx] = override;
+  writeGameOverrides(list);
+
+  const subject = `${result.updatedGame.home_team_name} vs ${result.updatedGame.away_team_name}: game changed by your director`;
+  const notifyHtml = emailShell(`
+    ${emailHeading(subject)}
+    ${emailP(`${emailEsc(override.requested_by.name || 'Your director')} changed this game directly, and admin has approved it.`)}
+    ${emailGameCard({ homeLabel: override.before.home_team_name, awayLabel: override.before.away_team_name, date: override.before.date, time: override.before.time, fieldName: override.before.field_name, fieldAddress: override.before.field_address, fieldCoordinates: fieldCoordinatesOf(override.before.field_id, seasonData.fields), caption: 'Was scheduled' })}
+    ${emailGameCard({ homeLabel: result.updatedGame.home_team_name, awayLabel: result.updatedGame.away_team_name, date: result.updatedGame.date, time: result.updatedGame.time, fieldName: result.updatedGame.field_name, fieldAddress: result.updatedGame.field_address, fieldCoordinates: fieldCoordinatesOf(result.updatedGame.field_id, seasonData.fields), caption: 'Now scheduled' })}
+    ${emailP(`<strong>Reason given:</strong> ${emailEsc(override.reason)}`)}
+  `);
+  const notifyText = [
+    `${override.requested_by.name || 'Your director'} changed Game #${override.game_id} directly, and admin has approved it.`,
+    '',
+    `Was: ${describeSlot({ date: override.before.date, time: override.before.time, field_id: override.before.field_id }, seasonData.fields)}`,
+    `Now: ${describeSlot({ date: result.updatedGame.date, time: result.updatedGame.time, field_id: result.updatedGame.field_id }, seasonData.fields)}`,
+    `Reason: ${override.reason}`,
+    '', '— Eastlake Scheduler',
+  ].join('\n');
+  const recipients = [result.homeTeam?.email, result.awayTeam?.email].filter(Boolean);
+  if (recipients.length) {
+    await sendEmail({ to: recipients, subject, text: notifyText, html: notifyHtml });
+  }
+
+  res.send(crActionPage('Approved and applied',
+    `Game #${override.game_id} has been updated. Both coaches have been emailed.`));
+});
+
+app.get('/api/game-overrides/:id/reject', async (req, res) => {
+  const found = gameOverrideByToken(req.params.id, req.query.token, 'reject');
+  if (!found) return crAlreadyResolved(res);
+  const { list, idx, override } = found;
+
+  override.status = 'rejected';
+  override.responded_at = new Date().toISOString();
+  list[idx] = override;
+  writeGameOverrides(list);
+
+  if (override.requested_by.email) {
+    const subject = `Game #${override.game_id}: your override request was not approved`;
+    await sendEmail({
+      to: override.requested_by.email,
+      subject,
+      text: [
+        `Admin did not approve your direct edit for Game #${override.game_id}.`,
+        `Your reason: ${override.reason}`,
+        '',
+        'Nothing changed — the game is still as it was. Reach out to admin if you want to follow up.',
+        '', '— Eastlake Scheduler',
+      ].join('\n'),
+      html: emailShell(`
+        ${emailHeading(subject)}
+        ${emailP(`Admin did not approve your direct edit for Game #${override.game_id}.`)}
+        ${emailP(`<strong>Your reason:</strong> ${emailEsc(override.reason)}`)}
+        ${emailP('Nothing changed — the game is still as it was. Reach out to admin if you want to follow up.')}
+      `),
+    });
+  }
+
+  res.send(crActionPage('Rejected', `Game #${override.game_id} was not changed. The director has been notified.`));
 });
 
 // Rain-out reschedule: cancels the original game in place (kept in

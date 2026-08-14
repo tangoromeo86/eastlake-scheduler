@@ -147,12 +147,22 @@
        game past the back-to-back/weekly-cap rules when there's a real reason
        to, with the violation shown plainly; coaches never get this. Scoped
        server-side to games touching at least one of the director's own
-       program's teams. -->
+       program's teams.
+
+       Editing an EXISTING game (not adding a new one) no longer applies
+       directly for a director — Ted, 2026-08-14: "requires admin approval
+       to be used... routing it through admin should be made clear to the
+       director as they do it, this ensures directors are not abusing their
+       power." A director's edit is sent to admin for approval instead;
+       admin (still direct, unchanged) keeps applying immediately. -->
   <div id="dge-modal" class="modal-overlay hidden">
     <div class="modal">
       <div class="modal-header">
         <h3 id="dge-title">Add Game</h3>
         <button id="dge-close" class="modal-close">&times;</button>
+      </div>
+      <div id="dge-approval-notice" class="field-form-hint hidden" style="margin:0 20px 12px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;color:#92400e">
+        This edit won't take effect right away — it goes to the league admin for approval first. Both coaches will be emailed once it's approved.
       </div>
       <div id="dge-body-fields" class="modal-body">
         <div class="modal-row" id="dge-division-row">
@@ -173,6 +183,11 @@
         <div class="modal-row">
           <label>Home Team<select id="dge-home"></select></label>
           <label>Away Team<select id="dge-away"></select></label>
+        </div>
+        <div class="modal-row" id="dge-reason-row">
+          <label>Why do you need to edit this directly? <span class="field-form-hint">(sent to admin along with the change)</span>
+            <textarea id="dge-reason" rows="2" placeholder="e.g. Field double-booked by the park district, coaches already agreed by phone"></textarea>
+          </label>
         </div>
       </div>
       <div id="dge-suggest-panel" class="suggest-panel hidden"></div>

@@ -65,7 +65,7 @@ fail() { echo "  ** FAIL: $1"; FAILURES=$((FAILURES+1)); }
 FAILURES=0
 
 # Reset all generated state so every run starts from an identical clean season.
-rm -f "$REPO"/schedule.json "$REPO"/change_requests.json "$REPO"/changes.json "$REPO"/activity_log.json "$REPO"/*.backup-*.json 2>/dev/null
+rm -f "$REPO"/schedule.json "$REPO"/change_requests.json "$REPO"/changes.json "$REPO"/game_overrides.json "$REPO"/activity_log.json "$REPO"/*.backup-*.json 2>/dev/null
 rm -rf "$REPO"/snapshots 2>/dev/null
 python3 - <<'SEED'
 import json, datetime, os
@@ -672,11 +672,13 @@ ADMINSUB=$(curl -s -b admin.txt -X POST "$BASE/api/games/$SGID/result" -H "$J" -
 
 echo
 echo "=============================================="
-echo "STEP 9d — Director's manual game editor: scoped force authority"
+echo "STEP 9d — Director's manual game editor: admin-approved override"
 echo "=============================================="
 # Ted, 2026-08-04: directors (and admin) can force a game past the rules a
 # coach can never bypass — scoped to games touching one of their own
 # program's teams. dana directs Chardon (T1, T3); mike directs Munson (T2).
+# Ted, 2026-08-14: a director's edit no longer applies directly — it goes
+# to admin for approval first, and both coaches are notified once approved.
 # Prefer a T1-vs-T3 game specifically (both dana's), so the outsider-403
 # check below actually has an outsider to test against rather than being
 # skipped depending on which untouched game happens to come up first.
@@ -700,21 +702,30 @@ if [ -n "$EGID" ]; then
   OWNER="dana.txt"
   T1T3_ONLY=$([ "$EHOME" != "$T2" ] && [ "$EAWAY" != "$T2" ] && echo yes || echo no)
 
-  # Coaches never get this at all, regardless of which game.
-  COACHTRY=$(curl -s -o /dev/null -w "%{http_code}" -b coacha.txt -X PUT "$BASE/api/game/$EGID" -H "$J" -d "{\"date\":\"2026-09-01\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\"}")
+  # The direct PUT is admin-only now — a director hitting it at all (not
+  # just an outsider) must be refused, closing the "silent edit" loophole.
+  DIRECTPUT=$(curl -s -o /dev/null -w "%{http_code}" -b "$OWNER" -X PUT "$BASE/api/game/$EGID" -H "$J" -d "{\"date\":\"2026-09-01\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\"}")
+  [ "$DIRECTPUT" = "403" ] && pass "the direct PUT is admin-only now — even the owning director is refused (403)" || fail "expected 403 for a director on the direct PUT, got $DIRECTPUT"
+
+  # Coaches never get either the direct PUT or the override-request route.
+  COACHTRY=$(curl -s -o /dev/null -w "%{http_code}" -b coacha.txt -X POST "$BASE/api/game/$EGID/override-request" -H "$J" -d "{\"date\":\"2026-09-01\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\",\"reason\":\"n/a\"}")
   [ "$COACHTRY" = "403" ] && pass "a coach session cannot touch the manual game editor at all (403)" || fail "expected 403 for a coach, got $COACHTRY"
 
   if [ "$T1T3_ONLY" = "yes" ]; then
-    OUTTRY=$(curl -s -o /dev/null -w "%{http_code}" -b mike.txt -X PUT "$BASE/api/game/$EGID" -H "$J" -d "{\"date\":\"2026-09-01\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\"}")
+    OUTTRY=$(curl -s -o /dev/null -w "%{http_code}" -b mike.txt -X POST "$BASE/api/game/$EGID/override-request" -H "$J" -d "{\"date\":\"2026-09-01\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\",\"reason\":\"n/a\"}")
     [ "$OUTTRY" = "403" ] && pass "a director with no stake in this game is refused (403)" || fail "expected 403 for an unrelated director, got $OUTTRY"
   else
     echo "  (skipped outsider-director check: this game involves T2, so both fixture directors legitimately have a stake in it)"
   fi
 
+  # A reason is required — it's shown to admin alongside the change.
+  NOREASON=$(curl -s -o /dev/null -w "%{http_code}" -b "$OWNER" -X POST "$BASE/api/game/$EGID/override-request" -H "$J" -d "{\"date\":\"2026-09-01\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\"}")
+  [ "$NOREASON" = "400" ] && pass "a reason is required to submit an override request (400 without one)" || fail "expected 400 with no reason, got $NOREASON"
+
   # Force flow: violate the weekly cap on purpose (same date as an already-
   # recorded game for this team forces a same-day/consecutive-day violation),
-  # confirm it's refused without force, then forced through with a clear
-  # violation list.
+  # confirm it's refused without force, then submitted-for-approval with a
+  # clear violation list once forced.
   CONFLICT_DATE=$(python3 -c "
 import json
 d=json.load(open('$SCHED'))
@@ -722,14 +733,90 @@ g=[x for x in d['games'] if x['home_team_id'] in ('$EHOME','$EAWAY') or x['away_
 g=[x for x in g if x['game_id']!=$EGID]
 print(g[0]['date'] if g else '')")
   if [ -n "$CONFLICT_DATE" ]; then
-    NOFORCE=$(curl -s -w "|%{http_code}" -b "$OWNER" -X PUT "$BASE/api/game/$EGID" -H "$J" -d "{\"date\":\"$CONFLICT_DATE\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\"}")
+    NOFORCE=$(curl -s -w "|%{http_code}" -b "$OWNER" -X POST "$BASE/api/game/$EGID/override-request" -H "$J" -d "{\"date\":\"$CONFLICT_DATE\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\",\"reason\":\"Testing the force flow\"}")
     NOFORCE_CODE=$(echo "$NOFORCE" | sed 's/.*|//')
     NOFORCE_BODY=$(echo "$NOFORCE" | sed 's/|[0-9]*$//')
     HASVIOL=$(echo "$NOFORCE_BODY" | python3 -c "import sys,json;print(len(json.load(sys.stdin).get('violations',[]))>0)" 2>/dev/null)
-    [ "$NOFORCE_CODE" = "409" ] && [ "$HASVIOL" = "True" ] && pass "director's edit is refused with a clear violation list, not silently allowed" || fail "expected 409+violations, got $NOFORCE_CODE: $NOFORCE_BODY"
+    [ "$NOFORCE_CODE" = "409" ] && [ "$HASVIOL" = "True" ] && pass "director's override request is refused with a clear violation list, not silently allowed" || fail "expected 409+violations, got $NOFORCE_CODE: $NOFORCE_BODY"
 
-    FORCED=$(curl -s -b "$OWNER" -X PUT "$BASE/api/game/$EGID" -H "$J" -d "{\"date\":\"$CONFLICT_DATE\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\",\"force\":true}" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('ok'), d.get('change',{}).get('forced'))")
-    [ "$FORCED" = "True True" ] && pass "the owning director can force it through anyway, and it's recorded as forced" || fail "force flow = $FORCED"
+    OV_FILE="$REPO"/game_overrides.json
+    python3 -c "import json;d=json.load(open('$SCHED'));json.dump([x for x in d['games'] if x['game_id']==$EGID][0], open('$WORK/before_game.json','w'))"
+
+    # No real RESEND_API_KEY in this env, so the approval-email step 500s —
+    # same known limitation as every other change-request route in this
+    # suite. The override record is written *before* that email is attempted
+    # (same ordering as change_requests.json elsewhere), so check the file
+    # actually gained a new pending record rather than trusting the HTTP
+    # response body, which is an error response here, not {pending:true}.
+    OV_COUNT_BEFORE=$([ -f "$OV_FILE" ] && python3 -c "import json;print(len(json.load(open('$OV_FILE'))))" || echo 0)
+    curl -s -o /dev/null -b "$OWNER" -X POST "$BASE/api/game/$EGID/override-request" -H "$J" -d "{\"date\":\"$CONFLICT_DATE\",\"time\":\"18:00\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\",\"force\":true,\"reason\":\"Field double-booked by the park district\"}"
+    OV_COUNT_AFTER=$(python3 -c "import json;print(len(json.load(open('$OV_FILE'))))")
+    [ "$OV_COUNT_AFTER" -gt "$OV_COUNT_BEFORE" ] && pass "a forced director edit is sent for approval, not applied on the spot" || fail "no override record was created ($OV_COUNT_BEFORE -> $OV_COUNT_AFTER)"
+
+    STILL_SAME=$(python3 -c "
+import json
+d=json.load(open('$SCHED'))
+before=json.load(open('$WORK/before_game.json'))
+now=[x for x in d['games'] if x['game_id']==$EGID][0]
+print(now['date']==before['date'] and now['time']==before['time'])")
+    [ "$STILL_SAME" = "True" ] && pass "the game itself is untouched while the override is pending" || fail "game changed before admin approved anything"
+
+    OV_ID=$(python3 -c "import json;d=json.load(open('$OV_FILE'));print(d[-1]['id'])")
+    OV_STATUS=$(python3 -c "import json;d=json.load(open('$OV_FILE'));print(d[-1]['status'])")
+    OV_FORCED=$(python3 -c "import json;d=json.load(open('$OV_FILE'));print(d[-1]['forced'])")
+    OV_REASON=$(python3 -c "import json;d=json.load(open('$OV_FILE'));print(d[-1]['reason'])")
+    [ "$OV_STATUS" = "pending_approval" ] && [ "$OV_FORCED" = "True" ] && [ "$OV_REASON" = "Field double-booked by the park district" ] && \
+      pass "the pending override record has the right status, forced flag, and reason" || fail "override record status=$OV_STATUS forced=$OV_FORCED reason=$OV_REASON"
+
+    ADMIN_MAIL_HTML=$(wait_for_log "DEBUG_EMAIL_HTML:.*director override needs approval")
+    [[ "$ADMIN_MAIL_HTML" == *"Approve"* && "$ADMIN_MAIL_HTML" == *"Reject"* ]] && \
+      pass "admin's approval email has both Approve and Reject actions" || fail "admin email missing an action: $ADMIN_MAIL_HTML"
+    [[ "$ADMIN_MAIL_HTML" == *"Field double-booked"* ]] && pass "admin's approval email shows the director's reason" || fail "reason missing from admin email"
+
+    REJECT_TOK=$(python3 -c "import json;d=json.load(open('$OV_FILE'));o=[x for x in d if x['id']=='$OV_ID'][0];print(o['tokens']['reject'])")
+
+    # Reject path first — confirms rejecting genuinely leaves the game alone
+    # and tells the director, before testing the approve path for real.
+    curl -s -o /dev/null "$BASE/api/game-overrides/$OV_ID/reject?token=$REJECT_TOK"
+    REJ_STATUS=$(python3 -c "import json;d=json.load(open('$OV_FILE'));o=[x for x in d if x['id']=='$OV_ID'][0];print(o['status'])")
+    [ "$REJ_STATUS" = "rejected" ] && pass "admin rejecting sets the override's status to rejected" || fail "status after reject = $REJ_STATUS"
+    STILL_SAME2=$(python3 -c "
+import json
+d=json.load(open('$SCHED'))
+before=json.load(open('$WORK/before_game.json'))
+now=[x for x in d['games'] if x['game_id']==$EGID][0]
+print(now['date']==before['date'] and now['time']==before['time'])")
+    [ "$STILL_SAME2" = "True" ] && pass "a rejected override never touches the game" || fail "game changed despite being rejected"
+    REJ_MAIL=$(wait_for_log "DEBUG_EMAIL_TO:.*not approved")
+    [[ "$REJ_MAIL" == *"dana@example.com"* ]] && pass "the requesting director is emailed when their override is rejected" || fail "no rejection email to the director: $REJ_MAIL"
+
+    # Using the SAME (already-resolved) token again must not re-apply anything.
+    REUSE=$(curl -s "$BASE/api/game-overrides/$OV_ID/reject?token=$REJECT_TOK")
+    [[ "$REUSE" == *"Already resolved"* ]] && pass "a resolved override's token can't be replayed" || fail "replayed reject token: $REUSE"
+
+    # Now the approve path, on a fresh (non-conflicting, non-forced) request —
+    # EGID's own original date (not CONFLICT_DATE, which by definition still
+    # double-books this team on whatever time it's given).
+    ORIG_DATE=$(python3 -c "import json;print(json.load(open('$WORK/before_game.json'))['date'])")
+    OV_COUNT_BEFORE2=$(python3 -c "import json;print(len(json.load(open('$OV_FILE'))))")
+    curl -s -o /dev/null -b "$OWNER" -X POST "$BASE/api/game/$EGID/override-request" -H "$J" -d "{\"date\":\"$ORIG_DATE\",\"time\":\"11:30\",\"field_id\":\"$F1\",\"home_team_id\":\"$EHOME\",\"away_team_id\":\"$EAWAY\",\"reason\":\"Coaches agreed on a later kickoff\"}"
+    OV_COUNT_AFTER2=$(python3 -c "import json;print(len(json.load(open('$OV_FILE'))))")
+    [ "$OV_COUNT_AFTER2" -gt "$OV_COUNT_BEFORE2" ] && pass "a second override request (no violations this time) is also sent for approval" || fail "no second override record was created ($OV_COUNT_BEFORE2 -> $OV_COUNT_AFTER2)"
+    OV2_ID=$(python3 -c "import json;d=json.load(open('$OV_FILE'));print(d[-1]['id'])")
+    APPROVE_TOK2=$(python3 -c "import json;d=json.load(open('$OV_FILE'));print(d[-1]['tokens']['approve'])")
+
+    curl -s -o /dev/null "$BASE/api/game-overrides/$OV2_ID/approve?token=$APPROVE_TOK2"
+    APPROVED_TIME=$(python3 -c "import json;d=json.load(open('$SCHED'));print([x for x in d['games'] if x['game_id']==$EGID][0]['time'])")
+    [ "$APPROVED_TIME" = "11:30" ] && pass "approving actually applies the game edit (time now 11:30)" || fail "game time after approval = $APPROVED_TIME"
+    OV2_STATUS=$(python3 -c "import json;d=json.load(open('$OV_FILE'));o=[x for x in d if x['id']=='$OV2_ID'][0];print(o['status'])")
+    [ "$OV2_STATUS" = "approved" ] && pass "the override record itself is marked approved" || fail "status after approve = $OV2_STATUS"
+
+    NOTIFY_MAIL=$(wait_for_log "DEBUG_EMAIL_TO:.*game changed by your director")
+    [[ "$NOTIFY_MAIL" == *"coacha@example.com"* ]] && pass "the home team's coach is notified once approved" || fail "home coach missing from notify email: $NOTIFY_MAIL"
+    [[ "$NOTIFY_MAIL" == *","* ]] && pass "both coaches are on the approval-notification email (comma-joined recipients)" || fail "only one recipient on notify email: $NOTIFY_MAIL"
+
+    DIROVR_FLAG=$(python3 -c "import json;d=json.load(open('$REPO/changes.json'));print(d[-1].get('director_override'))")
+    [ "$DIROVR_FLAG" = "True" ] && pass "the applied change is recorded as a director override, not a plain admin edit" || fail "changes.json director_override flag = $DIROVR_FLAG"
   else
     echo "  (skipped force-flow check: no second game found for this team to create a real conflict)"
   fi

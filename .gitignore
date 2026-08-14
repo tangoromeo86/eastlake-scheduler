@@ -2,6 +2,7 @@ node_modules/
 schedule.json
 season.json
 change_requests.json
+game_overrides.json
 activity_log.json
 field_distances.json
 snapshots/
