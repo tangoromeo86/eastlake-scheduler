@@ -1856,6 +1856,17 @@ function fieldAddressOf(fieldId, fields) {
   return (fields || []).find(x => String(x.id) === String(fieldId))?.address || '';
 }
 
+function fieldCoordinatesOf(fieldId, fields) {
+  return (fields || []).find(x => String(x.id) === String(fieldId))?.coordinates || '';
+}
+
+// Same Google Maps URL shape the admin/public UI already links to
+// (app.js/viewer.js's mapLink) — "t=k" for satellite view, which reads a
+// field's actual layout better than the default map tiles.
+function fieldMapUrl(coordinates) {
+  return coordinates ? `https://www.google.com/maps?q=${encodeURIComponent(coordinates)}&t=k` : '';
+}
+
 function niceDate(dateStr) {
   const d = new Date(dateStr + 'T12:00:00Z');
   return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
@@ -1894,13 +1905,14 @@ function emailButton(url, label, kind) {
 // The recurring "here's the game" block — division/teams/current time & place.
 // gameOrSlot accepts either a full game record or a {date,time,field_id} slot
 // (the two shapes that show up at different points in the negotiation).
-function emailGameCard({ homeLabel, awayLabel, date, time, fieldName, fieldAddress, caption }) {
+function emailGameCard({ homeLabel, awayLabel, date, time, fieldName, fieldAddress, fieldCoordinates, caption }) {
+  const mapUrl = fieldMapUrl(fieldCoordinates);
   return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:0 0 14px">
     ${caption ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#94a3b8;margin-bottom:6px">${emailEsc(caption)}</div>` : ''}
     <div style="font-size:14px;font-weight:600;color:#1a1a2e;margin-bottom:4px">${emailEsc(homeLabel)} vs ${emailEsc(awayLabel)}</div>
     <div style="font-size:13px;color:#475569;line-height:1.6">
       ${emailEsc(niceDate(date))} at ${emailEsc(time)}<br>
-      ${emailEsc(fieldName || '')}${fieldAddress ? ` — ${emailEsc(fieldAddress)}` : ''}
+      ${emailEsc(fieldName || '')}${fieldAddress ? ` — ${emailEsc(fieldAddress)}` : ''}${mapUrl ? ` — <a href="${mapUrl}" style="color:#2d6cf0;text-decoration:none">Map</a>` : ''}
     </div>
   </div>`;
 }
@@ -1978,7 +1990,7 @@ async function notifyTurn(req, cr, seasonData, game) {
     const html = emailShell(`
       ${emailHeading(subject)}
       ${emailP(`${emailEsc(proposerName)} moved this game to a different field — same date and time, just a nearby field. Nothing for you to approve, just let us know you've seen it so you know where to go.`)}
-      ${emailGameCard({ homeLabel: game?.home_team_name || 'Home', awayLabel: game?.away_team_name || 'Away', date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: 'New field' })}
+      ${emailGameCard({ homeLabel: game?.home_team_name || 'Home', awayLabel: game?.away_team_name || 'Away', date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), fieldCoordinates: fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields), caption: 'New field' })}
       ${cr.reason ? emailP(`<strong>Note from ${emailEsc(proposerName)}:</strong> ${emailEsc(cr.reason)}`) : ''}
       ${emailContactCard(proposingTeam, `${proposerName}`)}
       <div style="margin:18px 0 4px">${emailButton(ackUrl, 'Got it — acknowledge')}</div>
@@ -1991,6 +2003,7 @@ async function notifyTurn(req, cr, seasonData, game) {
         `${proposerName} moved Game #${cr.game_id} to a different field — same date and time, just a nearby field.`,
         '',
         `New field: ${describeSlot(cr.proposal, seasonData.fields)}`,
+        fieldMapUrl(fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields)) ? `Map: ${fieldMapUrl(fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields))}` : null,
         cr.reason ? `Reason: ${cr.reason}` : null,
         '',
         proposingTeam ? `${proposerName} — ${[proposingTeam.phone, proposingTeam.email].filter(Boolean).join(' · ')}` : null,
@@ -2014,8 +2027,8 @@ async function notifyTurn(req, cr, seasonData, game) {
   const html = emailShell(`
     ${emailHeading(subject)}
     ${emailP(`${emailEsc(proposerName)} ${cr.is_rainout ? (isCounter ? 'has proposed a different makeup time' : 'reported this game as rained out and proposed a makeup time') : (isCounter ? 'has proposed a different time' : 'has requested a change')} for this game.`)}
-    ${game ? emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Currently scheduled' }) : ''}
-    ${emailGameCard({ homeLabel: game?.home_team_name || 'Home', awayLabel: game?.away_team_name || 'Away', date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_rainout ? 'Proposed makeup' : 'Proposed instead' })}
+    ${game ? emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, fieldCoordinates: fieldCoordinatesOf(game.field_id, seasonData.fields), caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Currently scheduled' }) : ''}
+    ${emailGameCard({ homeLabel: game?.home_team_name || 'Home', awayLabel: game?.away_team_name || 'Away', date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), fieldCoordinates: fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_rainout ? 'Proposed makeup' : 'Proposed instead' })}
     ${cr.reason ? emailP(`<strong>Note from ${emailEsc(proposerName)}:</strong> ${emailEsc(cr.reason)}`) : ''}
     ${emailContactCard(proposingTeam, `${proposerName} (proposing)`)}
     <div style="margin:18px 0 4px">${emailButton(approveUrl, 'Works for us — approve it')}${emailButton(counterUrl, 'Suggest another time', 'secondary')}</div>
@@ -2060,7 +2073,7 @@ async function notifyNoOptions(req, cr, seasonData, context, game) {
   const html = emailShell(`
     ${emailHeading(subject)}
     ${emailP(emailEsc(context))}
-    ${game ? emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: 'Currently scheduled' }) : emailP(`Game #${cr.game_id}: ${emailEsc(nameOf(cr.initiating_team_id))} vs ${emailEsc(nameOf(cr.other_team_id))}`)}
+    ${game ? emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, fieldCoordinates: fieldCoordinatesOf(game.field_id, seasonData.fields), caption: 'Currently scheduled' }) : emailP(`Game #${cr.game_id}: ${emailEsc(nameOf(cr.initiating_team_id))} vs ${emailEsc(nameOf(cr.other_team_id))}`)}
     ${emailContactCard(homeTeam)}
     ${emailContactCard(awayTeam)}
     ${emailP(`There is no date that satisfies both teams' stated availability, their fields' open hours, and the rest of the schedule. Usually this means one team's availability needs updating, or a field needs to open up.`)}
@@ -2189,8 +2202,8 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
     ${cr.is_rainout
       ? emailP(`Reporting this game as rained out and proposing a makeup below. Nothing reaches ${emailEsc(otherTeam?.label || otherTeam?.name || 'the other coach')} until you confirm.`)
       : emailP(`Did you mean to request a schedule change for this game? Nothing reaches ${emailEsc(otherTeam?.label || otherTeam?.name || 'the other coach')} until you confirm below.`)}
-    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Currently scheduled' })}
-    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_rainout ? 'Proposed makeup' : 'You proposed' })}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, fieldCoordinates: fieldCoordinatesOf(game.field_id, seasonData.fields), caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Currently scheduled' })}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), fieldCoordinates: fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_rainout ? 'Proposed makeup' : 'You proposed' })}
     ${cr.reason ? emailP(`<strong>Your note:</strong> ${emailEsc(cr.reason)}`) : ''}
     <div style="margin:18px 0 4px">${emailButton(confirmUrl, 'Yes, send it to the other coach')}${emailButton(cancelUrl, 'No, cancel', 'secondary')}</div>
     ${emailP('If you ignore this, nothing happens — the request never reaches the other coach.')}
@@ -2294,8 +2307,8 @@ app.post('/api/change-requests/field', requireVerified, async (req, res) => {
   const confirmHtml = emailShell(`
     ${emailHeading(confirmSubject)}
     ${emailP(`Did you mean to move this game to a different field? Since it's the same date and time — just a nearby field — ${emailEsc(otherTeam?.label || otherTeam?.name || 'the other coach')} doesn't need to approve it, they'll just be notified. Nothing reaches them until you confirm below.`)}
-    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: 'Currently scheduled' })}
-    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: 'New field' })}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, fieldCoordinates: fieldCoordinatesOf(game.field_id, seasonData.fields), caption: 'Currently scheduled' })}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), fieldCoordinates: fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields), caption: 'New field' })}
     ${cr.reason ? emailP(`<strong>Your note:</strong> ${emailEsc(cr.reason)}`) : ''}
     <div style="margin:18px 0 4px">${emailButton(confirmUrl, 'Yes, notify the other coach')}${emailButton(cancelUrl, 'No, cancel', 'secondary')}</div>
     ${emailP('If you ignore this, nothing happens — the field never changes and the other coach is never notified.')}
@@ -2308,6 +2321,7 @@ app.post('/api/change-requests/field', requireVerified, async (req, res) => {
       '',
       `Currently: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}`,
       `New field: ${describeSlot(cr.proposal, seasonData.fields)}`,
+      fieldMapUrl(fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields)) ? `Map: ${fieldMapUrl(fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields))}` : null,
       cr.reason ? `Reason: ${cr.reason}` : null,
       '',
       `Yes, notify the other coach: ${confirmUrl}`,
@@ -2644,8 +2658,8 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
       const refHtml = emailShell(`
         ${emailHeading(refSubject)}
         ${emailP(`Both coaches agreed to ${cr.is_rainout ? 'a rain-out makeup' : 'move'} Game #${cr.game_id}. This is a home game for your program, so referees booked for the original time will need to be moved.`)}
-        ${emailGameCard({ homeLabel: beforeGame.home_team_name, awayLabel: beforeGame.away_team_name, date: beforeGame.date, time: beforeGame.time, fieldName: beforeGame.field_name, fieldAddress: beforeGame.field_address, caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Original' })}
-        ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, caption: cr.is_rainout ? 'Makeup game' : 'New date & time' })}
+        ${emailGameCard({ homeLabel: beforeGame.home_team_name, awayLabel: beforeGame.away_team_name, date: beforeGame.date, time: beforeGame.time, fieldName: beforeGame.field_name, fieldAddress: beforeGame.field_address, fieldCoordinates: fieldCoordinatesOf(beforeGame.field_id, seasonData.fields), caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Original' })}
+        ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, fieldCoordinates: fieldCoordinatesOf(updatedGame.field_id, seasonData.fields), caption: cr.is_rainout ? 'Makeup game' : 'New date & time' })}
       `);
       await sendEmail({
         to: homeDirector.email,
@@ -2674,7 +2688,7 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
     const lockedHtml = emailShell(`
       ${emailHeading(lockedSubject)}
       ${emailP(cr.is_rainout ? 'The makeup date was accepted. Game #' + cr.game_id + ' is cancelled and this is now on the schedule.' : 'Your proposed time was accepted. The schedule has been updated.')}
-      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, caption: cr.is_rainout ? 'Makeup game' : 'New date & time' })}
+      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, fieldCoordinates: fieldCoordinatesOf(updatedGame.field_id, seasonData.fields), caption: cr.is_rainout ? 'Makeup game' : 'New date & time' })}
       ${emailContactCard(otherTeamForProposer, `${otherTeamForProposer?.label || otherTeamForProposer?.name || 'The other coach'} (in case anything else needs sorting out)`)}
     `);
     await sendEmail({
@@ -2863,8 +2877,8 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
       ${emailP(is_rainout
         ? `${emailEsc(requesterName)} reported this game rained out and arranged a makeup directly (inside the 7-day window, by phone/text).`
         : `${emailEsc(requesterName)} changed this game directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`)}
-      ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, caption: is_rainout ? 'Rained out — was scheduled' : 'Original' })}
-      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, caption: is_rainout ? 'Makeup game' : 'New' })}
+      ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, fieldCoordinates: fieldCoordinatesOf(game.field_id, seasonData.fields), caption: is_rainout ? 'Rained out — was scheduled' : 'Original' })}
+      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, fieldCoordinates: fieldCoordinatesOf(updatedGame.field_id, seasonData.fields), caption: is_rainout ? 'Makeup game' : 'New' })}
       ${emailP(`<strong>Confirmed with:</strong> ${emailEsc(cr.manual_override.who)}<br><strong>How:</strong> ${emailEsc(cr.manual_override.how)}`)}
       ${emailContactCard(requestingTeam, `${requesterName} (made this change)`)}
     `);
@@ -4264,7 +4278,7 @@ async function checkEscalations() {
             ${emailP(cr.is_field_change
               ? `${emailEsc(awaitingTeam?.label || 'One of your coaches')} hasn't acknowledged a field change yet.`
               : `${emailEsc(awaitingTeam?.label || 'One of your coaches')} missed their deadline to respond.`)}
-            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_field_change ? 'New field — already in effect' : `Proposed by ${proposingTeam?.label || 'the other coach'}` })}
+            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), fieldCoordinates: fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_field_change ? 'New field — already in effect' : `Proposed by ${proposingTeam?.label || 'the other coach'}` })}
             ${emailP(`Round ${cr.round} — they had ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (due ${emailEsc(formatDeadline(cr.response_due_at))}), now ${daysElapsed} days on.`)}
             ${emailContactCard(awaitingTeam)}
             ${emailP(nudgeText)}
@@ -4298,7 +4312,7 @@ async function checkEscalations() {
             ${emailP(cr.is_field_change
               ? `A field change has gone unacknowledged for ${daysElapsed} days (director already notified). The field already changed — this is just about making sure the other team knows.`
               : `A proposed time has gone unanswered for ${daysElapsed} days (director already notified).`)}
-            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_field_change ? 'New field — already in effect' : `Proposed by ${nameOf(cr.proposing_team_id)} — waiting on ${nameOf(cr.awaiting_team_id)}` })}
+            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), fieldCoordinates: fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields), caption: cr.is_field_change ? 'New field — already in effect' : `Proposed by ${nameOf(cr.proposing_team_id)} — waiting on ${nameOf(cr.awaiting_team_id)}` })}
             ${emailP(`Round ${cr.round} — deadline was ${deadlineDays} day${deadlineDays !== 1 ? 's' : ''} (${emailEsc(formatDeadline(cr.response_due_at))}).${cr.reason ? ` Reason: ${emailEsc(cr.reason)}` : ''}`)}
           `),
         });
@@ -4329,7 +4343,7 @@ async function checkEscalations() {
           html: emailShell(`
             ${emailHeading(subj)}
             ${emailP(`${emailEsc(nameOf(cr.initiating_team_id))} and ${emailEsc(nameOf(cr.other_team_id))} have exchanged ${cr.round} proposals without agreeing.`)}
-            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), caption: `Currently on the table — waiting on ${nameOf(cr.awaiting_team_id)}` })}
+            ${emailGameCard({ homeLabel: nameOf(cr.initiating_team_id), awayLabel: nameOf(cr.other_team_id), date: cr.proposal.date, time: cr.proposal.time, fieldName: fieldLabel(cr.proposal.field_id, seasonData.fields), fieldAddress: fieldAddressOf(cr.proposal.field_id, seasonData.fields), fieldCoordinates: fieldCoordinatesOf(cr.proposal.field_id, seasonData.fields), caption: `Currently on the table — waiting on ${nameOf(cr.awaiting_team_id)}` })}
             ${emailP('Every option offered already fits both teams\' stated availability, so this usually means one team\'s availability needs updating. They can still resolve it themselves — this is just so you know it\'s stuck.')}
           `),
         });
