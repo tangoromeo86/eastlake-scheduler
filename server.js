@@ -2204,7 +2204,14 @@ async function notifyTurn(req, cr, seasonData, game) {
   const teams = seasonData.teams || [];
   const awaitingTeam = teams.find(t => String(t.id) === String(cr.awaiting_team_id));
   const proposingTeam = teams.find(t => String(t.id) === String(cr.proposing_team_id));
-  if (!awaitingTeam?.email) return { ok: false, reason: 'no email for awaiting team' };
+  // The turn can swing back to whichever side initiated this — if that side
+  // was a director acting for a coach, they're the one who has been driving
+  // it (see initiated_by on creation), so every round on their side keeps
+  // going to them, not the team's own address.
+  const awaitingEmail = (String(cr.awaiting_team_id) === String(cr.initiating_team_id) && cr.initiated_by?.email)
+    ? cr.initiated_by.email
+    : awaitingTeam?.email;
+  if (!awaitingEmail) return { ok: false, reason: 'no email for awaiting team' };
   const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
   const proposerName = proposingTeam?.label || proposingTeam?.name || 'The other coach';
   const matchup = game ? `${game.home_team_name} vs ${game.away_team_name}` : `${proposerName} vs ${awaitingTeam.label || awaitingTeam.name || 'your team'}`;
@@ -2225,7 +2232,7 @@ async function notifyTurn(req, cr, seasonData, game) {
       ${emailP(`Please acknowledge by ${emailEsc(formatDeadline(cr.response_due_at))}. If we don't hear from you by then, your director will be looped in to make sure you know about the change.`)}
     `);
     return sendEmail({
-      to: awaitingTeam.email,
+      to: awaitingEmail,
       subject,
       text: [
         `${proposerName} moved Game #${cr.game_id} to a different field — same date and time, just a nearby field.`,
@@ -2264,7 +2271,7 @@ async function notifyTurn(req, cr, seasonData, game) {
   `);
 
   return sendEmail({
-    to: awaitingTeam.email,
+    to: awaitingEmail,
     subject,
     text: [
       `${proposerName} ${cr.is_rainout ? (isCounter ? 'has proposed a different makeup time' : 'reported this game as rained out and proposed a makeup time') : (isCounter ? 'has proposed a different time' : 'has requested a change')} for Game #${cr.game_id}.`,
@@ -2420,6 +2427,16 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
     director_notified_at: null, admin_notified_at: null, stalemate_notified_at: null,
     tokens: newRoundTokens(),
     manual_override: null,
+    // Whoever actually clicked submit — the coach on a normal submission, or
+    // the director when they're acting for a coach. Every email that would
+    // otherwise go to the initiating team's own address (the confirm-it's-you
+    // step, and any later round where the turn swings back to this side)
+    // goes here instead, so a director who starts a negotiation stays the
+    // one driving it through to the end (Ted: "the person who submits the
+    // change needs to be the one who gets the email... the rebuttal should
+    // continue going to the person who started it"). For a coach's own
+    // submission this is just their own address either way.
+    initiated_by: { email: s.email, name: s.name || requestingTeam.coach || requestingTeam.label || '' },
   };
   const list = readChangeRequests();
   list.push(cr);
@@ -2443,7 +2460,7 @@ app.post('/api/change-requests', requireVerified, async (req, res) => {
     ${emailP('If you ignore this, nothing happens — the request never reaches the other coach.')}
   `);
   const result = await sendEmail({
-    to: requestingTeam.email,
+    to: cr.initiated_by.email,
     subject: confirmSubject,
     text: [
       `Did you mean to request a schedule change for Game #${game_id}?`,
@@ -2529,6 +2546,9 @@ app.post('/api/change-requests/field', requireVerified, async (req, res) => {
     director_notified_at: null, admin_notified_at: null, stalemate_notified_at: null,
     tokens: newRoundTokens(),
     manual_override: null,
+    // See the same field on the reschedule/rainout route above — whoever
+    // actually submitted this (coach or acting director) is who confirms it.
+    initiated_by: { email: s.email, name: s.name || requestingTeam.coach || requestingTeam.label || '' },
   };
   const list = readChangeRequests();
   list.push(cr);
@@ -2548,7 +2568,7 @@ app.post('/api/change-requests/field', requireVerified, async (req, res) => {
     ${emailP('If you ignore this, nothing happens — the field never changes and the other coach is never notified.')}
   `);
   const result = await sendEmail({
-    to: requestingTeam.email,
+    to: cr.initiated_by.email,
     subject: confirmSubject,
     text: [
       `Did you mean to move Game #${game_id} to a different field?`,
@@ -2936,12 +2956,17 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
 
   await notifyHomeDirectorOfRefChange(cr.is_rainout ? 'rainout' : 'reschedule', cr, seasonData, beforeGame, updatedGame);
 
-  // Tell the coach who proposed it that it's locked in.
+  // Tell the coach who proposed it that it's locked in — or, if the proposing
+  // side's negotiation was being driven by their director (initiated_by),
+  // the director, same as every other round on that side.
   const teams = seasonData.teams || [];
   const proposer = teams.find(t => String(t.id) === String(cr.proposing_team_id));
   const otherOfPair = [cr.initiating_team_id, cr.other_team_id].find(id => String(id) !== String(cr.proposing_team_id));
   const otherTeamForProposer = teams.find(t => String(t.id) === String(otherOfPair));
-  if (proposer?.email && updatedGame) {
+  const proposerEmail = (String(cr.proposing_team_id) === String(cr.initiating_team_id) && cr.initiated_by?.email)
+    ? cr.initiated_by.email
+    : proposer?.email;
+  if (proposerEmail && updatedGame) {
     const lockedSubject = cr.is_rainout
       ? `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: makeup game confirmed`
       : `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: agreed — schedule updated`;
@@ -2952,7 +2977,7 @@ app.get('/api/change-requests/:id/approve', async (req, res) => {
       ${emailContactCard(otherTeamForProposer, `${otherTeamForProposer?.label || otherTeamForProposer?.name || 'The other coach'} (in case anything else needs sorting out)`)}
     `);
     await sendEmail({
-      to: proposer.email,
+      to: proposerEmail,
       subject: lockedSubject,
       text: [
         `Your proposed time for Game #${cr.game_id} was accepted. The schedule has been updated.`,
