@@ -949,16 +949,66 @@ async function submitCrmManualOverride() {
 // admin, the public viewer) for a neutral "Pending" with no assumed side.
 function gameStatusBadge(status, confirmations, mySide) {
   confirmations = confirmations || {};
-  if (status === 'cancelled')   return '<span class="pill pill-bad">Rained Out</span>';
-  if (status === 'negotiating') return '<span class="unconfirmed-badge">Negotiating</span>';
-  if (status === 'confirmed')   return '<span class="confirmed-badge">Confirmed</span>';
+  if (status === 'cancelled')   return '<span class="pill pill-bad status-badge" data-status="cancelled">Rained Out</span>';
+  if (status === 'negotiating') return '<span class="unconfirmed-badge status-badge" data-status="negotiating">Negotiating</span>';
+  if (status === 'confirmed')   return '<span class="confirmed-badge status-badge" data-status="confirmed">Confirmed</span>';
   if (status === 'pending') {
-    if (mySide && !confirmations[mySide]) return '<span class="unconfirmed-badge">Pending — your confirmation</span>';
-    if (mySide && confirmations[mySide])  return '<span class="unconfirmed-badge">Pending — waiting on the other coach</span>';
-    return '<span class="unconfirmed-badge">Pending</span>';
+    if (mySide && !confirmations[mySide]) return '<span class="unconfirmed-badge status-badge" data-status="pending">Pending — your confirmation</span>';
+    if (mySide && confirmations[mySide])  return '<span class="unconfirmed-badge status-badge" data-status="pending">Pending — waiting on the other coach</span>';
+    return '<span class="unconfirmed-badge status-badge" data-status="pending">Pending</span>';
   }
-  return '<span class="pill pill-neutral">Scheduled</span>';
+  return '<span class="pill pill-neutral status-badge" data-status="scheduled">Scheduled</span>';
 }
+
+// What each status badge means, shown in a small popover when the badge
+// itself is clicked (Ted: "clicking on the word... will pop up a detail of
+// what each stage means") — one shared source of truth so the public
+// schedule's key and every game-status badge across coach/director/admin
+// pages explain themselves identically.
+const STATUS_EXPLANATIONS = {
+  scheduled: 'On the calendar as first set. Neither coach has confirmed it yet, and no change has been requested.',
+  pending: 'One coach has confirmed this game as scheduled — waiting on the other to do the same.',
+  confirmed: 'Both coaches have confirmed this game as scheduled. Confirming isn\'t a lock — a change can still be requested later.',
+  negotiating: 'A change request is in progress for this game. The date, time, or field may still move once both sides agree.',
+  cancelled: 'This game was rained out (or otherwise cancelled). A linked makeup game has been created on the schedule.',
+};
+
+let statusPopoverOpenFor = null;
+function closeStatusPopover() {
+  const el = document.getElementById('status-popover');
+  if (el) el.remove();
+  statusPopoverOpenFor = null;
+}
+function showStatusPopover(badge) {
+  const status = badge.dataset.status;
+  const text = STATUS_EXPLANATIONS[status];
+  if (!text) return;
+  const label = badge.textContent.split('—')[0].trim(); // "Pending — your confirmation" -> "Pending"
+  const pop = document.createElement('div');
+  pop.id = 'status-popover';
+  pop.className = 'status-popover';
+  pop.innerHTML = `<strong>${uiEsc(label)}</strong><p>${uiEsc(text)}</p>`;
+  document.body.appendChild(pop);
+  const r = badge.getBoundingClientRect();
+  const popRect = pop.getBoundingClientRect();
+  const maxLeft = window.scrollX + document.documentElement.clientWidth - popRect.width - 8;
+  const left = Math.max(8, Math.min(r.left + window.scrollX, maxLeft));
+  pop.style.top = (r.bottom + window.scrollY + 6) + 'px';
+  pop.style.left = left + 'px';
+}
+document.addEventListener('click', (e) => {
+  const badge = e.target.closest('.status-badge');
+  if (badge) {
+    e.stopPropagation();
+    if (statusPopoverOpenFor === badge) { closeStatusPopover(); return; }
+    closeStatusPopover();
+    showStatusPopover(badge);
+    statusPopoverOpenFor = badge;
+    return;
+  }
+  if (!e.target.closest('#status-popover')) closeStatusPopover();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeStatusPopover(); });
 
 // A game's score, once reported — separate from gameStatusBadge because a
 // game can be Confirmed AND have a score; the two badges sit side by side.
