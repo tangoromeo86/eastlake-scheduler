@@ -311,7 +311,7 @@ function renderGames(divGames) {
   }
   noMsg.classList.add('hidden');
 
-  // Patch table header to include a request-change column — only for coaches
+  // Patch table header to include a manage-game column — only for coaches
   // and directors, who might actually see a button in some row; admin never
   // does (this button isn't an admin action), so no point in a trailing empty column.
   const wantsReqTh = session?.role === 'coach' || session?.role === 'director';
@@ -341,7 +341,7 @@ function renderGames(divGames) {
       <td class="g-away">${esc(g.away_team_name)}${jerseyTagHtml(g.away_jersey_color, g.away_jersey_label)} ${gameStatusBadge(g.status || 'scheduled', g.confirmations)}${g.forced ? ' <span class="pill pill-wait">Forced</span>' : ''}</td>
       <td>${esc(g.field_name)}</td>
       <td class="g-addr">${esc(g.field_address)}${fieldMapLink(g.field_id)}</td>
-      ${ctx ? `<td><button class="req-btn" data-gid="${g.game_id}" data-tid="${esc(ctx.team_id)}">Request Change</button></td>` : (wantsReqTh ? '<td></td>' : '')}
+      ${ctx ? `<td><button class="req-btn" data-gid="${g.game_id}" data-tid="${esc(ctx.team_id)}">Manage</button></td>` : (wantsReqTh ? '<td></td>' : '')}
     </tr>`;
   }).join('');
 
@@ -365,19 +365,22 @@ function renderGames(divGames) {
         ? `<div style="margin-top:2px;display:flex;gap:12px">${jerseyTagHtml(g.home_jersey_color, g.home_jersey_label)}${jerseyTagHtml(g.away_jersey_color, g.away_jersey_label)}</div>`
         : ''}
       <div class="game-card-field">📍 ${esc(g.field_name)}${g.field_address ? ' — ' + esc(g.field_address) : ''}${fieldMapLink(g.field_id)}</div>
-      ${ctx ? `<div class="game-card-req"><button class="req-btn" data-gid="${g.game_id}" data-tid="${esc(ctx.team_id)}">Request Change</button></div>` : ''}
+      ${ctx ? `<div class="game-card-req"><button class="req-btn" data-gid="${g.game_id}" data-tid="${esc(ctx.team_id)}">Manage</button></div>` : ''}
     </div>`;
   }).join('');
 
-  // Attach request change button listeners
+  // Attach manage-game button listeners
   if (session) {
     document.querySelectorAll('.req-btn[data-gid]').forEach(btn => {
       btn.addEventListener('click', () => {
-        // The change flow lives on the coach/director pages, where the server
-        // computes which times actually work for both teams. Carry the game
-        // (and, for a director managing several teams, which of their teams
-        // is involved) through so the destination page can open that specific
-        // game's form instead of landing blind at the top of the page.
+        // Ted: this used to say "Request Change" and jump straight into that
+        // one form, which made it look like requesting a change was the only
+        // thing you could do about a game from here. Everything (Confirm,
+        // Request Change, Change Field, Rain Out, Report Score...) actually
+        // lives on the coach/director page, so send them there instead —
+        // carrying the game (and, for a director managing several teams,
+        // which of their teams is involved) so that page can scroll to and
+        // highlight the right row instead of landing blind at the top.
         const dest = session?.role === 'director' ? 'director' : 'my-team';
         const params = new URLSearchParams({ game_id: btn.dataset.gid });
         if (btn.dataset.tid) params.set('team_id', btn.dataset.tid);

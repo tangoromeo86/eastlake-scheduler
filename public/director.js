@@ -77,26 +77,25 @@ async function init() {
   await loadActiveNegotiations(myProgramGames());
   renderGamesList();
 
-  openChangeRequestFromUrl();
+  highlightGameFromUrl();
   initDirectorVerifyBanner();
 }
 
-// The public schedule's "Request Change" button used to redirect here blind —
-// no game, no context, just the top of the page. It now carries game_id (and
-// team_id, since a director can manage several teams) through the URL; this
-// opens that specific game's form directly instead of leaving the director to
-// scroll and re-find it themselves.
-function openChangeRequestFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const gameId = parseInt(params.get('game_id'), 10);
+// The public schedule's game-row button sends directors here with the
+// specific game in the URL. Ted: that button used to jump straight into the
+// Request Change form, which made it look like requesting a change was the
+// only thing you could do about a game — scroll to and highlight the row
+// instead, so every available action (Confirm, Request Change, Change Field,
+// Rain Out, Report Score, Edit...) is visible at once and the director picks
+// the right one.
+function highlightGameFromUrl() {
+  const gameId = parseInt(new URLSearchParams(window.location.search).get('game_id'), 10);
   if (!gameId) return;
-  const teamId = params.get('team_id');
-  const game = myProgramGames().find(g => g.game_id === gameId);
-  if (!game) return;
-  const resolvedTeamId = teamId || [game.home_team_id, game.away_team_id]
-    .find(id => myProgramTeams().some(t => String(t.id) === String(id)));
-  if (!resolvedTeamId) return;
-  openChangeRequest(gameId, String(resolvedTeamId));
+  if (!myProgramGames().some(g => g.game_id === gameId)) return;
+  const el = document.getElementById(`mg-row-${gameId}`) || document.getElementById(`mg-card-${gameId}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('mg-highlight');
 }
 
 // ── Games list + change requests ─────────────────────────────────────────────
@@ -217,7 +216,7 @@ function renderGamesList() {
   const table = `<div class="mg-table-wrap table-wrap"><table class="fields-table">
     <thead><tr><th>#</th><th>Date</th><th>Home</th><th>Away</th><th>Status</th><th>Score</th><th></th></tr></thead>
     <tbody>
-    ${rows.map(ctx => `<tr>
+    ${rows.map(ctx => `<tr id="mg-row-${ctx.g.game_id}">
         <td>#${ctx.g.game_id}</td>
         <td>${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</td>
         <td>${esc(ctx.g.home_team_name)}${dirJerseyCellHtml(ctx, 'home')}</td>
@@ -230,7 +229,7 @@ function renderGamesList() {
   </table></div>`;
 
   const cards = `<div class="mg-cards">
-    ${rows.map(ctx => `<div class="mg-card">
+    ${rows.map(ctx => `<div class="mg-card" id="mg-card-${ctx.g.game_id}">
         <div class="mg-card-top">
           <span>#${ctx.g.game_id} &middot; ${esc(ctx.g.day)} ${formatDateUS(ctx.g.date)} ${esc(ctx.g.time)}</span>
         </div>

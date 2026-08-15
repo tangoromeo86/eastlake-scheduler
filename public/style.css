@@ -1228,6 +1228,10 @@ td.cal-day.av-mixed, .cal-legend-swatch.av-mixed                            { ba
    public viewer already uses for its own games table. */
 .mg-cards { display: none; flex-direction: column; gap: 10px; }
 .mg-card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+/* Landing here from the public schedule's per-game button — briefly flags
+   which game brought you, since arriving no longer auto-opens a form. */
+@keyframes mg-flash { 0% { background: #fef3c7; } 100% { background: transparent; } }
+tr.mg-highlight, .mg-card.mg-highlight { animation: mg-flash 2.5s ease-out; }
 .mg-card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12px; color: var(--ink-3); }
 .mg-card-matchup { margin-top: 4px; font-size: 15px; font-weight: 600; color: var(--ink); }
 .mg-card-matchup .mg-ha { font-weight: 400; color: var(--ink-3); font-size: 13px; }

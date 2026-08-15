@@ -737,10 +737,19 @@ async function verifyPage(page, email, srv) {
         landedUrl.includes('/my-team') && landedUrl.includes(`game_id=${myOwnGame.game_id}`)
           ? ok('redirect carries the specific game id', landedUrl)
           : bad('redirect lost the game context', landedUrl);
+        // Ted: landing here used to auto-open the Request Change form, which
+        // made it look like requesting a change was the only available
+        // action — it should scroll to and highlight the row instead, so
+        // every action button (Confirm, Request Change, Change Field, Rain
+        // Out, Report Score...) is visible at once.
         const formOpen = await cp.locator('#crm-overlay:not(.hidden)').count();
-        formOpen > 0
-          ? ok('landing on my-team opens that exact game\'s change form')
-          : bad('my-team did not auto-open the change form from the deep link', '');
+        formOpen === 0
+          ? ok('landing on my-team does NOT auto-open a form — shows every action instead')
+          : bad('my-team incorrectly auto-opened a form from the deep link', '');
+        const rowHighlighted = await cp.locator(`#mg-row-${myOwnGame.game_id}.mg-highlight, #mg-card-${myOwnGame.game_id}.mg-highlight`).count();
+        rowHighlighted > 0
+          ? ok('landing on my-team highlights the specific game row')
+          : bad('my-team did not highlight the deep-linked game row', '');
       }
     } else {
       bad('fixture did not produce both an own-game and an unrelated-game case', '');
@@ -780,9 +789,13 @@ async function verifyPage(page, email, srv) {
           ? ok('director redirect carries game id + resolved team id', landedUrl)
           : bad('director redirect missing context', landedUrl);
         const formOpen = await dp.locator('#crm-overlay:not(.hidden)').count();
-        formOpen > 0
-          ? ok('landing on director opens that exact game\'s change form')
-          : bad('director page did not auto-open the change form from the deep link', '');
+        formOpen === 0
+          ? ok('landing on director does NOT auto-open a form — shows every action instead')
+          : bad('director page incorrectly auto-opened a form from the deep link', '');
+        const dirRowHighlighted = await dp.locator(`#mg-row-${dirOwnGame.game_id}.mg-highlight, #mg-card-${dirOwnGame.game_id}.mg-highlight`).count();
+        dirRowHighlighted > 0
+          ? ok('landing on director highlights the specific game row')
+          : bad('director page did not highlight the deep-linked game row', '');
       } else {
         bad('director never sees the button for their own program\'s game', `game ${dirOwnGame.game_id}`);
       }
