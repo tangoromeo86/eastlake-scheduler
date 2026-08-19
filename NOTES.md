@@ -108,8 +108,16 @@ Requests inside the 7-day window **cannot** go through this flow — the game is
 - The "request change" button remains visible for locked games, but clicking it shows the cutoff explanation plus the other coach's phone number — it does not start the normal flow.
 - A separate, clearly-labeled **Manual Override** button appears alongside that message, with instructions that it's only to be used *after* confirming the change with the other coach directly.
 - Using Manual Override requires the requesting coach to enter **who they spoke to** and **how they connected** (phone call, text, etc.) before the change can be submitted.
-- On submit: the game is changed immediately (no Pending/approval wait, since agreement already happened outside the system). A notification is sent to the **other coach and both directors** (not admin) — including the who/how confirmation details, as the accountability record.
+- On submit: the game is changed immediately (no Pending/approval wait, since agreement already happened outside the system) **unless the proposed slot conflicts with the schedule** — see below. A notification is sent to the **other coach and both directors** (not admin) — including the who/how confirmation details, as the accountability record.
 - Admin is intentionally **not** copied on manual overrides — this is a director-owned accountability mechanism, not an admin oversight one.
+- The 7-day cutoff is enforced server-side, not just hidden in the UI — the endpoint itself rejects a submission for a game 7+ days out.
+
+### Manual Override Conflict Check
+Two coaches agreeing by phone doesn't mean the slot is actually open — the system still checks the proposed date/time/field against the schedule:
+- **Field conflict** — another game already on that field/date with an overlapping time window.
+- **Availability conflict** — the proposed date/time falls outside either team's declared availability (home not available to host, or away not available to travel).
+
+If either is true, the change is **not** applied immediately. It's held pending, and an approve/reject link goes to the **director of the program that owns the field** (program directors are responsible for their fields — this can differ from either team's own director, e.g. a neutral field). Approving applies the change and sends the normal other-coach/directors notification; rejecting leaves the game untouched and notifies the requesting coach. If no director is configured for that field, it falls back to admin as a last resort so the request doesn't get stuck with nobody able to act on it.
 
 ### Authentication Approach
 - No passwords for coaches

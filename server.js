@@ -3090,6 +3090,62 @@ app.post('/api/change-requests/:id/counter', express.urlencoded({ extended: fals
     `Your suggested time for Game #${cr.game_id} has gone to the other coach. The game stays at its current time until you both agree.`));
 });
 
+// Which director is responsible for approving a Manual Override that lands
+// on a real conflict — the field's OWNING program, not either team's (Ted:
+// "program directors are responsible for their fields"). A neutral field can
+// belong to a program neither team is part of, so this can't be derived from
+// the home team the way notifyHomeDirectorOfRefChange's ref-notice is.
+function directorForField(fieldId, seasonData) {
+  const field = (seasonData.fields || []).find(f => f.id === fieldId);
+  if (!field?.program_id) return null;
+  return (seasonData.directors || []).find(d => d.active !== false && d.program_id === field.program_id) || null;
+}
+
+// Shared by the immediate-apply path (no conflict) and the director-approve
+// path (conflict was found, director signed off) — same "changed by manual
+// override" accountability email either way, just reached by two routes.
+async function notifyManualOverrideApplied(cr, game, updatedGame, seasonData, requestingTeam, otherTeam) {
+  const directors = (seasonData.directors || []).filter(d =>
+    d.active !== false && (d.program_id === requestingTeam?.program_id || d.program_id === otherTeam?.program_id)
+  );
+  const recipients = [otherTeam?.email, ...directors.map(d => d.email)].filter(Boolean);
+  const uniqueRecipients = [...new Set(recipients)];
+  if (!uniqueRecipients.length) return;
+  const requesterName = requestingTeam?.label || requestingTeam?.name || 'A coach';
+  const overrideSubject = cr.is_rainout
+    ? `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: rained out — makeup confirmed`
+    : `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: changed by manual override`;
+  const overrideHtml = emailShell(`
+    ${emailHeading(overrideSubject)}
+    ${emailP(cr.is_rainout
+      ? `${emailEsc(requesterName)} reported this game rained out and arranged a makeup directly (inside the 7-day window, by phone/text).`
+      : `${emailEsc(requesterName)} changed this game directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`)}
+    ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, fieldCoordinates: fieldCoordinatesOf(game.field_id, seasonData.fields), caption: cr.is_rainout ? 'Rained out — was scheduled' : 'Original' })}
+    ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, fieldCoordinates: fieldCoordinatesOf(updatedGame.field_id, seasonData.fields), caption: cr.is_rainout ? 'Makeup game' : 'New' })}
+    ${emailP(`<strong>Confirmed with:</strong> ${emailEsc(cr.manual_override.who)}<br><strong>How:</strong> ${emailEsc(cr.manual_override.how)}`)}
+    ${cr.conflict_reasons?.length ? emailP(`<strong>Director approved despite:</strong><br>${cr.conflict_reasons.map(r => emailEsc(r)).join('<br>')}`) : ''}
+    ${emailContactCard(requestingTeam, `${requesterName} (made this change)`)}
+  `);
+  await sendEmail({
+    to: uniqueRecipients,
+    subject: overrideSubject,
+    text: [
+      `${requesterName} changed Game #${cr.game_id} directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`,
+      '',
+      `Original: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}`,
+      `New date: ${updatedGame.day} ${updatedGame.date}`, `New time: ${updatedGame.time}`, `Field: ${updatedGame.field_name}`,
+      '',
+      `Confirmed with: ${cr.manual_override.who}`,
+      `How: ${cr.manual_override.how}`,
+      cr.conflict_reasons?.length ? `Director approved despite: ${cr.conflict_reasons.join('; ')}` : null,
+      '',
+      requestingTeam ? `${requesterName} — ${[requestingTeam.phone, requestingTeam.email].filter(Boolean).join(' · ')}` : null,
+      '', '— Eastlake Scheduler',
+    ].filter(l => l !== null).join('\n'),
+    html: overrideHtml,
+  });
+}
+
 app.post('/api/change-requests/:game_id/manual-override', requireVerified, async (req, res) => {
   const s = getSession(req);
   const gameId = parseInt(req.params.game_id, 10);
@@ -3108,6 +3164,17 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
   const game = gameIdx !== -1 ? schedData.games[gameIdx] : null;
   if (!game) return res.status(404).json({ error: 'Game not found' });
 
+  // Same lockout the UI enforces (renderCrmLocked / daysOut < 7) — Manual
+  // Override exists only because the normal request/approve flow is too slow
+  // for a game this close. A game with real runway should go through that
+  // flow instead, where it gets the director/admin escalation timeline —
+  // this endpoint previously had no server-side check, only the UI hid the
+  // button, so it could be called directly on any game regardless of date.
+  const daysOut = Math.floor((new Date(game.date + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000);
+  if (daysOut >= 7) {
+    return res.status(409).json({ error: 'This game is 7+ days out — use the normal request/approve flow instead of Manual Override.' });
+  }
+
   const teams = seasonData.teams || [];
   const requestingTeamId = resolveRequestingTeam(s, game, team_id, teams);
   if (!requestingTeamId) return res.status(403).json({ error: 'You can only override a change on your own game' });
@@ -3119,6 +3186,44 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
   const otherTeamId = requestingTeamId === game.home_team_id ? game.away_team_id : game.home_team_id;
   const requestingTeam = teams.find(t => String(t.id) === String(requestingTeamId));
   const otherTeam = teams.find(t => String(t.id) === String(otherTeamId));
+  const homeTeam = teams.find(t => String(t.id) === String(game.home_team_id));
+  const awayTeam = teams.find(t => String(t.id) === String(game.away_team_id));
+
+  // ── Conflict check ──────────────────────────────────────────────────────
+  // The whole point of Manual Override is that two coaches may know better
+  // than stale availability data — but a real field double-booking, or a
+  // team playing outside its declared availability, isn't something either
+  // coach can see or fix by agreeing with each other. Route those to the
+  // field's owning-program director instead of committing blind.
+  const proposedDate = date || game.date;
+  const proposedTime = time || game.time;
+  const proposedFieldId = field_id || game.field_id;
+  const divisions = seasonData.divisions || [];
+  const gameLengthFor = g => (divisions.find(d => d.id === g.division_id) || {}).game_length_minutes || DEFAULT_GAME_LENGTH_MINUTES;
+  const proposedLength = gameLengthFor(game);
+  const others = schedData.games.filter(g => g.game_id !== gameId && g.status !== 'cancelled');
+  const overlaps = g => !!g.time && timeRangesOverlap(proposedTime, proposedLength, g.time, gameLengthFor(g));
+  const fieldConflict = others.find(g => g.field_id === proposedFieldId && g.date === proposedDate && overlaps(g));
+
+  let weekEntry = null, dateType = null;
+  for (const wk of buildSeasonWeeks(seasonData.season)) {
+    if (wk.weekdays.includes(proposedDate)) { weekEntry = wk; dateType = 'weekday'; break; }
+    if (wk.saturday === proposedDate)        { weekEntry = wk; dateType = 'saturday'; break; }
+  }
+  let availabilityConflict = null;
+  if (weekEntry) {
+    const slotKey = dateType === 'saturday' ? nearestSaturdaySlot(proposedTime) : null;
+    const homeStatus = homeTeam ? resolveTeamAvailability(homeTeam, proposedDate, dateType, slotKey) : null;
+    const awayStatus = awayTeam ? resolveTeamAvailability(awayTeam, proposedDate, dateType, slotKey) : null;
+    if (homeStatus === 'none' || homeStatus === 'travel')
+      availabilityConflict = `${teamName(homeTeam)} (home) is not marked available to host ${proposedDate}${dateType === 'saturday' ? ` (${slotKey})` : ''}.`;
+    else if (awayStatus === 'none' || awayStatus === 'host')
+      availabilityConflict = `${teamName(awayTeam)} (away) is not marked available to travel ${proposedDate}${dateType === 'saturday' ? ` (${slotKey})` : ''}.`;
+  }
+  const conflictReasons = [
+    fieldConflict ? `Field already booked ${proposedDate} at ${fieldConflict.time} for game #${fieldConflict.game_id} (${fieldConflict.home_team_name} vs ${fieldConflict.away_team_name}).` : null,
+    availabilityConflict,
+  ].filter(Boolean);
 
   const cr = {
     id: 'cr-' + Date.now(),
@@ -3129,18 +3234,78 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
     proposal: { date: date || '', time: time || '', field_id: field_id || '' },
     proposing_team_id: requestingTeamId, awaiting_team_id: null,
     round: 0, history: [],
-    status: 'confirmed',
-    submitted_at: new Date().toISOString(), requested_at: new Date().toISOString(), responded_at: new Date().toISOString(),
+    status: conflictReasons.length ? 'awaiting_director_approval' : 'confirmed',
+    submitted_at: new Date().toISOString(), requested_at: new Date().toISOString(),
+    responded_at: conflictReasons.length ? null : new Date().toISOString(),
     director_notified_at: null, admin_notified_at: null,
-    tokens: {}, stalemate_notified_at: null, round_started_at: null,
+    tokens: conflictReasons.length ? { approve: newActionToken(), reject: newActionToken() } : {},
+    stalemate_notified_at: null, round_started_at: null,
+    conflict_reasons: conflictReasons,
     manual_override: { who: who_spoke_to.trim(), how: how_connected.trim(), submitted_by_team_id: requestingTeamId, at: new Date().toISOString() },
   };
 
-  // Same "cancel + linked makeup" treatment as the negotiated rain-out path
-  // (applyRainoutToGame) rather than a plain move — a rainout discovered the
-  // morning of game day goes through Manual Override (inside the 7-day
-  // window), and it should behave the same way regardless of how close to
-  // game day it was reported.
+  if (conflictReasons.length) {
+    // Hold — don't touch schedule.json. The field's director gets an
+    // approve/reject link; nothing is final until they act on it.
+    const list = readChangeRequests();
+    list.push(cr);
+    writeChangeRequests(list);
+
+    const director = directorForField(proposedFieldId, seasonData);
+    const approverEmail = director?.email || ADMIN_EMAIL;
+    if (!approverEmail) {
+      return res.json({
+        ok: true, pending: true, change_request: cr, conflict_reasons: conflictReasons,
+        warning: 'No director configured for this field, and no admin email set — nobody was notified to approve this.',
+      });
+    }
+    const base = `${req.protocol}://${req.get('host')}${BASE_PATH}/api/change-requests/${cr.id}`;
+    const approveUrl = `${base}/director-approve?token=${cr.tokens.approve}`;
+    const rejectUrl = `${base}/director-reject?token=${cr.tokens.reject}`;
+    const requesterName = requestingTeam?.label || requestingTeam?.name || 'A coach';
+    const proposedFieldObj = (seasonData.fields || []).find(f => f.id === proposedFieldId);
+    const subject = `${game.home_team_name} vs ${game.away_team_name}: manual override needs your approval`;
+    const html = emailShell(`
+      ${emailHeading(subject)}
+      ${emailP(`${emailEsc(requesterName)} is trying to change Game #${gameId} directly (inside the 7-day window, arranged by phone/text with ${emailEsc(cr.manual_override.who)} via ${emailEsc(cr.manual_override.how)}) — but it conflicts with what's on the schedule, so it needs your OK before it applies.`)}
+      ${emailP(`<strong>Conflict:</strong><br>${conflictReasons.map(r => emailEsc(r)).join('<br>')}`)}
+      ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, fieldCoordinates: fieldCoordinatesOf(game.field_id, seasonData.fields), caption: 'Currently scheduled' })}
+      ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: proposedDate, time: proposedTime, fieldName: proposedFieldObj?.name || proposedFieldId, fieldAddress: proposedFieldObj?.address || '', fieldCoordinates: fieldCoordinatesOf(proposedFieldId, seasonData.fields), caption: 'Proposed' })}
+      <div style="margin:18px 0 4px">${emailButton(approveUrl, 'Approve — apply the change')}${emailButton(rejectUrl, 'Reject', 'secondary')}</div>
+      ${emailP('Approving notifies the other coach and both teams\' directors. Rejecting notifies the requesting coach — nothing changes.')}
+    `);
+    const result = await sendEmail({
+      to: approverEmail,
+      subject,
+      text: [
+        `${requesterName} is trying to change Game #${gameId} directly, but it conflicts with the schedule.`,
+        '',
+        `Conflict: ${conflictReasons.join('; ')}`,
+        '',
+        `Currently: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}`,
+        `Proposed: ${describeSlot({ date: proposedDate, time: proposedTime, field_id: proposedFieldId }, seasonData.fields)}`,
+        `Confirmed with: ${cr.manual_override.who}`, `How: ${cr.manual_override.how}`,
+        '',
+        `Approve: ${approveUrl}`,
+        `Reject: ${rejectUrl}`,
+        '', '— Eastlake Scheduler',
+      ].join('\n'),
+      html,
+    });
+    // The pending record is already persisted above regardless of whether
+    // this send succeeds — matches the fire-and-forget notification style
+    // the rest of Manual Override uses (notifyManualOverrideApplied below
+    // never checks .ok either), rather than swallowing a real, safely-held
+    // change into a confusing 500 over a transient email hiccup.
+    return res.json({
+      ok: true, pending: true, change_request: cr, conflict_reasons: conflictReasons,
+      warning: result.ok ? undefined : `Could not email the director: ${result.reason}`,
+    });
+  }
+
+  // No conflict — same "cancel + linked makeup" treatment as the negotiated
+  // rain-out path (applyRainoutToGame) rather than a plain move, and applies
+  // immediately just like before.
   const updatedGame = is_rainout
     ? applyRainoutToGame(schedData, seasonData, gameIdx, { date, time, field_id, reason: 'Rain out' }).makeupGame
     : applyChangeRequestToGame(cr, schedData, seasonData);
@@ -3152,46 +3317,83 @@ app.post('/api/change-requests/:game_id/manual-override', requireVerified, async
   list.push(cr);
   writeChangeRequests(list);
 
-  const directors = (seasonData.directors || []).filter(d =>
-    d.active !== false && (d.program_id === requestingTeam?.program_id || d.program_id === otherTeam?.program_id)
-  );
-  const recipients = [otherTeam?.email, ...directors.map(d => d.email)].filter(Boolean);
-  const uniqueRecipients = [...new Set(recipients)];
-  if (uniqueRecipients.length) {
-    const requesterName = requestingTeam?.label || requestingTeam?.name || 'A coach';
-    const overrideSubject = is_rainout
-      ? `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: rained out — makeup confirmed`
-      : `${updatedGame.home_team_name} vs ${updatedGame.away_team_name}: changed by manual override`;
-    const overrideHtml = emailShell(`
-      ${emailHeading(overrideSubject)}
-      ${emailP(is_rainout
-        ? `${emailEsc(requesterName)} reported this game rained out and arranged a makeup directly (inside the 7-day window, by phone/text).`
-        : `${emailEsc(requesterName)} changed this game directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`)}
-      ${emailGameCard({ homeLabel: game.home_team_name, awayLabel: game.away_team_name, date: game.date, time: game.time, fieldName: game.field_name, fieldAddress: game.field_address, fieldCoordinates: fieldCoordinatesOf(game.field_id, seasonData.fields), caption: is_rainout ? 'Rained out — was scheduled' : 'Original' })}
-      ${emailGameCard({ homeLabel: updatedGame.home_team_name, awayLabel: updatedGame.away_team_name, date: updatedGame.date, time: updatedGame.time, fieldName: updatedGame.field_name, fieldAddress: updatedGame.field_address, fieldCoordinates: fieldCoordinatesOf(updatedGame.field_id, seasonData.fields), caption: is_rainout ? 'Makeup game' : 'New' })}
-      ${emailP(`<strong>Confirmed with:</strong> ${emailEsc(cr.manual_override.who)}<br><strong>How:</strong> ${emailEsc(cr.manual_override.how)}`)}
-      ${emailContactCard(requestingTeam, `${requesterName} (made this change)`)}
-    `);
+  await notifyManualOverrideApplied(cr, game, updatedGame, seasonData, requestingTeam, otherTeam);
+
+  res.json({ ok: true, game: updatedGame, change_request: cr });
+});
+
+function directorApprovalByToken(id, token, tokenKey) {
+  return findCrByToken(id, token, 'awaiting_director_approval', tokenKey);
+}
+
+app.get('/api/change-requests/:id/director-approve', async (req, res) => {
+  const found = directorApprovalByToken(req.params.id, req.query.token, 'approve');
+  if (!found) return crAlreadyResolved(res);
+  const { list, idx, cr } = found;
+
+  let schedData, seasonData;
+  try { schedData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')); } catch { schedData = { games: [] }; }
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [], fields: [] }; }
+
+  const gameIdx = schedData.games.findIndex(g => g.game_id === cr.game_id);
+  const game = gameIdx !== -1 ? { ...schedData.games[gameIdx] } : null;
+  if (!game) return res.send(crActionPage('Game not found', 'This game no longer exists — nothing was changed.'));
+
+  const { date, time, field_id } = cr.proposal;
+  const updatedGame = cr.is_rainout
+    ? applyRainoutToGame(schedData, seasonData, gameIdx, { date, time, field_id, reason: 'Rain out' }).makeupGame
+    : applyChangeRequestToGame(cr, schedData, seasonData);
+  if (!updatedGame) return res.send(crActionPage('Game not found', 'This game no longer exists — nothing was changed.'));
+  try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedData, null, 2)); } catch {}
+
+  cr.status = 'confirmed';
+  cr.responded_at = new Date().toISOString();
+  list[idx] = cr;
+  writeChangeRequests(list);
+
+  const teams = seasonData.teams || [];
+  const requestingTeam = teams.find(t => String(t.id) === String(cr.requesting_team_id));
+  const otherTeam = teams.find(t => String(t.id) === String(cr.other_team_id));
+  await notifyManualOverrideApplied(cr, game, updatedGame, seasonData, requestingTeam, otherTeam);
+
+  res.send(crActionPage('Approved and applied', `Game #${cr.game_id} has been updated. The other coach and directors have been notified.`));
+});
+
+app.get('/api/change-requests/:id/director-reject', async (req, res) => {
+  const found = directorApprovalByToken(req.params.id, req.query.token, 'reject');
+  if (!found) return crAlreadyResolved(res);
+  const { list, idx, cr } = found;
+
+  cr.status = 'rejected';
+  cr.responded_at = new Date().toISOString();
+  list[idx] = cr;
+  writeChangeRequests(list);
+
+  let seasonData;
+  try { seasonData = JSON.parse(fs.readFileSync(SEASON_FILE, 'utf8')); } catch { seasonData = { teams: [] }; }
+  const requestingTeam = (seasonData.teams || []).find(t => String(t.id) === String(cr.requesting_team_id));
+  if (requestingTeam?.email) {
+    const subject = `Game #${cr.game_id}: your manual override was not approved`;
     await sendEmail({
-      to: uniqueRecipients,
-      subject: overrideSubject,
+      to: requestingTeam.email,
+      subject,
       text: [
-        `${requesterName} changed Game #${gameId} directly (inside the 7-day window, arranged by phone/text — this bypasses the normal request/approve flow).`,
+        `Your director did not approve the manual override for Game #${cr.game_id}.`,
+        `Conflict: ${(cr.conflict_reasons || []).join('; ')}`,
         '',
-        `Original: ${describeSlot({ date: game.date, time: game.time, field_id: game.field_id }, seasonData.fields)}`,
-        `New date: ${updatedGame.day} ${updatedGame.date}`, `New time: ${updatedGame.time}`, `Field: ${updatedGame.field_name}`,
-        '',
-        `Confirmed with: ${cr.manual_override.who}`,
-        `How: ${cr.manual_override.how}`,
-        '',
-        requestingTeam ? `${requesterName} — ${[requestingTeam.phone, requestingTeam.email].filter(Boolean).join(' · ')}` : null,
+        'Nothing changed — the game is still as it was. Reach out to your director if you want to follow up.',
         '', '— Eastlake Scheduler',
-      ].filter(l => l !== null).join('\n'),
-      html: overrideHtml,
+      ].join('\n'),
+      html: emailShell(`
+        ${emailHeading(subject)}
+        ${emailP(`Your director did not approve the manual override for Game #${cr.game_id}.`)}
+        ${emailP(`<strong>Conflict:</strong> ${emailEsc((cr.conflict_reasons || []).join('; '))}`)}
+        ${emailP('Nothing changed — the game is still as it was. Reach out to your director if you want to follow up.')}
+      `),
     });
   }
 
-  res.json({ ok: true, game: updatedGame, change_request: cr });
+  res.send(crActionPage('Rejected', `Game #${cr.game_id} was not changed. The requesting coach has been notified.`));
 });
 
 // ── Missing coach info submission ─────────────────────────────────────────────

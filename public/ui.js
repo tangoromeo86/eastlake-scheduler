@@ -932,7 +932,9 @@ async function submitCrmManualOverride() {
     const data = await res.json();
     if (!data.ok) { crmErr(data.error || 'Could not apply change.'); return; }
     closeChangeModal();
-    toast('Change recorded.', 'good');
+    toast(data.pending
+      ? "This conflicts with the schedule, so it's been sent to your program director for approval before it applies."
+      : 'Change recorded.', 'good');
     if (crmRefresh) crmRefresh();
   } catch { crmErr('Network error. Try again.'); }
 }

@@ -906,6 +906,81 @@ MOMISSING=$(curl -s -o /dev/null -w "%{http_code}" -b coacha.txt -X POST "$BASE/
 
 echo
 echo "=============================================="
+echo "STEP 11b — Manual override conflict escalation (Ted, 2026-08-19)"
+echo "=============================================="
+# A game 7+ days out must be rejected by the endpoint itself, not just hidden
+# by the UI — pick any game far in the future and hit the endpoint directly.
+FARID=$(python3 -c "
+import json, datetime, os
+d=json.load(open('"$REPO"/schedule.json'))
+cutoff=(datetime.date.today()+datetime.timedelta(days=7)).isoformat()
+g=[x for x in d['games'] if x['date']>=cutoff and x['status']!='cancelled'][0]
+print(g['game_id'])")
+FARSTATUS=$(curl -s -o /dev/null -w "%{http_code}" -b coacha.txt -X POST "$BASE/api/change-requests/$FARID/manual-override" -H "$J" \
+  -d '{"time":"20:00","who_spoke_to":"Coach B","how_connected":"Phone call"}')
+[ "$FARSTATUS" = "409" ] && pass "manual override rejected server-side for a game 7+ days out (409)" || fail "expected 409, got $FARSTATUS"
+
+# Plant a blocker game on LOCKID's own field/date, then try to move LOCKID
+# onto the same field/date/time — the field-conflict check should hold it for
+# director approval instead of applying it, and schedule.json must not move.
+python3 -c "
+import json, os
+p=os.environ['REPO']+'/schedule.json'
+d=json.load(open(p))
+g=[x for x in d['games'] if x['game_id']==$LOCKID][0]
+blocker=dict(g)
+blocker['game_id']=999001
+blocker['time']='21:00'
+d['games'].append(blocker)
+json.dump(d, open(p,'w'), indent=2)
+"
+PRECONFLICT_TIME=$(python3 -c "
+import json, os; d=json.load(open('"$REPO"/schedule.json'))
+print([g for g in d['games'] if g['game_id']==$LOCKID][0]['time'])")
+CONFLICT=$(curl -s -b coacha.txt -X POST "$BASE/api/change-requests/$LOCKID/manual-override" -H "$J" \
+  -d '{"time":"21:00","who_spoke_to":"Coach B","how_connected":"Phone call"}')
+CPENDING=$(echo "$CONFLICT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('pending'))")
+[ "$CPENDING" = "True" ] && pass "field-conflicting override held pending instead of applied" || fail "conflict pending=$CPENDING ($CONFLICT)"
+POSTCONFLICT_TIME=$(python3 -c "
+import json, os; d=json.load(open('"$REPO"/schedule.json'))
+print([g for g in d['games'] if g['game_id']==$LOCKID][0]['time'])")
+[ "$POSTCONFLICT_TIME" = "$PRECONFLICT_TIME" ] && pass "schedule.json untouched while pending director approval" || fail "game moved before approval: $PRECONFLICT_TIME -> $POSTCONFLICT_TIME"
+
+CRPENDING_ID=$(echo "$CONFLICT" | python3 -c "import sys,json;print(json.load(sys.stdin)['change_request']['id'])")
+CRSTATUS=$(python3 -c "
+import json, os; d=json.load(open('"$REPO"/change_requests.json'))
+c=[x for x in d if x['id']=='$CRPENDING_ID'][0]; print(c['status'])")
+[ "$CRSTATUS" = "awaiting_director_approval" ] && pass "change request status is awaiting_director_approval" || fail "status = $CRSTATUS"
+
+REJTOK=$(python3 -c "
+import json, os; d=json.load(open('"$REPO"/change_requests.json'))
+c=[x for x in d if x['id']=='$CRPENDING_ID'][0]; print(c['tokens']['reject'])")
+curl -s "$BASE/api/change-requests/$CRPENDING_ID/director-reject?token=$REJTOK" > /dev/null
+REJSTATUS=$(python3 -c "
+import json, os; d=json.load(open('"$REPO"/change_requests.json'))
+c=[x for x in d if x['id']=='$CRPENDING_ID'][0]; print(c['status'])")
+POSTREJ_TIME=$(python3 -c "
+import json, os; d=json.load(open('"$REPO"/schedule.json'))
+print([g for g in d['games'] if g['game_id']==$LOCKID][0]['time'])")
+[ "$REJSTATUS" = "rejected" ] && [ "$POSTREJ_TIME" = "$PRECONFLICT_TIME" ] && pass "director-reject leaves the schedule unchanged" || fail "reject: status=$REJSTATUS time=$POSTREJ_TIME"
+
+CONFLICT2=$(curl -s -b coacha.txt -X POST "$BASE/api/change-requests/$LOCKID/manual-override" -H "$J" \
+  -d '{"time":"21:00","who_spoke_to":"Coach B","how_connected":"Phone call"}')
+CR2_ID=$(echo "$CONFLICT2" | python3 -c "import sys,json;print(json.load(sys.stdin)['change_request']['id'])")
+APPTOK=$(python3 -c "
+import json, os; d=json.load(open('"$REPO"/change_requests.json'))
+c=[x for x in d if x['id']=='$CR2_ID'][0]; print(c['tokens']['approve'])")
+curl -s "$BASE/api/change-requests/$CR2_ID/director-approve?token=$APPTOK" > /dev/null
+APPSTATUS=$(python3 -c "
+import json, os; d=json.load(open('"$REPO"/change_requests.json'))
+c=[x for x in d if x['id']=='$CR2_ID'][0]; print(c['status'])")
+APPTIME=$(python3 -c "
+import json, os; d=json.load(open('"$REPO"/schedule.json'))
+print([g for g in d['games'] if g['game_id']==$LOCKID][0]['time'])")
+[ "$APPSTATUS" = "confirmed" ] && [ "$APPTIME" = "21:00" ] && pass "director-approve applies the change and confirms the request" || fail "approve: status=$APPSTATUS time=$APPTIME"
+
+echo
+echo "=============================================="
 echo "STEP 12 — Confirmation lifecycle + the settle-pending sweep"
 echo "=============================================="
 # Games are never hard-locked anymore (Ted: "that's not really a thing" —
